@@ -128,6 +128,11 @@ class ChatRepository:
 class MessageRepository:
     session: AsyncSession
 
+    @dataclass(frozen=True, slots=True)
+    class UpsertResult:
+        message: Message
+        created: bool
+
     async def create_message(
         self,
         *,
@@ -167,6 +172,103 @@ class MessageRepository:
         self.session.add(message)
         await self.session.flush()
         return message
+
+    async def get_by_chat_and_telegram_message_id(
+        self,
+        *,
+        chat_id: int,
+        telegram_message_id: int,
+    ) -> Message | None:
+        result = await self.session.execute(
+            select(Message).where(
+                Message.chat_id == chat_id,
+                Message.telegram_message_id == telegram_message_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def create_or_update_message(
+        self,
+        *,
+        chat_id: int,
+        telegram_message_id: int,
+        sender_id: int | None = None,
+        sender_name: str | None = None,
+        direction: str,
+        source_adapter: str,
+        source_type: str,
+        sent_at: datetime | None = None,
+        raw_text: str = "",
+        normalized_text: str | None = None,
+        reply_to_message_id: int | None = None,
+        forward_info: dict[str, Any] | list[Any] | None = None,
+        has_media: bool = False,
+        media_type: str | None = None,
+        entities_json: dict[str, Any] | list[Any] | None = None,
+    ) -> UpsertResult:
+        message = await self.get_by_chat_and_telegram_message_id(
+            chat_id=chat_id,
+            telegram_message_id=telegram_message_id,
+        )
+        if message is None:
+            created_message = await self.create_message(
+                chat_id=chat_id,
+                telegram_message_id=telegram_message_id,
+                sender_id=sender_id,
+                sender_name=sender_name,
+                direction=direction,
+                source_adapter=source_adapter,
+                source_type=source_type,
+                sent_at=sent_at,
+                raw_text=raw_text,
+                normalized_text=normalized_text,
+                reply_to_message_id=reply_to_message_id,
+                forward_info=forward_info,
+                has_media=has_media,
+                media_type=media_type,
+                entities_json=entities_json,
+            )
+            return self.UpsertResult(message=created_message, created=True)
+
+        if sender_id is not None:
+            message.sender_id = sender_id
+        if sender_name is not None:
+            message.sender_name = sender_name
+        message.direction = direction
+        message.source_adapter = source_adapter
+        message.source_type = source_type
+        message.sent_at = sent_at or datetime.now(timezone.utc)
+        message.raw_text = raw_text
+        message.normalized_text = raw_text if normalized_text is None else normalized_text
+        if reply_to_message_id is not None:
+            message.reply_to_message_id = reply_to_message_id
+        if forward_info is not None:
+            message.forward_info = forward_info
+        message.has_media = has_media
+        message.media_type = media_type
+        if entities_json is not None:
+            message.entities_json = entities_json
+        await self.session.flush()
+        return self.UpsertResult(message=message, created=False)
+
+    async def count_messages(self) -> int:
+        result = await self.session.execute(select(func.count()).select_from(Message))
+        return int(result.scalar_one())
+
+    async def count_messages_by_chat(self) -> dict[int, int]:
+        result = await self.session.execute(
+            select(Message.chat_id, func.count(Message.id))
+            .group_by(Message.chat_id)
+            .order_by(Message.chat_id)
+        )
+        return {
+            int(chat_id): int(message_count)
+            for chat_id, message_count in result.all()
+        }
+
+    async def get_last_message_timestamp(self) -> datetime | None:
+        result = await self.session.execute(select(func.max(Message.sent_at)))
+        return result.scalar_one_or_none()
 
     async def get_recent_messages(self, *, chat_id: int, limit: int = 20) -> list[Message]:
         result = await self.session.execute(

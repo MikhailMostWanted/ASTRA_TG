@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from config.settings import Settings
@@ -9,7 +10,12 @@ from services.source_registry import SourceRegistryService
 from services.startup import BotStartupService
 from services.status_summary import BotStatusService
 from storage.database import bootstrap_database, build_database_runtime
-from storage.repositories import ChatRepository, SettingRepository, SystemRepository
+from storage.repositories import (
+    ChatRepository,
+    MessageRepository,
+    SettingRepository,
+    SystemRepository,
+)
 
 
 @dataclass(slots=True)
@@ -109,12 +115,13 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
 
         async with runtime.session_factory() as session:
             chats = ChatRepository(session)
+            messages = MessageRepository(session)
             repo_settings = SettingRepository(session)
             system = SystemRepository(session)
 
             source_service = SourceRegistryService(chats, resolver=resolver)
             digest_target_service = DigestTargetService(repo_settings, resolver=resolver)
-            status_service = BotStatusService(chats, repo_settings, system)
+            status_service = BotStatusService(chats, repo_settings, system, messages)
 
             add_result = await source_service.register_source(
                 parser.parse_source_add_arguments("@news")
@@ -147,6 +154,18 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             disabled_result = await source_service.set_source_enabled("@news", is_enabled=False)
             assert disabled_result is not None
             assert disabled_result.chat.is_enabled is False
+            await messages.create_message(
+                chat_id=add_result.chat.id,
+                telegram_message_id=101,
+                sender_name="Редакция",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 12, 30, tzinfo=timezone.utc),
+                raw_text="Новость дня",
+                normalized_text="Новость дня",
+            )
+            await session.commit()
 
             target = await digest_target_service.set_target(
                 parser.parse_digest_target_arguments("@digest")
@@ -162,11 +181,15 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
 
             assert "Всего источников: 2" in status_text
             assert "Активных источников: 1" in status_text
+            assert "Ingest: активен" in status_text
+            assert "Сохранено сообщений: 1" in status_text
+            assert "Источников с данными: 1" in status_text
+            assert "Последнее сообщение: 2026-04-20 12:30 UTC" in status_text
             assert "Схема БД: 20260420_01" in status_text
             assert "digest_target_chat_id: -100900" in settings_text
             assert "digest_target_label: @digest" in settings_text
-            assert any("Новости дня" in message for message in sources_messages)
-            assert any("Форвард-группа" in message for message in sources_messages)
+            assert any("Новости дня" in message and "Сообщений: 1" in message for message in sources_messages)
+            assert any("Форвард-группа" in message and "Сообщений: 0" in message for message in sources_messages)
 
         await runtime.dispose()
 

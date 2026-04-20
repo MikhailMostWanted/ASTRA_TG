@@ -9,7 +9,12 @@ from services.digest_target import DigestTargetService
 from services.source_registry import SourceRegistryService
 from services.status_summary import BotStatusService
 from services.telegram_lookup import TelegramChatResolver
-from storage.repositories import ChatRepository, SettingRepository, SystemRepository
+from storage.repositories import (
+    ChatRepository,
+    MessageRepository,
+    SettingRepository,
+    SystemRepository,
+)
 
 
 router = Router(name=__name__)
@@ -26,6 +31,7 @@ async def handle_status_command(
             chat_repository=ChatRepository(session),
             setting_repository=SettingRepository(session),
             system_repository=SystemRepository(session),
+            message_repository=MessageRepository(session),
         )
         await message.answer(await service.build_status_message())
 
@@ -40,6 +46,7 @@ async def handle_sources_command(
             chat_repository=ChatRepository(session),
             setting_repository=SettingRepository(session),
             system_repository=SystemRepository(session),
+            message_repository=MessageRepository(session),
         )
         for response_text in await service.build_sources_messages():
             await message.answer(response_text)
@@ -137,6 +144,7 @@ async def handle_settings_command(
             chat_repository=ChatRepository(session),
             setting_repository=SettingRepository(session),
             system_repository=SystemRepository(session),
+            message_repository=MessageRepository(session),
         )
         await message.answer(await service.build_settings_message())
 
