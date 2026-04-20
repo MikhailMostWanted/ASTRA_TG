@@ -17,8 +17,10 @@ from storage.repositories import (
     ChatRepository,
     DigestRepository,
     MessageRepository,
+    PersonMemoryRepository,
     SettingRepository,
     SystemRepository,
+    ChatMemoryRepository,
 )
 
 
@@ -123,10 +125,20 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             digests = DigestRepository(session)
             repo_settings = SettingRepository(session)
             system = SystemRepository(session)
+            chat_memory = ChatMemoryRepository(session)
+            people_memory = PersonMemoryRepository(session)
 
             source_service = SourceRegistryService(chats, resolver=resolver)
             digest_target_service = DigestTargetService(repo_settings, resolver=resolver)
-            status_service = BotStatusService(chats, repo_settings, system, messages, digests)
+            status_service = BotStatusService(
+                chats,
+                repo_settings,
+                system,
+                messages,
+                digests,
+                chat_memory,
+                people_memory,
+            )
 
             add_result = await source_service.register_source(
                 parser.parse_source_add_arguments("@news")
@@ -206,6 +218,10 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             assert "Создано digest: 1" in status_text
             assert "Последний digest:" in status_text
             assert "Данных для digest (24h): да" in status_text
+            assert "Memory-карт чатов: 0" in status_text
+            assert "Memory-карт людей: 0" in status_text
+            assert "Последний rebuild memory: ещё не выполнялся" in status_text
+            assert "Данных для memory: да" in status_text
             assert "Схема БД: 20260420_01" in status_text
             assert "digest_target_chat_id: -100900" in settings_text
             assert "digest_target_label: @digest" in settings_text

@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки по выбранным Telegram-источникам. Memory, reply suggestions, reminders и расширение провайдеров запланированы, но пока не реализованы как бизнес-логика.
+Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки и memory-карты по выбранным Telegram-источникам. Reply suggestions, reminders и расширение провайдеров запланированы, но пока не реализованы как бизнес-логика.
 
 ## Зоны ответственности модулей
 
@@ -10,7 +10,7 @@
 - `bot/` содержит aiogram routing и тонкие Telegram-handlers.
 - `bot/` теперь также даёт Telegram-интерфейс для управления allowlist источников, базовыми настройками digest и приёма входящих updates для ingest.
 - `worker/` содержит точки входа для фонового bootstrap/run-once сценария.
-- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine и статусные сводки.
+- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders и статусные сводки.
 - `config/` содержит общие настройки из окружения.
 - `storage/` содержит SQLAlchemy runtime, bootstrap через Alembic и репозитории доступа к данным.
 - `models/` содержит ORM-схему SQLite для MVP-сущностей.
@@ -55,6 +55,20 @@
 ## Ближайшее развитие
 
 - Продолжать использовать bot layer для управления allowlist, digest target и ручным запуском digest, пока нет scheduler-слоя.
+- Memory слой строить только поверх уже сохранённых `messages` и `chats`, без прямого чтения Telegram в момент rebuild.
 - Расширять миграции и репозитории постепенно, когда станут реальными workflows для digest/memory/reminders.
 - Переиспользовать `messages` и `messages_fts` для будущего поиска, retrieval и digest-selection сценариев.
 - Добавлять reminder, memory и reply-модули как отдельные сервисы, а не как код внутри handlers.
+
+## Memory pipeline
+
+Первый реальный memory MVP теперь устроен так:
+
+- `bot/handlers/management.py` подключает `/memory_rebuild`, `/chat_memory` и `/person_memory`, но не содержит memory-логики;
+- `services/memory_builder.py` оркестрирует rebuild, обновляет `chat_memory` и `people_memory`, а также даёт bot-friendly чтение карточек;
+- `services/chat_memory_builder.py` детерминированно собирает карточку чата по локальным сообщениям, темам, участникам, открытым хвостам и конфликтным сигналам;
+- `services/people_memory_builder.py` детерминированно собирает карточки людей по `sender_id`, `sender_name` и контексту чатов;
+- `services/memory_formatter.py` превращает JSON-поля memory в короткие Telegram-friendly карточки;
+- `storage/repositories.py` даёт upsert/get/search/count API для `chat_memory`, `people_memory` и нужных message-агрегатов.
+
+Ключевой принцип этого слоя: память строится только по локальной SQLite-БД и остаётся честной, предсказуемой и полностью детерминированной. Это подготовительный слой под будущие reply suggestions, а не попытка сделать “умную” persona-модель на эвристиках.

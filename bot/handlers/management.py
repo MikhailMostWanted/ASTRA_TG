@@ -4,18 +4,24 @@ from aiogram.filters.command import CommandObject
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from services.chat_memory_builder import ChatMemoryBuilder
 from services.command_parser import BotCommandParser
 from services.digest_builder import DigestBuilder
 from services.digest_engine import DigestEngineService, DigestPublisherService
 from services.digest_formatter import DigestFormatter
 from services.digest_target import DigestTargetService
+from services.memory_builder import MemoryService
+from services.memory_formatter import MemoryFormatter
+from services.people_memory_builder import PeopleMemoryBuilder
 from services.source_registry import SourceRegistryService
 from services.status_summary import BotStatusService
 from services.telegram_lookup import TelegramChatResolver
 from storage.repositories import (
     ChatRepository,
+    ChatMemoryRepository,
     DigestRepository,
     MessageRepository,
+    PersonMemoryRepository,
     SettingRepository,
     SystemRepository,
 )
@@ -31,13 +37,7 @@ async def handle_status_command(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
-        service = BotStatusService(
-            chat_repository=ChatRepository(session),
-            setting_repository=SettingRepository(session),
-            system_repository=SystemRepository(session),
-            message_repository=MessageRepository(session),
-            digest_repository=DigestRepository(session),
-        )
+        service = _build_status_service(session)
         await message.answer(await service.build_status_message())
 
 
@@ -47,13 +47,7 @@ async def handle_sources_command(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
-        service = BotStatusService(
-            chat_repository=ChatRepository(session),
-            setting_repository=SettingRepository(session),
-            system_repository=SystemRepository(session),
-            message_repository=MessageRepository(session),
-            digest_repository=DigestRepository(session),
-        )
+        service = _build_status_service(session)
         for response_text in await service.build_sources_messages():
             await message.answer(response_text)
 
@@ -146,13 +140,7 @@ async def handle_settings_command(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
-        service = BotStatusService(
-            chat_repository=ChatRepository(session),
-            setting_repository=SettingRepository(session),
-            system_repository=SystemRepository(session),
-            message_repository=MessageRepository(session),
-            digest_repository=DigestRepository(session),
-        )
+        service = _build_status_service(session)
         await message.answer(await service.build_settings_message())
 
 
@@ -188,6 +176,63 @@ async def handle_digest_now_command(
         await message.answer(publish_result.notice)
 
 
+@router.message(Command("memory_rebuild"))
+async def handle_memory_rebuild_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    reference = None
+    if command.args and command.args.strip():
+        reference = PARSER.parse_required_reference(
+            command.args,
+            command_name="memory_rebuild",
+        )
+
+    async with session_factory() as session:
+        service = _build_memory_service(session)
+        try:
+            result = await service.rebuild(reference)
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+
+        await session.commit()
+
+    await message.answer(result.to_user_message())
+
+
+@router.message(Command("chat_memory"))
+async def handle_chat_memory_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    reference = None
+    if command.args and command.args.strip():
+        reference = PARSER.parse_required_reference(
+            command.args,
+            command_name="chat_memory",
+        )
+
+    async with session_factory() as session:
+        service = _build_memory_service(session)
+        await message.answer(await service.build_chat_memory_card(reference))
+
+
+@router.message(Command("person_memory"))
+async def handle_person_memory_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    query = command.args.strip() if command.args and command.args.strip() else None
+
+    async with session_factory() as session:
+        service = _build_memory_service(session)
+        await message.answer(await service.build_person_memory_card(query))
+
+
 async def _handle_source_toggle(
     *,
     message: Message,
@@ -215,3 +260,29 @@ async def _handle_source_toggle(
         await session.commit()
 
     await message.answer(result.to_user_message())
+
+
+def _build_status_service(session: AsyncSession) -> BotStatusService:
+    return BotStatusService(
+        chat_repository=ChatRepository(session),
+        setting_repository=SettingRepository(session),
+        system_repository=SystemRepository(session),
+        message_repository=MessageRepository(session),
+        digest_repository=DigestRepository(session),
+        chat_memory_repository=ChatMemoryRepository(session),
+        person_memory_repository=PersonMemoryRepository(session),
+    )
+
+
+def _build_memory_service(session: AsyncSession) -> MemoryService:
+    return MemoryService(
+        chat_repository=ChatRepository(session),
+        message_repository=MessageRepository(session),
+        digest_repository=DigestRepository(session),
+        setting_repository=SettingRepository(session),
+        chat_memory_repository=ChatMemoryRepository(session),
+        person_memory_repository=PersonMemoryRepository(session),
+        chat_builder=ChatMemoryBuilder(),
+        people_builder=PeopleMemoryBuilder(),
+        formatter=MemoryFormatter(),
+    )

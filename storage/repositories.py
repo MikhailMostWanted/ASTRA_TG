@@ -5,12 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import desc, func, select, text
+from sqlalchemy import desc, func, or_, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from models import Chat, Digest, DigestItem, Message, Setting
+from models import Chat, ChatMemory, Digest, DigestItem, Message, PersonMemory, Setting
 
 
 class _Unset:
@@ -22,6 +22,12 @@ UNSET = _Unset()
 
 @dataclass(frozen=True, slots=True)
 class DigestMessageRecord:
+    chat: Chat
+    message: Message
+
+
+@dataclass(frozen=True, slots=True)
+class ChatMessageRecord:
     chat: Chat
     message: Message
 
@@ -93,6 +99,17 @@ class ChatRepository:
         result = await self.session.execute(
             select(Chat)
             .where(Chat.is_enabled.is_(True))
+            .order_by(func.lower(Chat.title), Chat.telegram_chat_id)
+        )
+        return list(result.scalars().all())
+
+    async def list_enabled_memory_chats(self) -> list[Chat]:
+        result = await self.session.execute(
+            select(Chat)
+            .where(
+                Chat.is_enabled.is_(True),
+                Chat.exclude_from_memory.is_(False),
+            )
             .order_by(func.lower(Chat.title), Chat.telegram_chat_id)
         )
         return list(result.scalars().all())
@@ -270,6 +287,12 @@ class MessageRepository:
         result = await self.session.execute(select(func.count()).select_from(Message))
         return int(result.scalar_one())
 
+    async def count_messages_for_chat(self, *, chat_id: int) -> int:
+        result = await self.session.execute(
+            select(func.count()).select_from(Message).where(Message.chat_id == chat_id)
+        )
+        return int(result.scalar_one())
+
     async def count_messages_by_chat(self) -> dict[int, int]:
         result = await self.session.execute(
             select(Message.chat_id, func.count(Message.id))
@@ -285,6 +308,24 @@ class MessageRepository:
         result = await self.session.execute(select(func.max(Message.sent_at)))
         return result.scalar_one_or_none()
 
+    async def get_messages_for_chat(
+        self,
+        *,
+        chat_id: int,
+        limit: int | None = None,
+        ascending: bool = True,
+    ) -> list[Message]:
+        statement = select(Message).where(Message.chat_id == chat_id)
+        if ascending:
+            statement = statement.order_by(Message.sent_at, Message.id)
+        else:
+            statement = statement.order_by(desc(Message.sent_at), desc(Message.id))
+        if limit is not None:
+            statement = statement.limit(limit)
+
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())
+
     async def get_recent_messages(self, *, chat_id: int, limit: int = 20) -> list[Message]:
         result = await self.session.execute(
             select(Message)
@@ -293,6 +334,49 @@ class MessageRepository:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def get_top_senders_for_chat(
+        self,
+        *,
+        chat_id: int,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        result = await self.session.execute(
+            select(
+                Message.sender_id,
+                Message.sender_name,
+                func.count(Message.id).label("message_count"),
+            )
+            .where(
+                Message.chat_id == chat_id,
+                or_(Message.sender_id.is_not(None), Message.sender_name.is_not(None)),
+            )
+            .group_by(Message.sender_id, Message.sender_name)
+            .order_by(
+                desc(func.count(Message.id)),
+                func.lower(func.coalesce(Message.sender_name, "")),
+                Message.sender_id,
+            )
+            .limit(limit)
+        )
+        return [
+            {
+                "sender_id": sender_id,
+                "sender_name": sender_name,
+                "message_count": int(message_count),
+            }
+            for sender_id, sender_name, message_count in result.all()
+        ]
+
+    async def count_messages_for_person(self, *, person_key: str) -> int:
+        filter_expression = _build_person_message_filter(person_key)
+        if filter_expression is None:
+            return 0
+
+        result = await self.session.execute(
+            select(func.count()).select_from(Message).where(filter_expression)
+        )
+        return int(result.scalar_one())
 
     async def search_full_text(self, query: str, *, limit: int = 20) -> list[Message]:
         result = await self.session.execute(
@@ -407,6 +491,14 @@ class DigestRepository:
         result = await self.session.execute(select(func.count()).select_from(Digest))
         return int(result.scalar_one())
 
+    async def get_last_digest_at_for_chat(self, chat_id: int) -> datetime | None:
+        result = await self.session.execute(
+            select(func.max(Digest.created_at))
+            .join(DigestItem, DigestItem.digest_id == Digest.id)
+            .where(DigestItem.source_chat_id == chat_id)
+        )
+        return result.scalar_one_or_none()
+
     async def get_last_digest(self) -> Digest | None:
         result = await self.session.execute(
             select(Digest)
@@ -432,6 +524,153 @@ class DigestRepository:
         digest.delivered_message_id = delivered_message_id
         await self.session.flush()
         return digest
+
+
+@dataclass(slots=True)
+class ChatMemoryRepository:
+    session: AsyncSession
+
+    async def upsert_chat_memory(
+        self,
+        *,
+        chat_id: int,
+        chat_summary_short: str,
+        chat_summary_long: str,
+        current_state: str | None,
+        dominant_topics_json: list[dict[str, Any]] | list[str] | None,
+        recent_conflicts_json: list[str] | None,
+        pending_tasks_json: list[str] | None,
+        linked_people_json: list[dict[str, Any]] | None,
+        last_digest_at: datetime | None,
+    ) -> ChatMemory:
+        memory = await self.get_chat_memory(chat_id)
+        if memory is None:
+            memory = ChatMemory(chat_id=chat_id)
+            self.session.add(memory)
+
+        memory.chat_summary_short = chat_summary_short
+        memory.chat_summary_long = chat_summary_long
+        memory.current_state = current_state
+        memory.dominant_topics_json = dominant_topics_json
+        memory.recent_conflicts_json = recent_conflicts_json
+        memory.pending_tasks_json = pending_tasks_json
+        memory.linked_people_json = linked_people_json
+        memory.last_digest_at = last_digest_at
+        await self.session.flush()
+        return memory
+
+    async def get_chat_memory(self, chat_id: int) -> ChatMemory | None:
+        result = await self.session.execute(
+            select(ChatMemory)
+            .options(selectinload(ChatMemory.chat))
+            .where(ChatMemory.chat_id == chat_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_chat_memory(self, *, limit: int | None = None) -> list[ChatMemory]:
+        statement = (
+            select(ChatMemory)
+            .options(selectinload(ChatMemory.chat))
+            .order_by(desc(ChatMemory.updated_at), ChatMemory.chat_id)
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())
+
+    async def count_chat_memory(self) -> int:
+        result = await self.session.execute(select(func.count()).select_from(ChatMemory))
+        return int(result.scalar_one())
+
+    async def get_last_updated_at(self) -> datetime | None:
+        result = await self.session.execute(select(func.max(ChatMemory.updated_at)))
+        return result.scalar_one_or_none()
+
+
+@dataclass(slots=True)
+class PersonMemoryRepository:
+    session: AsyncSession
+
+    async def upsert_person_memory(
+        self,
+        *,
+        person_key: str,
+        display_name: str,
+        relationship_label: str | None,
+        importance_score: float,
+        last_summary: str | None,
+        known_facts_json: list[str] | None,
+        sensitive_topics_json: list[str] | None,
+        open_loops_json: list[str] | None,
+        interaction_pattern: str | None,
+    ) -> PersonMemory:
+        memory = await self.get_person_memory(person_key)
+        if memory is None:
+            memory = PersonMemory(person_key=person_key, display_name=display_name)
+            self.session.add(memory)
+
+        memory.display_name = display_name
+        memory.relationship_label = relationship_label
+        memory.importance_score = importance_score
+        memory.last_summary = last_summary
+        memory.known_facts_json = known_facts_json
+        memory.sensitive_topics_json = sensitive_topics_json
+        memory.open_loops_json = open_loops_json
+        memory.interaction_pattern = interaction_pattern
+        await self.session.flush()
+        return memory
+
+    async def get_person_memory(self, person_key: str) -> PersonMemory | None:
+        result = await self.session.execute(
+            select(PersonMemory).where(PersonMemory.person_key == person_key)
+        )
+        return result.scalar_one_or_none()
+
+    async def search_people_memory(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+    ) -> list[PersonMemory]:
+        normalized = query.strip()
+        if not normalized:
+            return []
+
+        lowered = normalized.casefold()
+        lowered_handle = lowered.lstrip("@")
+        result = await self.session.execute(
+            select(PersonMemory).order_by(
+                desc(PersonMemory.importance_score),
+                PersonMemory.display_name,
+                PersonMemory.person_key,
+            )
+        )
+        matches = [
+            person
+            for person in result.scalars().all()
+            if _person_matches_query(person, lowered, lowered_handle)
+        ]
+        matches.sort(key=lambda item: _person_match_rank(item, lowered, lowered_handle))
+        return matches[:limit]
+
+    async def list_people_memory(self, *, limit: int | None = None) -> list[PersonMemory]:
+        statement = select(PersonMemory).order_by(
+            desc(PersonMemory.importance_score),
+            func.lower(PersonMemory.display_name),
+            PersonMemory.person_key,
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())
+
+    async def count_people_memory(self) -> int:
+        result = await self.session.execute(select(func.count()).select_from(PersonMemory))
+        return int(result.scalar_one())
+
+    async def get_last_updated_at(self) -> datetime | None:
+        result = await self.session.execute(select(func.max(PersonMemory.updated_at)))
+        return result.scalar_one_or_none()
 
 
 @dataclass(slots=True)
@@ -515,3 +754,63 @@ def _parse_telegram_chat_id(reference: str | int) -> int | None:
         return int(normalized)
     except ValueError:
         return None
+
+
+def _build_person_message_filter(person_key: str):
+    normalized = person_key.strip()
+    if not normalized:
+        return None
+
+    if normalized.startswith("tg:"):
+        try:
+            sender_id = int(normalized.split(":", 1)[1])
+        except ValueError:
+            return None
+        return Message.sender_id == sender_id
+
+    if normalized.startswith("username:"):
+        handle = normalized.split(":", 1)[1].strip().casefold()
+        if not handle:
+            return None
+        return func.lower(Message.sender_name) == f"@{handle}"
+
+    if normalized.startswith("name:"):
+        name = normalized.split(":", 1)[1].strip().casefold()
+        if not name:
+            return None
+        return func.lower(Message.sender_name) == name
+
+    return func.lower(Message.sender_name) == normalized.casefold()
+
+
+def _person_match_rank(person: PersonMemory, lowered_query: str, lowered_handle: str) -> tuple[int, float, str]:
+    lowered_display_name = person.display_name.casefold()
+    lowered_key = person.person_key.casefold()
+
+    if lowered_key == lowered_query or lowered_display_name == lowered_query:
+        priority = 0
+    elif lowered_key == f"username:{lowered_handle}" or lowered_display_name == f"@{lowered_handle}":
+        priority = 1
+    elif lowered_display_name.startswith(lowered_query) or lowered_display_name.startswith(f"@{lowered_handle}"):
+        priority = 2
+    else:
+        priority = 3
+
+    return (
+        priority,
+        -float(person.importance_score),
+        lowered_display_name,
+    )
+
+
+def _person_matches_query(person: PersonMemory, lowered_query: str, lowered_handle: str) -> bool:
+    lowered_display_name = person.display_name.casefold()
+    lowered_key = person.person_key.casefold()
+    return (
+        lowered_key == lowered_query
+        or lowered_key == f"username:{lowered_handle}"
+        or lowered_display_name == lowered_query
+        or lowered_display_name == f"@{lowered_handle}"
+        or lowered_display_name.startswith(lowered_query)
+        or lowered_display_name.startswith(f"@{lowered_handle}")
+    )

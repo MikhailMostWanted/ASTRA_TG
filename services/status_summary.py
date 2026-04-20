@@ -7,8 +7,10 @@ from services.digest_target import DigestTargetService
 from services.digest_window import parse_digest_window
 from storage.repositories import (
     ChatRepository,
+    ChatMemoryRepository,
     DigestRepository,
     MessageRepository,
+    PersonMemoryRepository,
     SettingRepository,
     SystemRepository,
 )
@@ -21,6 +23,8 @@ class BotStatusService:
     system_repository: SystemRepository
     message_repository: MessageRepository
     digest_repository: DigestRepository
+    chat_memory_repository: ChatMemoryRepository
+    person_memory_repository: PersonMemoryRepository
 
     async def build_status_message(self) -> str:
         total_sources = await self.chat_repository.count_chats()
@@ -31,6 +35,14 @@ class BotStatusService:
         last_message_at = await self.message_repository.get_last_message_timestamp()
         total_digests = await self.digest_repository.count_digests()
         last_digest = await self.digest_repository.get_last_digest()
+        total_chat_memory = await self.chat_memory_repository.count_chat_memory()
+        total_people_memory = await self.person_memory_repository.count_people_memory()
+        last_memory_rebuild = await self.setting_repository.get_value("memory.last_rebuild_at")
+        if last_memory_rebuild is None:
+            last_memory_rebuild = (
+                await self.chat_memory_repository.get_last_updated_at()
+                or await self.person_memory_repository.get_last_updated_at()
+            )
         digest_target = await DigestTargetService(self.setting_repository).get_target()
         schema_revision = await self.system_repository.get_schema_revision()
         digest_window = parse_digest_window(None)
@@ -39,6 +51,7 @@ class BotStatusService:
             window_end=digest_window.end,
         )
         digest_window_messages = sum(digest_window_counts.values())
+        has_memory_input = total_messages > 0 and bool(message_counts)
 
         lines = [
             "Статус Astra AFT",
@@ -59,6 +72,18 @@ class BotStatusService:
                 f"({digest_window_messages} сообщений из {len(digest_window_counts)} источников)"
                 if digest_window_messages
                 else f"Данных для digest ({digest_window.label}): нет"
+            ),
+            f"Memory-карт чатов: {total_chat_memory}",
+            f"Memory-карт людей: {total_people_memory}",
+            (
+                f"Последний rebuild memory: {_format_timestamp(last_memory_rebuild)}"
+                if last_memory_rebuild is not None
+                else "Последний rebuild memory: ещё не выполнялся"
+            ),
+            (
+                f"Данных для memory: да ({total_messages} сообщений из {len(message_counts)} источников)"
+                if has_memory_input
+                else "Данных для memory: нет"
             ),
             (
                 f"Канал доставки digest: настроен ({digest_target.label or digest_target.chat_id})"
@@ -142,9 +167,15 @@ def _chunk_sections(
     return messages
 
 
-def _format_timestamp(value: datetime | None) -> str:
+def _format_timestamp(value: datetime | str | None) -> str:
     if value is None:
         return "ещё нет"
+
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return value
 
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)

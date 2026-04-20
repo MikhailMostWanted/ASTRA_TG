@@ -7,6 +7,7 @@ Astra AFT — локальный MVP Telegram-ассистента. Репози
 - общие границы `config`, `storage`, `services` и `adapters`,
 - ingest MVP для накопления входящих сообщений из разрешённых Telegram-источников,
 - первый локальный digest MVP без LLM поверх уже сохранённых сообщений.
+- первый локальный memory MVP по чатам и людям поверх уже сохранённых сообщений.
 
 ## Стек
 
@@ -58,6 +59,9 @@ python -m apps.bot
 - `/source_add <chat_id|@username>` — добавить источник в allowlist.
 - `/source_disable <chat_id|@username>` — выключить источник.
 - `/source_enable <chat_id|@username>` — включить источник обратно.
+- `/memory_rebuild [chat_id|@username]` — пересобрать memory по локальной БД.
+- `/chat_memory <chat_id|@username>` — показать memory-card по чату.
+- `/person_memory <person_key|имя|@username>` — показать memory-card по человеку.
 - `/digest_target <chat_id|@username>` — сохранить чат или канал доставки digest.
 - `/digest_now [12h|24h|3d]` — вручную собрать digest по сохранённым сообщениям.
 - `/settings` — показать базовые настройки Astra AFT.
@@ -108,6 +112,36 @@ python -m apps.bot
 - `/digest_now 24h`
 - `/digest_now 3d`
 
+## Memory MVP
+
+Теперь поверх `messages` и `chats` подключён первый реальный memory-layer без LLM:
+
+- `/memory_rebuild` читает только локальную SQLite-БД и не ходит в Telegram напрямую;
+- по умолчанию rebuild идёт по активным `memory`-источникам;
+- `/memory_rebuild <chat_id|@username>` позволяет пересобрать память только по одному источнику;
+- результаты сохраняются в `chat_memory` и `people_memory`;
+- `/chat_memory` показывает короткую memory-card по чату;
+- `/person_memory` показывает короткую memory-card по человеку;
+- все summary и карточки строятся детерминированно, локальными эвристиками, без внешних NLP/LLM.
+
+Что попадает в chat memory:
+
+- краткая и развёрнутая сводка по чату;
+- текущее состояние обсуждения;
+- доминирующие темы;
+- открытые хвосты и напряжённые сигналы;
+- основные участники;
+- время последнего digest по источнику, если он уже был.
+
+Что попадает в people memory:
+
+- display name и стабильный `person_key`;
+- число связанных сообщений и простая importance-эвристика;
+- паттерн взаимодействия;
+- подтверждённые факты из метаданных общения;
+- чувствительные темы по безопасным ключевым признакам;
+- открытые хвосты по вопросам/обещаниям из сообщений.
+
 Применение и создание миграций:
 
 ```bash
@@ -124,6 +158,7 @@ alembic revision -m "описание изменения"
 - Первый слой доступа к данным лежит в `storage/repositories.py`.
 - Полнотекстовый поиск по сообщениям подготовлен через SQLite FTS5: виртуальная таблица `messages_fts` и триггеры на `messages`.
 - Сервисный ingest находится в `services/message_ingest.py`, а нормализация входящих сообщений — в `services/message_normalizer.py`.
+- Memory-сервисы лежат в `services/memory_builder.py`, `services/chat_memory_builder.py`, `services/people_memory_builder.py` и `services/memory_formatter.py`.
 
 ## Текущее покрытие
 
@@ -136,12 +171,12 @@ alembic revision -m "описание изменения"
 - репозиторный слой для `chats`, `messages`, `digests` и `settings`,
 - ingest сообщений только из разрешённых Telegram-источников,
 - ручной digest по уже накопленным сообщениям из локальной БД,
+- локальный memory layer по чатам и людям из уже накопленных сообщений,
 - тонкая обвязка bot/worker,
 - первая реальная миграция локальной схемы хранения.
 
 Пока намеренно не реализованы:
 
-- суммаризация memory,
 - reply suggestion,
 - извлечение reminder/task из сообщений,
 - полноценная синхронизация источников Telegram,
@@ -174,10 +209,28 @@ python -m apps.bot
 - при необходимости укажи окно: `/digest_now 12h` или `/digest_now 3d`;
 - если задан `/digest_target`, бот покажет preview и отправит итог туда же.
 
+7. Пересобери memory вручную:
+
+- вызови `/memory_rebuild` для всех активных источников;
+- или `/memory_rebuild @mychannel` для одного источника;
+- после этого проверь `/chat_memory @mychannel` и `/person_memory Анна`.
+
 Пример быстрой проверки базы:
 
 ```bash
 sqlite3 var/astra.db "SELECT telegram_message_id, chat_id, raw_text, normalized_text, has_media, media_type, sent_at FROM messages ORDER BY id DESC LIMIT 10;"
+```
+
+Проверка chat memory:
+
+```bash
+sqlite3 var/astra.db "SELECT chat_id, chat_summary_short, current_state, updated_at FROM chat_memory ORDER BY updated_at DESC LIMIT 10;"
+```
+
+Проверка people memory:
+
+```bash
+sqlite3 var/astra.db "SELECT person_key, display_name, importance_score, updated_at FROM people_memory ORDER BY importance_score DESC, updated_at DESC LIMIT 10;"
 ```
 
 Проверка сохранённых digest:
