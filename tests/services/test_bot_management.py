@@ -230,9 +230,12 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             assert "Memory-карт людей: 0" in status_text
             assert "Reply layer: готов" in status_text
             assert "Style-слой: готов" in status_text
+            assert "Persona-слой: готов" in status_text
+            assert "Persona-guardrails: активны" in status_text
             assert "Доступно style-профилей: 6" in status_text
             assert "Настроено ручных style-override: 0" in status_text
             assert "/reply в style-режиме: готов" in status_text
+            assert "/reply в persona-aware режиме: готов" in status_text
             assert "Чатов с данными для reply: 0" in status_text
             assert "Опора reply на memory: нет" in status_text
             assert "Последний rebuild memory: ещё не выполнялся" in status_text

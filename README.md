@@ -65,11 +65,12 @@ python -m apps.bot
 - `/person_memory <person_key|имя|@username>` — показать memory-card по человеку.
 - `/digest_target <chat_id|@username>` — сохранить чат или канал доставки digest.
 - `/digest_now [12h|24h|3d]` — вручную собрать digest по сохранённым сообщениям.
-- `/reply <chat_id|@username>` — получить style-aware подсказку ответа по конкретному чату.
+- `/reply <chat_id|@username>` — получить persona-aware подсказку ответа по конкретному чату.
 - `/style_profiles` — показать доступные встроенные style-профили.
 - `/style_set <chat_id|@username> <profile_key>` — вручную назначить style-профиль для уже известного чата.
 - `/style_unset <chat_id|@username>` — снять ручной style-override.
 - `/style_status <chat_id|@username>` — показать effective style-профиль чата и источник выбора.
+- `/persona_status` — показать состояние owner persona core и guardrails.
 - `/settings` — показать базовые настройки Astra AFT.
 
 Для `/source_add` и `/digest_target` поддержан best-effort сценарий через форвард или reply:
@@ -150,14 +151,15 @@ python -m apps.bot
 
 ## Reply MVP
 
-Теперь поверх `messages`, `chat_memory` и `people_memory` подключён первый локальный reply coach без внешних LLM и с первым реальным style layer:
+Теперь поверх `messages`, `chat_memory` и `people_memory` подключён первый локальный reply coach без внешних LLM, с реальным style layer и первым owner persona layer:
 
 - `/reply <chat_id|@username>` работает только по локальной SQLite-БД и уже сохранённым сообщениям;
 - движок берёт последние 20–40 сообщений, память по чату и связанным людям, а затем выбирает один лучший draft-ответ;
 - reply layer остаётся эвристическим и детерминированным: без OpenAI, Anthropic и локальных моделей;
 - поверх базового draft теперь работает отдельный style layer с встроенными профилями и chat-specific override;
-- текущая цель слоя — не style cloning, а безопасный управляемый Telegram-ответ с понятной причиной выбора;
-- в ответе бот показывает стиль, серию коротких сообщений, краткое объяснение, риск и уверенность.
+- поверх style layer теперь сидит отдельный owner persona core с детерминированным enrichment и guardrails;
+- текущая цель слоя — не style cloning и не personality mining, а безопасный управляемый Telegram-ответ с понятной причиной выбора;
+- в ответе бот показывает стиль, факт применения persona, итоговую серию сообщений, краткое объяснение, риск и уверенность.
 
 Что умеет reply engine на этом шаге:
 
@@ -165,6 +167,8 @@ python -m apps.bot
 - опираться на `chat_memory.current_state`, `pending_tasks`, `recent_conflicts`, `people_memory.interaction_pattern` и `open_loops`;
 - выбирать effective style-профиль по ручному override или простому fallback из памяти;
 - превращать базовый draft не только в одну строку, а в серию из 1–4 коротких Telegram-сообщений;
+- дополнительно прогонять style-aware серию через owner persona core, чтобы ответ звучал ближе к владельцу по ритму, объяснению и ограничениям;
+- показывать `persona_notes`, guardrail-флаги и финальную persona-aware серию в preview;
 - честно говорить, если чата нет, данных пока мало или последнее сохранённое сообщение уже от пользователя.
 
 ### Style layer MVP
@@ -186,6 +190,16 @@ python -m apps.bot
 - детерминированно режет базовый draft на серию коротких сообщений, снижает лишнюю пунктуацию и делает ответ более Telegram-friendly;
 - не использует внешние LLM и не пытается делать идеальный personality clone.
 
+### Persona layer MVP
+
+Что делает owner persona layer на этом шаге:
+
+- хранит `persona.core`, `persona.guardrails`, `persona.enabled` и `persona.version` в `settings`;
+- отделяет owner persona core от style profile: стиль отвечает за режим, persona — за общую манеру владельца;
+- детерминированно поджимает слишком гладкие формулировки, усиливает короткий телеграмный ритм и не даёт ответу уехать в карикатуру;
+- прогоняет результат через отдельные guardrails: длина, литературность, ботскость, шумная пунктуация, перегруз грубостью и повтор opener’ов;
+- даёт служебную команду `/persona_status` для проверки состояния persona слоя.
+
 Применение и создание миграций:
 
 ```bash
@@ -204,6 +218,7 @@ alembic revision -m "описание изменения"
 - Сервисный ingest находится в `services/message_ingest.py`, а нормализация входящих сообщений — в `services/message_normalizer.py`.
 - Memory-сервисы лежат в `services/memory_builder.py`, `services/chat_memory_builder.py`, `services/people_memory_builder.py` и `services/memory_formatter.py`.
 - Reply-сервисы лежат в `services/reply_context_builder.py`, `services/reply_classifier.py`, `services/reply_strategy.py`, `services/reply_engine.py` и `services/reply_formatter.py`.
+- Persona-сервисы лежат в `services/persona_rules.py`, `services/persona_core.py`, `services/persona_adapter.py`, `services/persona_guardrails.py` и `services/persona_formatter.py`.
 
 ## Текущее покрытие
 
@@ -219,6 +234,7 @@ alembic revision -m "описание изменения"
 - локальный memory layer по чатам и людям из уже накопленных сообщений,
 - локальный reply coach MVP по чатам из локальной БД и memory-карт,
 - первый детерминированный style layer с профилями и chat-specific override,
+- первый owner persona core поверх style layer с guardrails и `/persona_status`,
 - тонкая обвязка bot/worker,
 - первая реальная миграция локальной схемы хранения.
 

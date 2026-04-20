@@ -27,6 +27,7 @@ BOT_COMMAND_SPECS: tuple[BotCommandSpec, ...] = (
     BotCommandSpec("style_set", "Назначить style-профиль для чата"),
     BotCommandSpec("style_unset", "Снять ручной style-override"),
     BotCommandSpec("style_status", "Показать эффективный style-профиль для чата"),
+    BotCommandSpec("persona_status", "Показать состояние owner persona layer"),
     BotCommandSpec("settings", "Показать базовые настройки"),
 )
 

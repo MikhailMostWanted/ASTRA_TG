@@ -13,6 +13,10 @@ from services.digest_target import DigestTargetService
 from services.memory_builder import MemoryService
 from services.memory_formatter import MemoryFormatter
 from services.people_memory_builder import PeopleMemoryBuilder
+from services.persona_adapter import PersonaAdapter
+from services.persona_core import PersonaCoreService
+from services.persona_formatter import PersonaFormatter
+from services.persona_guardrails import PersonaGuardrails
 from services.reply_classifier import ReplyClassifier
 from services.reply_context_builder import ReplyContextBuilder
 from services.reply_engine import ReplyEngineService
@@ -153,6 +157,19 @@ async def handle_settings_command(
     async with session_factory() as session:
         service = _build_status_service(session)
         await message.answer(await service.build_settings_message())
+
+
+@router.message(Command("persona_status"))
+async def handle_persona_status_command(
+    message: Message,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        service = _build_persona_service(session)
+        formatter = PersonaFormatter()
+        report = await service.build_status_report()
+
+    await message.answer(formatter.format_status(report))
 
 
 @router.message(Command("reply"))
@@ -410,6 +427,7 @@ def _build_reply_service(session: AsyncSession) -> ReplyEngineService:
     message_repository = MessageRepository(session)
     chat_memory_repository = ChatMemoryRepository(session)
     person_memory_repository = PersonMemoryRepository(session)
+    setting_repository = SettingRepository(session)
     return ReplyEngineService(
         chat_repository=ChatRepository(session),
         message_repository=message_repository,
@@ -429,6 +447,9 @@ def _build_reply_service(session: AsyncSession) -> ReplyEngineService:
             person_memory_repository=person_memory_repository,
         ),
         style_adapter=StyleAdapter(),
+        persona_core_service=PersonaCoreService(setting_repository),
+        persona_adapter=PersonaAdapter(),
+        persona_guardrails=PersonaGuardrails(),
     )
 
 
@@ -447,3 +468,7 @@ def _build_style_service(session: AsyncSession) -> StyleProfileService:
             person_memory_repository=PersonMemoryRepository(session),
         ),
     )
+
+
+def _build_persona_service(session: AsyncSession) -> PersonaCoreService:
+    return PersonaCoreService(SettingRepository(session))

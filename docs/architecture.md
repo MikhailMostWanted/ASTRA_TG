@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты и первый reply coach по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис, а поверх него появился первый детерминированный style layer. Полный persona/provider layer и reminders остаются следующими шагами.
+Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты и reply coach по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис: сначала safe draft, потом style layer, а теперь ещё и детерминированный owner persona layer с guardrails. Provider layer, deeper few-shot persona и reminders остаются следующими шагами.
 
 ## Зоны ответственности модулей
 
@@ -10,7 +10,7 @@
 - `bot/` содержит aiogram routing и тонкие Telegram-handlers.
 - `bot/` теперь также даёт Telegram-интерфейс для управления allowlist источников, базовыми настройками digest и приёма входящих updates для ingest.
 - `worker/` содержит точки входа для фонового bootstrap/run-once сценария.
-- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine, style layer и статусные сводки.
+- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine, style layer, persona layer и статусные сводки.
 - `config/` содержит общие настройки из окружения.
 - `storage/` содержит SQLAlchemy runtime, bootstrap через Alembic и репозитории доступа к данным.
 - `models/` содержит ORM-схему SQLite для MVP-сущностей.
@@ -83,11 +83,14 @@
 - `services/reply_strategy.py` выбирает безопасную стратегию ответа и формирует базовый safe draft;
 - `services/style_selector.py` выбирает effective style-профиль по ручному override или по простому fallback из memory;
 - `services/style_adapter.py` детерминированно превращает базовый draft в серию коротких сообщений;
-- `services/reply_engine.py` оркестрирует весь flow и возвращает структурированный style-aware результат;
+- `services/persona_core.py` загружает owner persona core и guardrails из `settings`;
+- `services/persona_adapter.py` мягко обогащает style-aware серию owner-like ритмом, связками и ограничениями;
+- `services/persona_guardrails.py` проверяет длину, литературность, шумную пунктуацию, грубость и карикатурные паттерны;
+- `services/reply_engine.py` оркестрирует весь flow и возвращает структурированный persona-aware результат;
 - `services/reply_formatter.py` превращает его в Telegram-friendly сообщение для `/reply`;
-- `storage/repositories.py` даёт минимальные выборки и агрегаты для reply readiness, style profiles, chat overrides и связанных memory-карт.
+- `storage/repositories.py` даёт минимальные выборки и агрегаты для reply readiness, style profiles, chat overrides, `settings` и связанных memory-карт.
 
-Ключевой принцип этого слоя: reply suggestions строятся только по локальным `messages + chat_memory + people_memory`, а style adaptation остаётся полностью структурированной и детерминированной. Здесь нет внешних LLM, магического style cloning или автоответа. Это подготовительный слой перед будущим более глубоким persona layer, а не его замена.
+Ключевой принцип этого слоя: reply suggestions строятся только по локальным `messages + chat_memory + people_memory`, а style/persona adaptation остаётся полностью структурированной и детерминированной. Здесь нет внешних LLM, автоматического обучения на всём архиве, магического style cloning или автоответа. Текущий owner persona core — это управляемая база под будущий deeper persona / few-shot layer, а не попытка сразу сделать full personality clone.
 
 ## Style layer
 
@@ -98,3 +101,14 @@
 - `/style_profiles`, `/style_set`, `/style_unset`, `/style_status` работают только по зарегистрированным в allowlist чатам и не смешиваются с source discovery;
 - fallback-селектор остаётся спокойным: `override` -> явный сигнал из памяти -> `base`;
 - adapter меняет только форму ответа: серия коротких сообщений, ритм, пунктуация, opener/closer, но не пытается делать опасную имитацию личности.
+
+## Persona layer
+
+Первый owner persona layer теперь устроен так:
+
+- `settings` хранит `persona.core`, `persona.guardrails`, `persona.enabled` и `persona.version`;
+- persona core описывает общие правила владельца: речь, объяснение, тепло, прямоту, ограничения на грубость, anti-pattern’ы, opener/closer bank и rewrite constraints;
+- style profile остаётся ответом на вопрос "в каком режиме говорить", а persona core — ответом на вопрос "как в целом звучит владелец проекта";
+- enrichment идёт только поверх style-aware серии и работает мягко: если ответ уже звучит нормально, persona слой не должен его уродовать;
+- guardrails при сомнительном результате откатывают ответ к более безопасной style-aware версии;
+- `/persona_status` даёт наблюдаемость по активному core, guardrails и anti-pattern ограничениям.

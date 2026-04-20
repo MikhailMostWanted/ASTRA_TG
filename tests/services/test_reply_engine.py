@@ -13,6 +13,7 @@ from storage.repositories import (
     ChatStyleOverrideRepository,
     MessageRepository,
     PersonMemoryRepository,
+    SettingRepository,
     StyleProfileRepository,
 )
 
@@ -131,6 +132,9 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             reply_formatter_module = importlib.import_module("services.reply_formatter")
             style_adapter_module = importlib.import_module("services.style_adapter")
             style_selector_module = importlib.import_module("services.style_selector")
+            persona_adapter_module = importlib.import_module("services.persona_adapter")
+            persona_core_module = importlib.import_module("services.persona_core")
+            persona_guardrails_module = importlib.import_module("services.persona_guardrails")
 
             service = reply_engine_module.ReplyEngineService(
                 chat_repository=chats,
@@ -151,6 +155,11 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
                     person_memory_repository=person_memory_repo,
                 ),
                 style_adapter=style_adapter_module.StyleAdapter(),
+                persona_core_service=persona_core_module.PersonaCoreService(
+                    SettingRepository(session)
+                ),
+                persona_adapter=persona_adapter_module.PersonaAdapter(),
+                persona_guardrails=persona_guardrails_module.PersonaGuardrails(),
             )
             formatter = reply_formatter_module.ReplyFormatter()
 
@@ -163,10 +172,18 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             assert result.suggestion.base_reply_text
             assert result.suggestion.reply_messages
             assert len(result.suggestion.reply_messages) >= 2
+            assert result.suggestion.final_reply_messages
+            assert len(result.suggestion.final_reply_messages) >= 2
             assert result.suggestion.style_profile_key == "friend_explain"
             assert result.suggestion.style_notes
+            assert result.suggestion.persona_applied is True
+            assert result.suggestion.persona_notes
+            assert result.suggestion.guardrail_flags == ()
             assert result.suggestion.reply_text
             assert "бюджет" in result.suggestion.reply_text.lower()
+            assert result.suggestion.final_reply_messages[0].startswith(
+                ("ну", "а", "да", "не", "это", "я")
+            )
             assert result.suggestion.reason_short
             assert result.suggestion.risk_label in {"низкий", "средний", "высокий", "лучше не отвечать"}
             assert 0.0 < result.suggestion.confidence <= 1.0
@@ -184,9 +201,12 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             assert "Чат: Команда продукта" in rendered
             assert "Ориентир: Анна" in rendered
             assert "Режим / стиль: friend_explain" in rendered
-            assert "Итоговый вариант" in rendered
+            assert "Persona: да" in rendered
+            assert "Итоговая серия" in rendered
             assert "1." in rendered
             assert "Что сделал style-слой:" in rendered
+            assert "Что сделал persona-слой:" in rendered
+            assert "Guardrails: ok" in rendered
             assert "Риск:" in rendered
             assert "Уверенность:" in rendered
 
@@ -199,7 +219,8 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
         )
         assert any("Команда продукта" in answer for answer in fake_message.answers)
         assert any("Режим / стиль: friend_explain" in answer for answer in fake_message.answers)
-        assert any("Итоговый вариант" in answer for answer in fake_message.answers)
+        assert any("Persona: да" in answer for answer in fake_message.answers)
+        assert any("Итоговая серия" in answer for answer in fake_message.answers)
         assert any("Риск:" in answer for answer in fake_message.answers)
 
         await runtime.dispose()
@@ -225,6 +246,9 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
         reply_formatter_module = importlib.import_module("services.reply_formatter")
         style_adapter_module = importlib.import_module("services.style_adapter")
         style_selector_module = importlib.import_module("services.style_selector")
+        persona_adapter_module = importlib.import_module("services.persona_adapter")
+        persona_core_module = importlib.import_module("services.persona_core")
+        persona_guardrails_module = importlib.import_module("services.persona_guardrails")
         formatter = reply_formatter_module.ReplyFormatter()
 
         async with runtime.session_factory() as session:
@@ -232,6 +256,7 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
             messages = MessageRepository(session)
             chat_memory_repo = ChatMemoryRepository(session)
             person_memory_repo = PersonMemoryRepository(session)
+            settings_repo = SettingRepository(session)
             service = reply_engine_module.ReplyEngineService(
                 chat_repository=chats,
                 message_repository=messages,
@@ -251,6 +276,9 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
                     person_memory_repository=person_memory_repo,
                 ),
                 style_adapter=style_adapter_module.StyleAdapter(),
+                persona_core_service=persona_core_module.PersonaCoreService(settings_repo),
+                persona_adapter=persona_adapter_module.PersonaAdapter(),
+                persona_guardrails=persona_guardrails_module.PersonaGuardrails(),
             )
 
             missing = await service.build_reply("@missing")
@@ -268,6 +296,13 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
                 telegram_chat_id=-100302,
                 title="Последний ответ уже мой",
                 handle="self_last",
+                chat_type="group",
+                is_enabled=True,
+            )
+            persona_disabled_chat = await chats.upsert_chat(
+                telegram_chat_id=-100303,
+                title="Persona выключен",
+                handle="persona_off",
                 chat_type="group",
                 is_enabled=True,
             )
@@ -309,6 +344,42 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
                 raw_text="Да, вечером скину.",
                 normalized_text="Да, вечером скину.",
             )
+            await messages.create_message(
+                chat_id=persona_disabled_chat.id,
+                telegram_message_id=1,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 8, 20, tzinfo=timezone.utc),
+                raw_text="Смотрю это и скоро вернусь.",
+                normalized_text="Смотрю это и скоро вернусь.",
+            )
+            await messages.create_message(
+                chat_id=persona_disabled_chat.id,
+                telegram_message_id=2,
+                sender_id=18,
+                sender_name="Ира",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 8, 22, tzinfo=timezone.utc),
+                raw_text="Ок, жду апдейт.",
+                normalized_text="Ок, жду апдейт.",
+            )
+            await messages.create_message(
+                chat_id=persona_disabled_chat.id,
+                telegram_message_id=3,
+                sender_id=18,
+                sender_name="Ира",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 8, 26, tzinfo=timezone.utc),
+                raw_text="Когда сможешь написать по срокам?",
+                normalized_text="Когда сможешь написать по срокам?",
+            )
             await session.commit()
 
             too_short = await service.build_reply("@too_short")
@@ -318,6 +389,19 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
             self_last = await service.build_reply("@self_last")
             assert self_last.kind == "latest_is_self"
             assert "уже от тебя" in formatter.format_result(self_last).lower()
+
+            await settings_repo.set_value(
+                key="persona.enabled",
+                value_json={"enabled": False},
+            )
+            await session.commit()
+
+            persona_off = await service.build_reply("@persona_off")
+            assert persona_off.kind == "suggestion"
+            assert persona_off.suggestion is not None
+            assert persona_off.suggestion.persona_applied is False
+            assert persona_off.suggestion.final_reply_messages == persona_off.suggestion.reply_messages
+            assert "Persona: нет" in formatter.format_result(persona_off)
 
         await runtime.dispose()
 

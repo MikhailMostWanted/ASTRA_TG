@@ -59,9 +59,13 @@ class ReplyDraft:
 class ReplySuggestion:
     base_reply_text: str
     reply_messages: tuple[str, ...]
+    final_reply_messages: tuple[str, ...]
     style_profile_key: str
     style_source: str
     style_notes: tuple[str, ...]
+    persona_applied: bool
+    persona_notes: tuple[str, ...]
+    guardrail_flags: tuple[str, ...]
     reason_short: str
     risk_label: str
     confidence: float
@@ -74,6 +78,8 @@ class ReplySuggestion:
 
     @property
     def reply_text(self) -> str:
+        if self.final_reply_messages:
+            return "\n".join(self.final_reply_messages)
         if self.reply_messages:
             return "\n".join(self.reply_messages)
         return self.base_reply_text

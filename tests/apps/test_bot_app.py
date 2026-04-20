@@ -59,5 +59,6 @@ def test_configure_bot_commands_registers_management_commands() -> None:
         "style_set",
         "style_unset",
         "style_status",
+        "persona_status",
         "settings",
     ]

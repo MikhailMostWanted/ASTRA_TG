@@ -5,7 +5,14 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from config.settings import Settings
+from services.persona_rules import (
+    DEFAULT_OWNER_PERSONA_CORE,
+    DEFAULT_PERSONA_ENABLED,
+    DEFAULT_PERSONA_GUARDRAILS,
+    DEFAULT_PERSONA_VERSION,
+)
 from storage.migrations import upgrade_database_async
+from storage.repositories import SettingRepository
 
 
 @dataclass(slots=True)
@@ -35,6 +42,7 @@ def build_database_runtime(settings: Settings) -> DatabaseRuntime:
 
 async def bootstrap_database(runtime: DatabaseRuntime) -> None:
     await upgrade_database_async(runtime.database_url)
+    await _seed_default_settings(runtime.session_factory)
 
 
 def _configure_sqlite_engine(
@@ -50,3 +58,57 @@ def _configure_sqlite_engine(
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys = ON")
         cursor.close()
+
+
+async def _seed_default_settings(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        repository = SettingRepository(session)
+        changed = False
+        changed |= await _ensure_json_setting(
+            repository,
+            key="persona.core",
+            value=DEFAULT_OWNER_PERSONA_CORE,
+        )
+        changed |= await _ensure_json_setting(
+            repository,
+            key="persona.guardrails",
+            value=DEFAULT_PERSONA_GUARDRAILS,
+        )
+        changed |= await _ensure_json_setting(
+            repository,
+            key="persona.enabled",
+            value=DEFAULT_PERSONA_ENABLED,
+        )
+        changed |= await _ensure_text_setting(
+            repository,
+            key="persona.version",
+            value=DEFAULT_PERSONA_VERSION,
+        )
+        if changed:
+            await session.commit()
+
+
+async def _ensure_json_setting(
+    repository: SettingRepository,
+    *,
+    key: str,
+    value: dict[str, object],
+) -> bool:
+    if await repository.get_by_key(key) is not None:
+        return False
+    await repository.set_value(key=key, value_json=value)
+    return True
+
+
+async def _ensure_text_setting(
+    repository: SettingRepository,
+    *,
+    key: str,
+    value: str,
+) -> bool:
+    if await repository.get_by_key(key) is not None:
+        return False
+    await repository.set_value(key=key, value_text=value)
+    return True

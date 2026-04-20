@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from services.digest_target import DigestTargetService
 from services.digest_window import parse_digest_window
+from services.persona_core import PersonaCoreService
 from storage.repositories import (
     ChatRepository,
     ChatMemoryRepository,
@@ -44,6 +45,7 @@ class BotStatusService:
         total_people_memory = await self.person_memory_repository.count_people_memory()
         total_style_profiles = await self.style_profile_repository.count_profiles()
         total_style_overrides = await self.chat_style_override_repository.count_overrides()
+        persona_state = await PersonaCoreService(self.setting_repository).load_state()
         last_memory_rebuild = await self.setting_repository.get_value("memory.last_rebuild_at")
         if last_memory_rebuild is None:
             last_memory_rebuild = (
@@ -84,12 +86,26 @@ class BotStatusService:
             f"Memory-карт людей: {total_people_memory}",
             "Reply layer: готов",
             "Style-слой: готов" if total_style_profiles >= 6 else "Style-слой: не готов",
+            "Persona-слой: готов" if persona_state.core_loaded else "Persona-слой: не готов",
+            (
+                "Persona-guardrails: активны"
+                if persona_state.guardrails_active
+                else "Persona-guardrails: не активны"
+            ),
             f"Доступно style-профилей: {total_style_profiles}",
             f"Настроено ручных style-override: {total_style_overrides}",
             (
                 "/reply в style-режиме: готов"
                 if total_style_profiles >= 6
                 else "/reply в style-режиме: не готов"
+            ),
+            (
+                "/reply в persona-aware режиме: готов"
+                if total_style_profiles >= 6
+                and persona_state.enabled
+                and persona_state.core_loaded
+                and persona_state.guardrails_active
+                else "/reply в persona-aware режиме: не готов"
             ),
             f"Чатов с данными для reply: {reply_ready_chats}",
             (

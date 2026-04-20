@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from services.persona_adapter import PersonaAdapter
+from services.persona_core import PersonaCoreService
+from services.persona_guardrails import PersonaGuardrails
 from services.reply_context_builder import ReplyContextBuilder
 from services.reply_classifier import ReplyClassifier
 from services.reply_models import ReplyResult, ReplySuggestion
@@ -22,6 +25,9 @@ class ReplyEngineService:
     strategy_resolver: ReplyStrategyResolver
     style_selector: StyleSelectorService
     style_adapter: StyleAdapter
+    persona_core_service: PersonaCoreService
+    persona_adapter: PersonaAdapter
+    persona_guardrails: PersonaGuardrails
 
     async def build_reply(self, reference: str) -> ReplyResult:
         chat = await self.chat_repository.find_chat_by_handle_or_telegram_id(reference)
@@ -55,6 +61,45 @@ class ReplyEngineService:
             profile=style_selection.profile,
             strategy=draft.strategy,
         )
+        persona_state = await self.persona_core_service.load_state()
+        final_messages = styled_reply.messages
+        guardrail_flags: tuple[str, ...] = ()
+        persona_notes: tuple[str, ...]
+        persona_applied = False
+        if (
+            persona_state.enabled
+            and persona_state.core is not None
+            and persona_state.guardrails is not None
+        ):
+            adapted_reply = self.persona_adapter.adapt(
+                messages=styled_reply.messages,
+                profile=style_selection.profile,
+                persona_core=persona_state.core,
+                strategy=draft.strategy,
+            )
+            guardrail_decision = self.persona_guardrails.apply(
+                proposed_messages=adapted_reply.messages,
+                fallback_messages=styled_reply.messages,
+                profile=style_selection.profile,
+                persona_core=persona_state.core,
+                guardrails=persona_state.guardrails,
+            )
+            final_messages = guardrail_decision.messages
+            guardrail_flags = guardrail_decision.flags
+            persona_applied = adapted_reply.applied and not guardrail_decision.used_fallback
+            notes = list(adapted_reply.notes)
+            if guardrail_decision.used_fallback:
+                notes.append("Guardrail вернул более безопасную style-aware серию.")
+            elif guardrail_decision.flags:
+                notes.append("Guardrail слегка поджал рискованные места.")
+            persona_notes = tuple(notes)
+        else:
+            persona_notes = (
+                ("Persona enrichment выключен.",)
+                if not persona_state.enabled
+                else ("Persona core не загружен, оставил style-aware серию.",)
+            )
+
         return ReplyResult(
             kind="suggestion",
             chat_id=chat.id,
@@ -63,9 +108,13 @@ class ReplyEngineService:
             suggestion=ReplySuggestion(
                 base_reply_text=draft.base_reply_text,
                 reply_messages=styled_reply.messages,
+                final_reply_messages=final_messages,
                 style_profile_key=style_selection.profile.key,
                 style_source=style_selection.source,
                 style_notes=styled_reply.notes,
+                persona_applied=persona_applied,
+                persona_notes=persona_notes,
+                guardrail_flags=guardrail_flags,
                 reason_short=draft.reason_short,
                 risk_label=draft.risk_label,
                 confidence=draft.confidence,

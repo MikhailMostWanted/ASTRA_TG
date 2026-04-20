@@ -32,11 +32,20 @@ class ReplyFormatter:
                 if suggestion.style_source == "fallback"
                 else f"Режим / стиль: {suggestion.style_profile_key} (ручной override)"
             ),
-            "Итоговый вариант:",
-            *self.style_formatter.format_reply_messages(suggestion.reply_messages),
+            f"Persona: {'да' if suggestion.persona_applied else 'нет'}",
+            "Итоговая серия:",
+            *self.style_formatter.format_reply_messages(
+                suggestion.final_reply_messages or suggestion.reply_messages
+            ),
             "",
             f"Почему: {suggestion.reason_short}",
             f"Что сделал style-слой: {'; '.join(suggestion.style_notes)}",
+            f"Что сделал persona-слой: {'; '.join(suggestion.persona_notes)}",
+            (
+                "Guardrails: ok"
+                if not suggestion.guardrail_flags
+                else f"Guardrails: {', '.join(suggestion.guardrail_flags)}"
+            ),
             f"Риск: {suggestion.risk_label}",
             f"Уверенность: {round(suggestion.confidence * 100)}%",
             f"Стратегия: {suggestion.strategy}",
