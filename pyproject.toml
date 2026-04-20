@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astra-aft"
+version = "0.1.0"
+description = "Telegram-first personal assistant skeleton for Astra AFT."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.4,<4.0",
+    "aiosqlite>=0.20,<1.0",
+    "alembic>=1.13,<2.0",
+    "pydantic-settings>=2.2,<3.0",
+    "SQLAlchemy>=2.0,<3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9.0",
+    "ruff>=0.6,<1.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "apps*",
+    "bot*",
+    "worker*",
+    "core*",
+    "config*",
+    "storage*",
+    "models*",
+    "services*",
+    "schemas*",
+    "adapters*",
+    "telegram_bot*",
+    "business*",
+    "fullaccess*",
+]
