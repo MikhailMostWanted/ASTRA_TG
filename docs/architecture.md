@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты и первый reply coach по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис, а style/provider layer и reminders остаются следующими шагами.
+Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты и первый reply coach по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис, а поверх него появился первый детерминированный style layer. Полный persona/provider layer и reminders остаются следующими шагами.
 
 ## Зоны ответственности модулей
 
@@ -10,7 +10,7 @@
 - `bot/` содержит aiogram routing и тонкие Telegram-handlers.
 - `bot/` теперь также даёт Telegram-интерфейс для управления allowlist источников, базовыми настройками digest и приёма входящих updates для ingest.
 - `worker/` содержит точки входа для фонового bootstrap/run-once сценария.
-- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine и статусные сводки.
+- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine, style layer и статусные сводки.
 - `config/` содержит общие настройки из окружения.
 - `storage/` содержит SQLAlchemy runtime, bootstrap через Alembic и репозитории доступа к данным.
 - `models/` содержит ORM-схему SQLite для MVP-сущностей.
@@ -80,9 +80,21 @@
 - `bot/handlers/management.py` подключает `/reply`, но сам остаётся тонким;
 - `services/reply_context_builder.py` собирает reply-context только из локальной БД: последние сообщения чата, `chat_memory`, связанный `people_memory`, признаки открытых хвостов и конфликтов;
 - `services/reply_classifier.py` определяет тип ситуации простыми эвристиками: вопрос, просьба, лёгкий бытовой обмен, напряжённый фрагмент или сценарий, где лучше не отвечать сразу;
-- `services/reply_strategy.py` выбирает безопасную стратегию ответа, формирует короткий draft, риск-метку и уверенность;
-- `services/reply_engine.py` оркестрирует весь flow и возвращает структурированный результат;
+- `services/reply_strategy.py` выбирает безопасную стратегию ответа и формирует базовый safe draft;
+- `services/style_selector.py` выбирает effective style-профиль по ручному override или по простому fallback из memory;
+- `services/style_adapter.py` детерминированно превращает базовый draft в серию коротких сообщений;
+- `services/reply_engine.py` оркестрирует весь flow и возвращает структурированный style-aware результат;
 - `services/reply_formatter.py` превращает его в Telegram-friendly сообщение для `/reply`;
-- `storage/repositories.py` даёт минимальные выборки и агрегаты для reply readiness и связанных memory-карт.
+- `storage/repositories.py` даёт минимальные выборки и агрегаты для reply readiness, style profiles, chat overrides и связанных memory-карт.
 
-Ключевой принцип этого слоя: reply suggestions строятся только по локальным `messages + chat_memory + people_memory`. Здесь нет внешних LLM, магического style cloning или автоответа. Это промежуточный слой перед будущим provider/style layer, а не его замена.
+Ключевой принцип этого слоя: reply suggestions строятся только по локальным `messages + chat_memory + people_memory`, а style adaptation остаётся полностью структурированной и детерминированной. Здесь нет внешних LLM, магического style cloning или автоответа. Это подготовительный слой перед будущим более глубоким persona layer, а не его замена.
+
+## Style layer
+
+Первый style layer теперь устроен так:
+
+- `style_profiles` хранит встроенные профили с явными структурированными признаками;
+- `chat_style_overrides` хранит ручное переопределение профиля для уже известных `chats`;
+- `/style_profiles`, `/style_set`, `/style_unset`, `/style_status` работают только по зарегистрированным в allowlist чатам и не смешиваются с source discovery;
+- fallback-селектор остаётся спокойным: `override` -> явный сигнал из памяти -> `base`;
+- adapter меняет только форму ответа: серия коротких сообщений, ритм, пунктуация, opener/closer, но не пытается делать опасную имитацию личности.

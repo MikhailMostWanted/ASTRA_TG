@@ -55,5 +55,9 @@ def test_configure_bot_commands_registers_management_commands() -> None:
         "digest_target",
         "digest_now",
         "reply",
+        "style_profiles",
+        "style_set",
+        "style_unset",
+        "style_status",
         "settings",
     ]

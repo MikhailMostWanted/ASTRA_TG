@@ -65,7 +65,11 @@ python -m apps.bot
 - `/person_memory <person_key|имя|@username>` — показать memory-card по человеку.
 - `/digest_target <chat_id|@username>` — сохранить чат или канал доставки digest.
 - `/digest_now [12h|24h|3d]` — вручную собрать digest по сохранённым сообщениям.
-- `/reply <chat_id|@username>` — получить одну локальную подсказку ответа по конкретному чату.
+- `/reply <chat_id|@username>` — получить style-aware подсказку ответа по конкретному чату.
+- `/style_profiles` — показать доступные встроенные style-профили.
+- `/style_set <chat_id|@username> <profile_key>` — вручную назначить style-профиль для уже известного чата.
+- `/style_unset <chat_id|@username>` — снять ручной style-override.
+- `/style_status <chat_id|@username>` — показать effective style-профиль чата и источник выбора.
 - `/settings` — показать базовые настройки Astra AFT.
 
 Для `/source_add` и `/digest_target` поддержан best-effort сценарий через форвард или reply:
@@ -146,19 +150,41 @@ python -m apps.bot
 
 ## Reply MVP
 
-Теперь поверх `messages`, `chat_memory` и `people_memory` подключён первый локальный reply coach без внешних LLM:
+Теперь поверх `messages`, `chat_memory` и `people_memory` подключён первый локальный reply coach без внешних LLM и с первым реальным style layer:
 
 - `/reply <chat_id|@username>` работает только по локальной SQLite-БД и уже сохранённым сообщениям;
 - движок берёт последние 20–40 сообщений, память по чату и связанным людям, а затем выбирает один лучший draft-ответ;
 - reply layer остаётся эвристическим и детерминированным: без OpenAI, Anthropic и локальных моделей;
-- текущая цель слоя — не style cloning, а безопасный короткий Telegram-draft с понятной причиной выбора;
-- в ответе бот показывает сам draft, краткое объяснение, риск и уверенность.
+- поверх базового draft теперь работает отдельный style layer с встроенными профилями и chat-specific override;
+- текущая цель слоя — не style cloning, а безопасный управляемый Telegram-ответ с понятной причиной выбора;
+- в ответе бот показывает стиль, серию коротких сообщений, краткое объяснение, риск и уверенность.
 
 Что умеет reply engine на этом шаге:
 
 - различать вопрос/уточнение, просьбу, лёгкий бытовой разговор, напряжённый фрагмент и ситуацию, где лучше не отвечать сразу;
 - опираться на `chat_memory.current_state`, `pending_tasks`, `recent_conflicts`, `people_memory.interaction_pattern` и `open_loops`;
+- выбирать effective style-профиль по ручному override или простому fallback из памяти;
+- превращать базовый draft не только в одну строку, а в серию из 1–4 коротких Telegram-сообщений;
 - честно говорить, если чата нет, данных пока мало или последнее сохранённое сообщение уже от пользователя.
+
+### Style layer MVP
+
+Встроенные style-профили:
+
+- `base`
+- `friend_hard`
+- `friend_explain`
+- `romantic_soft`
+- `practical_short`
+- `tension_soft`
+
+Что делает style layer на этом шаге:
+
+- хранит встроенные профили в отдельной таблице `style_profiles`;
+- хранит ручные chat-specific override отдельно в `chat_style_overrides`;
+- выбирает effective profile спокойно и предсказуемо: override -> явный fallback из памяти -> `base`;
+- детерминированно режет базовый draft на серию коротких сообщений, снижает лишнюю пунктуацию и делает ответ более Telegram-friendly;
+- не использует внешние LLM и не пытается делать идеальный personality clone.
 
 Применение и создание миграций:
 
@@ -192,6 +218,7 @@ alembic revision -m "описание изменения"
 - ручной digest по уже накопленным сообщениям из локальной БД,
 - локальный memory layer по чатам и людям из уже накопленных сообщений,
 - локальный reply coach MVP по чатам из локальной БД и memory-карт,
+- первый детерминированный style layer с профилями и chat-specific override,
 - тонкая обвязка bot/worker,
 - первая реальная миграция локальной схемы хранения.
 
@@ -222,7 +249,13 @@ python -m apps.bot
 - вызови `/memory_rebuild`;
 - или `/memory_rebuild @mychannel` для одного источника.
 
-5. Получи первую подсказку ответа:
+5. При необходимости назначь конкретный стиль:
+
+- `/style_profiles`
+- `/style_set @mychannel friend_explain`
+- `/style_status @mychannel`
+
+6. Получи первую подсказку ответа:
 
 - `/reply @mychannel`
 - `/reply -1001234567890`
@@ -231,7 +264,8 @@ python -m apps.bot
 
 - какой чат анализировался;
 - на какое последнее сообщение он ориентировался;
-- один основной draft-ответ;
+- какой style-профиль применился;
+- серию коротких сообщений вместо одного длинного абзаца;
 - краткое объяснение выбора;
 - риск и уверенность.
 

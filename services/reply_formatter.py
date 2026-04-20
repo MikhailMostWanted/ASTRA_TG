@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from services.reply_models import ReplyResult
+from services.style_formatter import StyleFormatter
 
 
 @dataclass(slots=True)
 class ReplyFormatter:
+    style_formatter: StyleFormatter = field(default_factory=StyleFormatter)
+
     def format_result(self, result: ReplyResult) -> str:
         if result.kind != "suggestion" or result.suggestion is None:
             lines = []
@@ -19,16 +22,21 @@ class ReplyFormatter:
             return "\n".join(lines)
 
         suggestion = result.suggestion
-        label = "Совет" if suggestion.strategy == "не отвечать" else "Черновик"
         lines = [
             f"Чат: {result.chat_title}",
             f"Источник: {result.chat_reference}",
             f"Ориентир: {result.source_message_preview or suggestion.source_message_preview}",
             "",
-            f"{label}:",
-            suggestion.reply_text,
+            (
+                f"Режим / стиль: {suggestion.style_profile_key} (автовыбор)"
+                if suggestion.style_source == "fallback"
+                else f"Режим / стиль: {suggestion.style_profile_key} (ручной override)"
+            ),
+            "Итоговый вариант:",
+            *self.style_formatter.format_reply_messages(suggestion.reply_messages),
             "",
             f"Почему: {suggestion.reason_short}",
+            f"Что сделал style-слой: {'; '.join(suggestion.style_notes)}",
             f"Риск: {suggestion.risk_label}",
             f"Уверенность: {round(suggestion.confidence * 100)}%",
             f"Стратегия: {suggestion.strategy}",

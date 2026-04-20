@@ -9,6 +9,7 @@ from storage.database import bootstrap_database, build_database_runtime
 
 EXPECTED_TABLES = {
     "chat_memory",
+    "chat_style_overrides",
     "chats",
     "digest_items",
     "digests",
@@ -17,6 +18,7 @@ EXPECTED_TABLES = {
     "people_memory",
     "reminders",
     "settings",
+    "style_profiles",
     "tasks",
 }
 

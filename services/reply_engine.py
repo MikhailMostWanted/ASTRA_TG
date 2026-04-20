@@ -4,8 +4,10 @@ from dataclasses import dataclass
 
 from services.reply_context_builder import ReplyContextBuilder
 from services.reply_classifier import ReplyClassifier
-from services.reply_models import ReplyResult
+from services.reply_models import ReplyResult, ReplySuggestion
 from services.reply_strategy import ReplyStrategyResolver
+from services.style_adapter import StyleAdapter
+from services.style_selector import StyleSelectorService
 from storage.repositories import ChatMemoryRepository, ChatRepository, MessageRepository, PersonMemoryRepository
 
 
@@ -18,6 +20,8 @@ class ReplyEngineService:
     context_builder: ReplyContextBuilder
     classifier: ReplyClassifier
     strategy_resolver: ReplyStrategyResolver
+    style_selector: StyleSelectorService
+    style_adapter: StyleAdapter
 
     async def build_reply(self, reference: str) -> ReplyResult:
         chat = await self.chat_repository.find_chat_by_handle_or_telegram_id(reference)
@@ -41,18 +45,39 @@ class ReplyEngineService:
             )
 
         classification = self.classifier.classify(context_or_issue)
-        suggestion = self.strategy_resolver.resolve(
+        draft = self.strategy_resolver.resolve(
             context=context_or_issue,
             classification=classification,
+        )
+        style_selection = await self.style_selector.select_for_context(context_or_issue)
+        styled_reply = self.style_adapter.adapt(
+            draft_text=draft.base_reply_text,
+            profile=style_selection.profile,
+            strategy=draft.strategy,
         )
         return ReplyResult(
             kind="suggestion",
             chat_id=chat.id,
             chat_title=chat.title,
             chat_reference=_build_chat_reference(chat),
-            suggestion=suggestion,
+            suggestion=ReplySuggestion(
+                base_reply_text=draft.base_reply_text,
+                reply_messages=styled_reply.messages,
+                style_profile_key=style_selection.profile.key,
+                style_source=style_selection.source,
+                style_notes=styled_reply.notes,
+                reason_short=draft.reason_short,
+                risk_label=draft.risk_label,
+                confidence=draft.confidence,
+                strategy=draft.strategy,
+                source_message_id=draft.source_message_id,
+                chat_id=draft.chat_id,
+                situation=draft.situation,
+                source_message_preview=draft.source_message_preview,
+                alternative_action=draft.alternative_action,
+            ),
             source_sender_name=context_or_issue.target_message.sender_name,
-            source_message_preview=suggestion.source_message_preview,
+            source_message_preview=draft.source_message_preview,
         )
 
 

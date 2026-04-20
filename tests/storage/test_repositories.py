@@ -6,9 +6,11 @@ from config.settings import Settings
 from storage.database import build_database_runtime, bootstrap_database
 from storage.repositories import (
     ChatRepository,
+    ChatStyleOverrideRepository,
     DigestRepository,
     MessageRepository,
     SettingRepository,
+    StyleProfileRepository,
     SystemRepository,
 )
 
@@ -28,6 +30,8 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
             digests = DigestRepository(session)
             repo_settings = SettingRepository(session)
             system = SystemRepository(session)
+            style_profiles = StyleProfileRepository(session)
+            style_overrides = ChatStyleOverrideRepository(session)
 
             created_chat = await chats.upsert_chat(
                 telegram_chat_id=100500,
@@ -81,6 +85,37 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
             )
             await session.commit()
             assert digest_ready_chat.exclude_from_digest is False
+
+            built_in_profiles = await style_profiles.list_profiles()
+            assert [profile.key for profile in built_in_profiles] == [
+                "base",
+                "friend_hard",
+                "friend_explain",
+                "practical_short",
+                "romantic_soft",
+                "tension_soft",
+            ]
+
+            friend_explain = await style_profiles.get_by_key("friend_explain")
+            assert friend_explain is not None
+            override = await style_overrides.set_override(
+                chat_id=updated_chat.id,
+                style_profile_id=friend_explain.id,
+            )
+            await session.commit()
+
+            assert override.chat_id == updated_chat.id
+            assert override.style_profile_id == friend_explain.id
+            loaded_override = await style_overrides.get_override_for_chat(updated_chat.id)
+            assert loaded_override is not None
+            assert loaded_override.style_profile.key == "friend_explain"
+            assert await style_overrides.count_overrides() == 1
+
+            removed_override = await style_overrides.unset_override(chat_id=updated_chat.id)
+            await session.commit()
+            assert removed_override is True
+            assert await style_overrides.get_override_for_chat(updated_chat.id) is None
+            assert await style_overrides.count_overrides() == 0
 
             first_message = await messages.create_message(
                 chat_id=updated_chat.id,
@@ -184,7 +219,7 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
             await session.commit()
 
             assert await repo_settings.get_value("digest.target.label") == "@astra_digest"
-            assert await system.get_schema_revision() == "20260420_01"
+            assert await system.get_schema_revision() == "20260420_02"
 
         await runtime.dispose()
 

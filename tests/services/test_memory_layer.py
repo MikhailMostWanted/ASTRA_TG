@@ -11,9 +11,11 @@ from services.status_summary import BotStatusService
 from storage.database import bootstrap_database, build_database_runtime
 from storage.repositories import (
     ChatRepository,
+    ChatStyleOverrideRepository,
     DigestRepository,
     MessageRepository,
     SettingRepository,
+    StyleProfileRepository,
     SystemRepository,
 )
 
@@ -235,6 +237,8 @@ def test_memory_rebuild_builds_chat_and_people_memory_from_local_messages(
                 digest_repository=digests,
                 chat_memory_repository=chat_memory_repo,
                 person_memory_repository=people_memory_repo,
+                style_profile_repository=StyleProfileRepository(session),
+                chat_style_override_repository=ChatStyleOverrideRepository(session),
             )
             status_text = await status_service.build_status_message()
             assert "Memory-карт чатов: 2" in status_text

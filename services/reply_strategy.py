@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from services.reply_models import ReplyClassification, ReplyContext, ReplySuggestion
+from services.reply_models import ReplyClassification, ReplyContext, ReplyDraft
 
 
 @dataclass(slots=True)
@@ -12,7 +12,7 @@ class ReplyStrategyResolver:
         *,
         context: ReplyContext,
         classification: ReplyClassification,
-    ) -> ReplySuggestion:
+    ) -> ReplyDraft:
         strategy, risk_label, base_confidence = self._choose_strategy(classification)
         confidence = self._adjust_confidence(
             base_confidence=base_confidence,
@@ -35,8 +35,8 @@ class ReplyStrategyResolver:
                 "Сначала дождись новой реплики или собери факты, потом вернись коротким спокойным сообщением."
             )
 
-        return ReplySuggestion(
-            reply_text=reply_text,
+        return ReplyDraft(
+            base_reply_text=reply_text,
             reason_short=reason_short,
             risk_label=risk_label,
             confidence=confidence,

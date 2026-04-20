@@ -8,10 +8,12 @@ from services.digest_window import parse_digest_window
 from storage.repositories import (
     ChatRepository,
     ChatMemoryRepository,
+    ChatStyleOverrideRepository,
     DigestRepository,
     MessageRepository,
     PersonMemoryRepository,
     SettingRepository,
+    StyleProfileRepository,
     SystemRepository,
 )
 
@@ -25,6 +27,8 @@ class BotStatusService:
     digest_repository: DigestRepository
     chat_memory_repository: ChatMemoryRepository
     person_memory_repository: PersonMemoryRepository
+    style_profile_repository: StyleProfileRepository
+    chat_style_override_repository: ChatStyleOverrideRepository
 
     async def build_status_message(self) -> str:
         total_sources = await self.chat_repository.count_chats()
@@ -38,6 +42,8 @@ class BotStatusService:
         last_digest = await self.digest_repository.get_last_digest()
         total_chat_memory = await self.chat_memory_repository.count_chat_memory()
         total_people_memory = await self.person_memory_repository.count_people_memory()
+        total_style_profiles = await self.style_profile_repository.count_profiles()
+        total_style_overrides = await self.chat_style_override_repository.count_overrides()
         last_memory_rebuild = await self.setting_repository.get_value("memory.last_rebuild_at")
         if last_memory_rebuild is None:
             last_memory_rebuild = (
@@ -77,6 +83,14 @@ class BotStatusService:
             f"Memory-карт чатов: {total_chat_memory}",
             f"Memory-карт людей: {total_people_memory}",
             "Reply layer: готов",
+            "Style-слой: готов" if total_style_profiles >= 6 else "Style-слой: не готов",
+            f"Доступно style-профилей: {total_style_profiles}",
+            f"Настроено ручных style-override: {total_style_overrides}",
+            (
+                "/reply в style-режиме: готов"
+                if total_style_profiles >= 6
+                else "/reply в style-режиме: не готов"
+            ),
             f"Чатов с данными для reply: {reply_ready_chats}",
             (
                 "Опора reply на memory: да"

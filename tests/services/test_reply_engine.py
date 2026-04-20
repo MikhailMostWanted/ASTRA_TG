@@ -10,8 +10,10 @@ from storage.database import bootstrap_database, build_database_runtime
 from storage.repositories import (
     ChatMemoryRepository,
     ChatRepository,
+    ChatStyleOverrideRepository,
     MessageRepository,
     PersonMemoryRepository,
+    StyleProfileRepository,
 )
 
 
@@ -127,6 +129,8 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             reply_classifier_module = importlib.import_module("services.reply_classifier")
             reply_strategy_module = importlib.import_module("services.reply_strategy")
             reply_formatter_module = importlib.import_module("services.reply_formatter")
+            style_adapter_module = importlib.import_module("services.style_adapter")
+            style_selector_module = importlib.import_module("services.style_selector")
 
             service = reply_engine_module.ReplyEngineService(
                 chat_repository=chats,
@@ -140,6 +144,13 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
                 ),
                 classifier=reply_classifier_module.ReplyClassifier(),
                 strategy_resolver=reply_strategy_module.ReplyStrategyResolver(),
+                style_selector=style_selector_module.StyleSelectorService(
+                    style_profile_repository=StyleProfileRepository(session),
+                    chat_style_override_repository=ChatStyleOverrideRepository(session),
+                    chat_memory_repository=chat_memory_repo,
+                    person_memory_repository=person_memory_repo,
+                ),
+                style_adapter=style_adapter_module.StyleAdapter(),
             )
             formatter = reply_formatter_module.ReplyFormatter()
 
@@ -149,6 +160,11 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             assert result.suggestion is not None
             assert result.suggestion.chat_id == team_chat.id
             assert result.suggestion.source_message_id == 3
+            assert result.suggestion.base_reply_text
+            assert result.suggestion.reply_messages
+            assert len(result.suggestion.reply_messages) >= 2
+            assert result.suggestion.style_profile_key == "friend_explain"
+            assert result.suggestion.style_notes
             assert result.suggestion.reply_text
             assert "бюджет" in result.suggestion.reply_text.lower()
             assert result.suggestion.reason_short
@@ -167,7 +183,10 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             rendered = formatter.format_result(result)
             assert "Чат: Команда продукта" in rendered
             assert "Ориентир: Анна" in rendered
-            assert "Черновик" in rendered
+            assert "Режим / стиль: friend_explain" in rendered
+            assert "Итоговый вариант" in rendered
+            assert "1." in rendered
+            assert "Что сделал style-слой:" in rendered
             assert "Риск:" in rendered
             assert "Уверенность:" in rendered
 
@@ -179,7 +198,8 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             runtime.session_factory,
         )
         assert any("Команда продукта" in answer for answer in fake_message.answers)
-        assert any("Черновик" in answer for answer in fake_message.answers)
+        assert any("Режим / стиль: friend_explain" in answer for answer in fake_message.answers)
+        assert any("Итоговый вариант" in answer for answer in fake_message.answers)
         assert any("Риск:" in answer for answer in fake_message.answers)
 
         await runtime.dispose()
@@ -203,6 +223,8 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
         reply_classifier_module = importlib.import_module("services.reply_classifier")
         reply_strategy_module = importlib.import_module("services.reply_strategy")
         reply_formatter_module = importlib.import_module("services.reply_formatter")
+        style_adapter_module = importlib.import_module("services.style_adapter")
+        style_selector_module = importlib.import_module("services.style_selector")
         formatter = reply_formatter_module.ReplyFormatter()
 
         async with runtime.session_factory() as session:
@@ -222,6 +244,13 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
                 ),
                 classifier=reply_classifier_module.ReplyClassifier(),
                 strategy_resolver=reply_strategy_module.ReplyStrategyResolver(),
+                style_selector=style_selector_module.StyleSelectorService(
+                    style_profile_repository=StyleProfileRepository(session),
+                    chat_style_override_repository=ChatStyleOverrideRepository(session),
+                    chat_memory_repository=chat_memory_repo,
+                    person_memory_repository=person_memory_repo,
+                ),
+                style_adapter=style_adapter_module.StyleAdapter(),
             )
 
             missing = await service.build_reply("@missing")

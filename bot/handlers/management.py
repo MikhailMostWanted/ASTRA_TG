@@ -18,16 +18,22 @@ from services.reply_context_builder import ReplyContextBuilder
 from services.reply_engine import ReplyEngineService
 from services.reply_formatter import ReplyFormatter
 from services.reply_strategy import ReplyStrategyResolver
+from services.style_adapter import StyleAdapter
+from services.style_formatter import StyleFormatter
+from services.style_profiles import StyleProfileService
+from services.style_selector import StyleSelectorService
 from services.source_registry import SourceRegistryService
 from services.status_summary import BotStatusService
 from services.telegram_lookup import TelegramChatResolver
 from storage.repositories import (
     ChatRepository,
     ChatMemoryRepository,
+    ChatStyleOverrideRepository,
     DigestRepository,
     MessageRepository,
     PersonMemoryRepository,
     SettingRepository,
+    StyleProfileRepository,
     SystemRepository,
 )
 
@@ -169,6 +175,91 @@ async def handle_reply_command(
     await message.answer(formatter.format_result(result))
 
 
+@router.message(Command("style_profiles"))
+async def handle_style_profiles_command(
+    message: Message,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        service = _build_style_service(session)
+        formatter = StyleFormatter()
+        await message.answer(formatter.format_profiles(await service.list_profiles()))
+
+
+@router.message(Command("style_set"))
+async def handle_style_set_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        service = _build_style_service(session)
+        formatter = StyleFormatter()
+        try:
+            parsed = PARSER.parse_style_set_arguments(command.args)
+            report = await service.set_chat_override(
+                reference=parsed.reference,
+                profile_key=parsed.profile_key,
+            )
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+
+        await session.commit()
+
+    await message.answer(formatter.format_status(report))
+
+
+@router.message(Command("style_unset"))
+async def handle_style_unset_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    try:
+        reference = PARSER.parse_required_reference(command.args, command_name="style_unset")
+    except ValueError as error:
+        await message.answer(str(error))
+        return
+
+    async with session_factory() as session:
+        service = _build_style_service(session)
+        formatter = StyleFormatter()
+        try:
+            report = await service.unset_chat_override(reference=reference)
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+
+        await session.commit()
+
+    await message.answer(formatter.format_status(report))
+
+
+@router.message(Command("style_status"))
+async def handle_style_status_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    try:
+        reference = PARSER.parse_required_reference(command.args, command_name="style_status")
+    except ValueError as error:
+        await message.answer(str(error))
+        return
+
+    async with session_factory() as session:
+        service = _build_style_service(session)
+        formatter = StyleFormatter()
+        try:
+            report = await service.build_style_status(reference)
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+
+    await message.answer(formatter.format_status(report))
+
+
 @router.message(Command("digest_now"))
 async def handle_digest_now_command(
     message: Message,
@@ -296,6 +387,8 @@ def _build_status_service(session: AsyncSession) -> BotStatusService:
         digest_repository=DigestRepository(session),
         chat_memory_repository=ChatMemoryRepository(session),
         person_memory_repository=PersonMemoryRepository(session),
+        style_profile_repository=StyleProfileRepository(session),
+        chat_style_override_repository=ChatStyleOverrideRepository(session),
     )
 
 
@@ -329,4 +422,28 @@ def _build_reply_service(session: AsyncSession) -> ReplyEngineService:
         ),
         classifier=ReplyClassifier(),
         strategy_resolver=ReplyStrategyResolver(),
+        style_selector=StyleSelectorService(
+            style_profile_repository=StyleProfileRepository(session),
+            chat_style_override_repository=ChatStyleOverrideRepository(session),
+            chat_memory_repository=chat_memory_repository,
+            person_memory_repository=person_memory_repository,
+        ),
+        style_adapter=StyleAdapter(),
+    )
+
+
+def _build_style_service(session: AsyncSession) -> StyleProfileService:
+    chat_repository = ChatRepository(session)
+    style_profile_repository = StyleProfileRepository(session)
+    chat_style_override_repository = ChatStyleOverrideRepository(session)
+    return StyleProfileService(
+        chat_repository=chat_repository,
+        style_profile_repository=style_profile_repository,
+        chat_style_override_repository=chat_style_override_repository,
+        selector=StyleSelectorService(
+            style_profile_repository=style_profile_repository,
+            chat_style_override_repository=chat_style_override_repository,
+            chat_memory_repository=ChatMemoryRepository(session),
+            person_memory_repository=PersonMemoryRepository(session),
+        ),
     )

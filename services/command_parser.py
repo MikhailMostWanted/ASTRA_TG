@@ -31,6 +31,12 @@ class ParsedDigestTargetCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class ParsedStyleSetCommand:
+    reference: str
+    profile_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedChatCandidate:
     telegram_chat_id: int
     title: str
@@ -93,6 +99,19 @@ class BotCommandParser:
         reference = tokens[0]
         label = " ".join(tokens[1:]).strip() or None
         return ParsedDigestTargetCommand(reference=reference, label=label)
+
+    def parse_style_set_arguments(self, args: str | None) -> ParsedStyleSetCommand:
+        tokens = _split_command_arguments(args)
+        if len(tokens) < 2:
+            raise ValueError(
+                "Для /style_set нужен chat_id или @username и profile_key. "
+                "Пример: /style_set @mychannel friend_explain"
+            )
+
+        return ParsedStyleSetCommand(
+            reference=tokens[0],
+            profile_key=tokens[1].strip().lower(),
+        )
 
     def parse_required_reference(self, args: str | None, *, command_name: str) -> str:
         tokens = _split_command_arguments(args)

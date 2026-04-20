@@ -10,7 +10,17 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from models import Chat, ChatMemory, Digest, DigestItem, Message, PersonMemory, Setting
+from models import (
+    Chat,
+    ChatMemory,
+    ChatStyleOverride,
+    Digest,
+    DigestItem,
+    Message,
+    PersonMemory,
+    Setting,
+    StyleProfile,
+)
 
 
 class _Unset:
@@ -741,6 +751,78 @@ class SettingRepository:
 
         await self.session.flush()
         return setting
+
+
+@dataclass(slots=True)
+class StyleProfileRepository:
+    session: AsyncSession
+
+    async def list_profiles(self) -> list[StyleProfile]:
+        result = await self.session.execute(
+            select(StyleProfile).order_by(StyleProfile.sort_order, StyleProfile.key)
+        )
+        return list(result.scalars().all())
+
+    async def count_profiles(self) -> int:
+        result = await self.session.execute(select(func.count()).select_from(StyleProfile))
+        return int(result.scalar_one())
+
+    async def get_by_key(self, key: str) -> StyleProfile | None:
+        normalized = key.strip().lower()
+        if not normalized:
+            return None
+
+        result = await self.session.execute(
+            select(StyleProfile).where(func.lower(StyleProfile.key) == normalized)
+        )
+        return result.scalar_one_or_none()
+
+
+@dataclass(slots=True)
+class ChatStyleOverrideRepository:
+    session: AsyncSession
+
+    async def get_override_for_chat(self, chat_id: int) -> ChatStyleOverride | None:
+        result = await self.session.execute(
+            select(ChatStyleOverride)
+            .options(selectinload(ChatStyleOverride.style_profile))
+            .where(ChatStyleOverride.chat_id == chat_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def set_override(
+        self,
+        *,
+        chat_id: int,
+        style_profile_id: int,
+    ) -> ChatStyleOverride:
+        override = await self.get_override_for_chat(chat_id)
+        if override is None:
+            override = ChatStyleOverride(
+                chat_id=chat_id,
+                style_profile_id=style_profile_id,
+            )
+            self.session.add(override)
+        else:
+            override.style_profile_id = style_profile_id
+
+        await self.session.flush()
+        return override
+
+    async def unset_override(self, *, chat_id: int) -> bool:
+        override = await self.get_override_for_chat(chat_id)
+        if override is None:
+            return False
+
+        await self.session.delete(override)
+        await self.session.flush()
+        return True
+
+    async def count_overrides(self) -> int:
+        result = await self.session.execute(
+            select(func.count()).select_from(ChatStyleOverride)
+        )
+        return int(result.scalar_one())
 
 
 @dataclass(slots=True)

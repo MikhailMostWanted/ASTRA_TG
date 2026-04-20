@@ -15,12 +15,14 @@ from services.status_summary import BotStatusService
 from storage.database import bootstrap_database, build_database_runtime
 from storage.repositories import (
     ChatRepository,
+    ChatMemoryRepository,
+    ChatStyleOverrideRepository,
     DigestRepository,
     MessageRepository,
     PersonMemoryRepository,
     SettingRepository,
+    StyleProfileRepository,
     SystemRepository,
-    ChatMemoryRepository,
 )
 
 
@@ -92,6 +94,10 @@ def test_command_parser_supports_args_and_forwarded_sources() -> None:
     assert extracted.handle == "test_channel"
     assert extracted.chat_type == "channel"
 
+    parsed_style = parser.parse_style_set_arguments("@mychannel practical_short")
+    assert parsed_style.reference == "@mychannel"
+    assert parsed_style.profile_key == "practical_short"
+
 
 def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path: Path) -> None:
     async def run_assertions() -> None:
@@ -138,6 +144,8 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
                 digests,
                 chat_memory,
                 people_memory,
+                StyleProfileRepository(session),
+                ChatStyleOverrideRepository(session),
             )
 
             add_result = await source_service.register_source(
@@ -221,11 +229,15 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             assert "Memory-карт чатов: 0" in status_text
             assert "Memory-карт людей: 0" in status_text
             assert "Reply layer: готов" in status_text
+            assert "Style-слой: готов" in status_text
+            assert "Доступно style-профилей: 6" in status_text
+            assert "Настроено ручных style-override: 0" in status_text
+            assert "/reply в style-режиме: готов" in status_text
             assert "Чатов с данными для reply: 0" in status_text
             assert "Опора reply на memory: нет" in status_text
             assert "Последний rebuild memory: ещё не выполнялся" in status_text
             assert "Данных для memory: да" in status_text
-            assert "Схема БД: 20260420_01" in status_text
+            assert "Схема БД: 20260420_02" in status_text
             assert "digest_target_chat_id: -100900" in settings_text
             assert "digest_target_label: @digest" in settings_text
             assert any("Новости дня" in message and "Сообщений: 0" in message for message in sources_messages)

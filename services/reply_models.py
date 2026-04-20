@@ -42,8 +42,8 @@ class ReplyClassification:
 
 
 @dataclass(frozen=True, slots=True)
-class ReplySuggestion:
-    reply_text: str
+class ReplyDraft:
+    base_reply_text: str
     reason_short: str
     risk_label: str
     confidence: float
@@ -53,6 +53,30 @@ class ReplySuggestion:
     situation: str
     source_message_preview: str
     alternative_action: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReplySuggestion:
+    base_reply_text: str
+    reply_messages: tuple[str, ...]
+    style_profile_key: str
+    style_source: str
+    style_notes: tuple[str, ...]
+    reason_short: str
+    risk_label: str
+    confidence: float
+    strategy: str
+    source_message_id: int
+    chat_id: int
+    situation: str
+    source_message_preview: str
+    alternative_action: str | None = None
+
+    @property
+    def reply_text(self) -> str:
+        if self.reply_messages:
+            return "\n".join(self.reply_messages)
+        return self.base_reply_text
 
 
 @dataclass(frozen=True, slots=True)
