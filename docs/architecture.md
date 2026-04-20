@@ -10,7 +10,7 @@
 - `bot/` содержит aiogram routing и тонкие Telegram-handlers.
 - `bot/` теперь также даёт Telegram-интерфейс для управления allowlist источников, базовыми настройками digest и приёма входящих updates для ingest.
 - `worker/` содержит точки входа для фонового bootstrap/run-once сценария.
-- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline и статусные сводки.
+- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine и статусные сводки.
 - `config/` содержит общие настройки из окружения.
 - `storage/` содержит SQLAlchemy runtime, bootstrap через Alembic и репозитории доступа к данным.
 - `models/` содержит ORM-схему SQLite для MVP-сущностей.
@@ -37,12 +37,24 @@
 - `services/message_normalizer.py` выделяет `raw_text`, строит предсказуемый `normalized_text`, собирает sender/forward/entities/media-метаданные;
 - `storage/repositories.py` делает upsert в `messages` по `(chat_id, telegram_message_id)` и отдаёт агрегаты для `/status` и `/sources`.
 
-Эта цепочка соединяет Telegram bot adapter с `message_store` (`messages` и `messages_fts`) и подготавливает базу под следующий шаг — digest engine MVP на реальных накопленных данных.
+Эта цепочка соединяет Telegram bot adapter с `message_store` (`messages` и `messages_fts`) и напрямую питает digest engine MVP на реальных накопленных данных.
+
+## Digest pipeline
+
+Первый реальный digest MVP теперь устроен так:
+
+- `bot/handlers/management.py` подключает `/digest_now`, но сам остаётся тонким;
+- `services/digest_window.py` разбирает окно вида `12h`, `24h`, `3d` и фиксирует точные UTC-границы;
+- `services/digest_engine.py` оркестрирует весь flow: чтение данных, сборку digest, сохранение в БД и публикацию;
+- `services/digest_builder.py` детерминированно группирует сообщения по источникам, отбрасывает шум, частично схлопывает дубли и выбирает наиболее содержательные пункты;
+- `services/digest_formatter.py` превращает результат в Telegram-friendly текст и режет его на chunk’и при необходимости;
+- `storage/repositories.py` отдаёт сообщения только из активных digest-источников и сохраняет итог в `digests` и `digest_items`.
+
+Ключевой принцип этого слоя: digest вызывается только по локальной SQLite-БД. В момент `/digest_now` бот не читает Telegram напрямую, а работает по уже накопленным данным из `messages`.
 
 ## Ближайшее развитие
 
-- Добавить orchestration слоя digest поверх уже накопленных сообщений под `services/` с опорой на adapters.
-- Продолжать использовать bot layer для управления allowlist и digest target, пока сам digest engine не подключён.
+- Продолжать использовать bot layer для управления allowlist, digest target и ручным запуском digest, пока нет scheduler-слоя.
 - Расширять миграции и репозитории постепенно, когда станут реальными workflows для digest/memory/reminders.
 - Переиспользовать `messages` и `messages_fts` для будущего поиска, retrieval и digest-selection сценариев.
 - Добавлять reminder, memory и reply-модули как отдельные сервисы, а не как код внутри handlers.

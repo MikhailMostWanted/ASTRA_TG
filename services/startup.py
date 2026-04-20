@@ -12,13 +12,13 @@ LOGGER = logging.getLogger(__name__)
 class BotStartupService:
     def build_start_message(self) -> str:
         return (
-            "Astra AFT — Telegram-first слой управления для будущих digest-сводок.\n\n"
+            "Astra AFT — Telegram-first слой управления digest-сводками.\n\n"
             "Сейчас основной сценарий такой: выбрать нужные Telegram-источники, "
             "сохранить канал доставки digest и держать конфигурацию в порядке.\n\n"
             "С чего начать:\n"
             "1. Добавить источники через /source_add или посмотреть список через /sources.\n"
             "2. Задать канал доставки через /digest_target.\n"
-            "3. После этого использовать digest-сценарий, когда движок сводок будет подключён."
+            "3. После этого вызвать /digest_now и получить первую сводку по уже сохранённым сообщениям."
         )
 
     def build_help_message(self) -> str:

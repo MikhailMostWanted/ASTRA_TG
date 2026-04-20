@@ -5,12 +5,16 @@ from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from services.command_parser import BotCommandParser
+from services.digest_builder import DigestBuilder
+from services.digest_engine import DigestEngineService, DigestPublisherService
+from services.digest_formatter import DigestFormatter
 from services.digest_target import DigestTargetService
 from services.source_registry import SourceRegistryService
 from services.status_summary import BotStatusService
 from services.telegram_lookup import TelegramChatResolver
 from storage.repositories import (
     ChatRepository,
+    DigestRepository,
     MessageRepository,
     SettingRepository,
     SystemRepository,
@@ -32,6 +36,7 @@ async def handle_status_command(
             setting_repository=SettingRepository(session),
             system_repository=SystemRepository(session),
             message_repository=MessageRepository(session),
+            digest_repository=DigestRepository(session),
         )
         await message.answer(await service.build_status_message())
 
@@ -47,6 +52,7 @@ async def handle_sources_command(
             setting_repository=SettingRepository(session),
             system_repository=SystemRepository(session),
             message_repository=MessageRepository(session),
+            digest_repository=DigestRepository(session),
         )
         for response_text in await service.build_sources_messages():
             await message.answer(response_text)
@@ -145,8 +151,41 @@ async def handle_settings_command(
             setting_repository=SettingRepository(session),
             system_repository=SystemRepository(session),
             message_repository=MessageRepository(session),
+            digest_repository=DigestRepository(session),
         )
         await message.answer(await service.build_settings_message())
+
+
+@router.message(Command("digest_now"))
+async def handle_digest_now_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        digest_repository = DigestRepository(session)
+        engine = DigestEngineService(
+            message_repository=MessageRepository(session),
+            digest_repository=digest_repository,
+            setting_repository=SettingRepository(session),
+            builder=DigestBuilder(),
+            formatter=DigestFormatter(),
+        )
+        try:
+            plan = await engine.build_manual_digest(command.args)
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+
+        publish_result = await DigestPublisherService(digest_repository).publish(
+            plan=plan,
+            preview_chat_id=message.chat.id,
+            sender=message.bot,
+        )
+        await session.commit()
+
+    if publish_result.notice:
+        await message.answer(publish_result.notice)
 
 
 async def _handle_source_toggle(

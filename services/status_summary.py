@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from services.digest_target import DigestTargetService
+from services.digest_window import parse_digest_window
 from storage.repositories import (
     ChatRepository,
+    DigestRepository,
     MessageRepository,
     SettingRepository,
     SystemRepository,
@@ -18,15 +20,25 @@ class BotStatusService:
     setting_repository: SettingRepository
     system_repository: SystemRepository
     message_repository: MessageRepository
+    digest_repository: DigestRepository
 
     async def build_status_message(self) -> str:
         total_sources = await self.chat_repository.count_chats()
         enabled_sources = await self.chat_repository.count_enabled_chats()
+        digest_sources = await self.chat_repository.count_digest_enabled_chats()
         total_messages = await self.message_repository.count_messages()
         message_counts = await self.message_repository.count_messages_by_chat()
         last_message_at = await self.message_repository.get_last_message_timestamp()
+        total_digests = await self.digest_repository.count_digests()
+        last_digest = await self.digest_repository.get_last_digest()
         digest_target = await DigestTargetService(self.setting_repository).get_target()
         schema_revision = await self.system_repository.get_schema_revision()
+        digest_window = parse_digest_window(None)
+        digest_window_counts = await self.message_repository.count_messages_by_digest_chat(
+            window_start=digest_window.start,
+            window_end=digest_window.end,
+        )
+        digest_window_messages = sum(digest_window_counts.values())
 
         lines = [
             "Статус Astra AFT",
@@ -36,9 +48,18 @@ class BotStatusService:
             "Ingest: активен",
             f"Всего источников: {total_sources}",
             f"Активных источников: {enabled_sources}",
+            f"Digest-источников: {digest_sources}",
             f"Сохранено сообщений: {total_messages}",
             f"Источников с данными: {len(message_counts)}",
             f"Последнее сообщение: {_format_timestamp(last_message_at)}",
+            f"Создано digest: {total_digests}",
+            f"Последний digest: {_format_timestamp(last_digest.created_at if last_digest else None)}",
+            (
+                f"Данных для digest ({digest_window.label}): да "
+                f"({digest_window_messages} сообщений из {len(digest_window_counts)} источников)"
+                if digest_window_messages
+                else f"Данных для digest ({digest_window.label}): нет"
+            ),
             (
                 f"Канал доставки digest: настроен ({digest_target.label or digest_target.chat_id})"
                 if digest_target.is_configured

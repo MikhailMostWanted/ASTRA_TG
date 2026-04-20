@@ -6,7 +6,7 @@ Astra AFT — локальный MVP Telegram-ассистента. Репози
 - `apps/worker` для фонового bootstrap/run-once сценария,
 - общие границы `config`, `storage`, `services` и `adapters`,
 - ingest MVP для накопления входящих сообщений из разрешённых Telegram-источников,
-- без реализованной бизнес-логики digest/memory/reply/reminder.
+- первый локальный digest MVP без LLM поверх уже сохранённых сообщений.
 
 ## Стек
 
@@ -59,6 +59,7 @@ python -m apps.bot
 - `/source_disable <chat_id|@username>` — выключить источник.
 - `/source_enable <chat_id|@username>` — включить источник обратно.
 - `/digest_target <chat_id|@username>` — сохранить чат или канал доставки digest.
+- `/digest_now [12h|24h|3d]` — вручную собрать digest по сохранённым сообщениям.
 - `/settings` — показать базовые настройки Astra AFT.
 
 Для `/source_add` и `/digest_target` поддержан best-effort сценарий через форвард или reply:
@@ -89,6 +90,24 @@ python -m apps.bot
 - сообщения из источников, исключённых из digest;
 - сервисные команды в личке с ботом.
 
+## Digest MVP
+
+Теперь поверх `messages` подключён первый реальный digest-сценарий:
+
+- `/digest_now` читает только локальную БД, без прямого чтения Telegram в момент вызова;
+- в digest попадают только разрешённые и активные источники;
+- источники с `exclude_from_digest = true` пропускаются;
+- digest строится детерминированным локальным движком без LLM;
+- итог сохраняется в `digests` и `digest_items`;
+- бот показывает preview в текущем чате и, если задан `digest target`, одновременно публикует digest туда же.
+
+Поддержанные окна для ручного запуска:
+
+- `/digest_now`
+- `/digest_now 12h`
+- `/digest_now 24h`
+- `/digest_now 3d`
+
 Применение и создание миграций:
 
 ```bash
@@ -116,19 +135,19 @@ alembic revision -m "описание изменения"
 - начальная ORM-схема для `chats/messages/digests/digest_items/people_memory/chat_memory/tasks/reminders/settings`,
 - репозиторный слой для `chats`, `messages`, `digests` и `settings`,
 - ingest сообщений только из разрешённых Telegram-источников,
+- ручной digest по уже накопленным сообщениям из локальной БД,
 - тонкая обвязка bot/worker,
 - первая реальная миграция локальной схемы хранения.
 
 Пока намеренно не реализованы:
 
-- генерация digest,
 - суммаризация memory,
 - reply suggestion,
 - извлечение reminder/task из сообщений,
 - полноценная синхронизация источников Telegram,
 - бизнес-логика для `business/` и `fullaccess/`.
 
-## Как проверить ingest вручную
+## Как проверить ingest и первый digest вручную
 
 1. Примени миграции и запусти бота:
 
@@ -149,8 +168,21 @@ python -m apps.bot
 - `/sources` покажет счётчики сообщений по источникам;
 - в SQLite появятся записи в `messages`.
 
+6. Собери digest вручную:
+
+- вызови `/digest_now`;
+- при необходимости укажи окно: `/digest_now 12h` или `/digest_now 3d`;
+- если задан `/digest_target`, бот покажет preview и отправит итог туда же.
+
 Пример быстрой проверки базы:
 
 ```bash
 sqlite3 var/astra.db "SELECT telegram_message_id, chat_id, raw_text, normalized_text, has_media, media_type, sent_at FROM messages ORDER BY id DESC LIMIT 10;"
+```
+
+Проверка сохранённых digest:
+
+```bash
+sqlite3 var/astra.db "SELECT id, window_start, window_end, summary_short, delivered_to_chat_id, delivered_message_id FROM digests ORDER BY id DESC LIMIT 5;"
+sqlite3 var/astra.db "SELECT digest_id, source_chat_id, title, summary FROM digest_items ORDER BY digest_id DESC, sort_order ASC LIMIT 20;"
 ```

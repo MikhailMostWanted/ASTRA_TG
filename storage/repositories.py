@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import desc, func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from models import Chat, Digest, DigestItem, Message, Setting
 
@@ -17,6 +18,12 @@ class _Unset:
 
 
 UNSET = _Unset()
+
+
+@dataclass(frozen=True, slots=True)
+class DigestMessageRecord:
+    chat: Chat
+    message: Message
 
 
 @dataclass(slots=True)
@@ -97,6 +104,14 @@ class ChatRepository:
     async def count_enabled_chats(self) -> int:
         result = await self.session.execute(
             select(func.count()).select_from(Chat).where(Chat.is_enabled.is_(True))
+        )
+        return int(result.scalar_one())
+
+    async def count_digest_enabled_chats(self) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(Chat)
+            .where(Chat.is_enabled.is_(True), Chat.exclude_from_digest.is_(False))
         )
         return int(result.scalar_one())
 
@@ -297,6 +312,55 @@ class MessageRepository:
         )
         return list(result.scalars().all())
 
+    async def get_messages_for_digest(
+        self,
+        *,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> list[DigestMessageRecord]:
+        result = await self.session.execute(
+            select(Message, Chat)
+            .join(Chat, Message.chat_id == Chat.id)
+            .where(
+                Chat.is_enabled.is_(True),
+                Chat.exclude_from_digest.is_(False),
+                Chat.type != "private",
+                Message.direction == "inbound",
+                Message.sent_at >= window_start,
+                Message.sent_at <= window_end,
+            )
+            .order_by(func.lower(Chat.title), Message.sent_at, Message.id)
+        )
+        return [
+            DigestMessageRecord(chat=chat, message=message)
+            for message, chat in result.all()
+        ]
+
+    async def count_messages_by_digest_chat(
+        self,
+        *,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> dict[int, int]:
+        result = await self.session.execute(
+            select(Message.chat_id, func.count(Message.id))
+            .join(Chat, Message.chat_id == Chat.id)
+            .where(
+                Chat.is_enabled.is_(True),
+                Chat.exclude_from_digest.is_(False),
+                Chat.type != "private",
+                Message.direction == "inbound",
+                Message.sent_at >= window_start,
+                Message.sent_at <= window_end,
+            )
+            .group_by(Message.chat_id)
+            .order_by(Message.chat_id)
+        )
+        return {
+            int(chat_id): int(message_count)
+            for chat_id, message_count in result.all()
+        }
+
 
 @dataclass(slots=True)
 class DigestRepository:
@@ -336,6 +400,36 @@ class DigestRepository:
             )
 
         self.session.add(digest)
+        await self.session.flush()
+        return digest
+
+    async def count_digests(self) -> int:
+        result = await self.session.execute(select(func.count()).select_from(Digest))
+        return int(result.scalar_one())
+
+    async def get_last_digest(self) -> Digest | None:
+        result = await self.session.execute(
+            select(Digest)
+            .options(selectinload(Digest.items))
+            .order_by(desc(Digest.created_at), desc(Digest.id))
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def mark_delivered(
+        self,
+        digest_id: int,
+        *,
+        delivered_to_chat_id: int,
+        delivered_message_id: int,
+    ) -> Digest | None:
+        result = await self.session.execute(select(Digest).where(Digest.id == digest_id))
+        digest = result.scalar_one_or_none()
+        if digest is None:
+            return None
+
+        digest.delivered_to_chat_id = delivered_to_chat_id
+        digest.delivered_message_id = delivered_message_id
         await self.session.flush()
         return digest
 

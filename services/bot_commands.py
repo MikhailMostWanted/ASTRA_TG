@@ -18,6 +18,7 @@ BOT_COMMAND_SPECS: tuple[BotCommandSpec, ...] = (
     BotCommandSpec("source_disable", "Выключить источник"),
     BotCommandSpec("source_enable", "Включить источник обратно"),
     BotCommandSpec("digest_target", "Сохранить чат или канал для digest"),
+    BotCommandSpec("digest_now", "Собрать digest по сохранённым сообщениям"),
     BotCommandSpec("settings", "Показать базовые настройки"),
 )
 

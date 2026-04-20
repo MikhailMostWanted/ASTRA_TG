@@ -75,6 +75,13 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
             assert reenabled_chat.is_enabled is True
             assert [chat.telegram_chat_id for chat in await chats.list_enabled_chats()] == [100500]
 
+            digest_ready_chat = await chats.upsert_chat(
+                telegram_chat_id=100500,
+                exclude_from_digest=False,
+            )
+            await session.commit()
+            assert digest_ready_chat.exclude_from_digest is False
+
             first_message = await messages.create_message(
                 chat_id=updated_chat.id,
                 telegram_message_id=1,
@@ -83,6 +90,7 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
                 direction="inbound",
                 source_adapter="telegram",
                 source_type="message",
+                sent_at=datetime(2026, 4, 20, 8, 15, tzinfo=timezone.utc),
                 raw_text="Привет",
                 normalized_text="привет",
                 has_media=False,
@@ -94,6 +102,7 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
                 direction="inbound",
                 source_adapter="telegram",
                 source_type="message",
+                sent_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
                 raw_text="Не забудь купить хлеб",
                 normalized_text="не забудь купить хлеб",
                 reply_to_message_id=first_message.id,
@@ -129,6 +138,30 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
 
             assert digest.items[0].title == "Покупки"
             assert digest.items[0].source_message_id == second_message.id
+            assert await digests.count_digests() == 1
+            assert (await digests.get_last_digest()).id == digest.id
+
+            digest_messages = await messages.get_messages_for_digest(
+                window_start=datetime(2026, 4, 20, 8, 0, tzinfo=timezone.utc),
+                window_end=datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc),
+            )
+            assert [item.message.telegram_message_id for item in digest_messages] == [1, 2]
+
+            digest_counts = await messages.count_messages_by_digest_chat(
+                window_start=datetime(2026, 4, 20, 8, 0, tzinfo=timezone.utc),
+                window_end=datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc),
+            )
+            assert digest_counts == {updated_chat.id: 2}
+
+            delivered_digest = await digests.mark_delivered(
+                digest.id,
+                delivered_to_chat_id=200700,
+                delivered_message_id=99,
+            )
+            await session.commit()
+            assert delivered_digest is not None
+            assert delivered_digest.delivered_to_chat_id == 200700
+            assert delivered_digest.delivered_message_id == 99
 
             missing_setting = await repo_settings.get_value("digest.enabled")
             assert missing_setting is None

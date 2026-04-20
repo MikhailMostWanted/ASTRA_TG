@@ -5,6 +5,9 @@ from pathlib import Path
 
 from config.settings import Settings
 from services.command_parser import BotCommandParser
+from services.digest_engine import DigestEngineService
+from services.digest_builder import DigestBuilder
+from services.digest_formatter import DigestFormatter
 from services.digest_target import DigestTargetService
 from services.source_registry import SourceRegistryService
 from services.startup import BotStartupService
@@ -12,6 +15,7 @@ from services.status_summary import BotStatusService
 from storage.database import bootstrap_database, build_database_runtime
 from storage.repositories import (
     ChatRepository,
+    DigestRepository,
     MessageRepository,
     SettingRepository,
     SystemRepository,
@@ -116,12 +120,13 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
         async with runtime.session_factory() as session:
             chats = ChatRepository(session)
             messages = MessageRepository(session)
+            digests = DigestRepository(session)
             repo_settings = SettingRepository(session)
             system = SystemRepository(session)
 
             source_service = SourceRegistryService(chats, resolver=resolver)
             digest_target_service = DigestTargetService(repo_settings, resolver=resolver)
-            status_service = BotStatusService(chats, repo_settings, system, messages)
+            status_service = BotStatusService(chats, repo_settings, system, messages, digests)
 
             add_result = await source_service.register_source(
                 parser.parse_source_add_arguments("@news")
@@ -155,7 +160,7 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             assert disabled_result is not None
             assert disabled_result.chat.is_enabled is False
             await messages.create_message(
-                chat_id=add_result.chat.id,
+                chat_id=forwarded_result.chat.id,
                 telegram_message_id=101,
                 sender_name="Редакция",
                 direction="inbound",
@@ -172,6 +177,19 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             )
             await session.commit()
 
+            digest_plan = await DigestEngineService(
+                message_repository=messages,
+                digest_repository=digests,
+                setting_repository=repo_settings,
+                builder=DigestBuilder(),
+                formatter=DigestFormatter(),
+            ).build_manual_digest(
+                "24h",
+                now=datetime(2026, 4, 20, 18, 0, tzinfo=timezone.utc),
+            )
+            assert digest_plan.has_digest is True
+            await session.commit()
+
             assert target.chat_id == -100900
             assert target.label == "@digest"
 
@@ -185,11 +203,14 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             assert "Сохранено сообщений: 1" in status_text
             assert "Источников с данными: 1" in status_text
             assert "Последнее сообщение: 2026-04-20 12:30 UTC" in status_text
+            assert "Создано digest: 1" in status_text
+            assert "Последний digest:" in status_text
+            assert "Данных для digest (24h): да" in status_text
             assert "Схема БД: 20260420_01" in status_text
             assert "digest_target_chat_id: -100900" in settings_text
             assert "digest_target_label: @digest" in settings_text
-            assert any("Новости дня" in message and "Сообщений: 1" in message for message in sources_messages)
-            assert any("Форвард-группа" in message and "Сообщений: 0" in message for message in sources_messages)
+            assert any("Новости дня" in message and "Сообщений: 0" in message for message in sources_messages)
+            assert any("Форвард-группа" in message and "Сообщений: 1" in message for message in sources_messages)
 
         await runtime.dispose()
 
