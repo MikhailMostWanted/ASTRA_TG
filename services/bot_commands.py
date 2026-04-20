@@ -22,6 +22,7 @@ BOT_COMMAND_SPECS: tuple[BotCommandSpec, ...] = (
     BotCommandSpec("person_memory", "Показать memory-карту человека"),
     BotCommandSpec("digest_target", "Сохранить чат или канал для digest"),
     BotCommandSpec("digest_now", "Собрать digest по сохранённым сообщениям"),
+    BotCommandSpec("reply", "Подсказать ответ по локальному контексту"),
     BotCommandSpec("settings", "Показать базовые настройки"),
 )
 

@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from models import Chat, ChatMemory, Message, PersonMemory
+
+
+@dataclass(frozen=True, slots=True)
+class ReplyContextIssue:
+    code: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReplyContext:
+    chat: Chat
+    recent_messages: tuple[Message, ...]
+    latest_message: Message
+    target_message: Message
+    chat_memory: ChatMemory | None
+    person_memory: PersonMemory | None
+    linked_people: tuple[PersonMemory, ...]
+    topic_hints: tuple[str, ...]
+    pending_loops: tuple[str, ...]
+    recent_conflicts: tuple[str, ...]
+
+    @property
+    def has_memory_support(self) -> bool:
+        return self.chat_memory is not None or self.person_memory is not None or bool(self.linked_people)
+
+
+@dataclass(frozen=True, slots=True)
+class ReplyClassification:
+    situation: str
+    reason: str
+    has_question: bool
+    has_request: bool
+    has_tension: bool
+    should_reply: bool
+    needs_softness: bool
+    topic_hint: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ReplySuggestion:
+    reply_text: str
+    reason_short: str
+    risk_label: str
+    confidence: float
+    strategy: str
+    source_message_id: int
+    chat_id: int
+    situation: str
+    source_message_preview: str
+    alternative_action: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReplyResult:
+    kind: str
+    chat_id: int | None
+    chat_title: str | None
+    chat_reference: str | None
+    suggestion: ReplySuggestion | None = None
+    error_message: str | None = None
+    source_sender_name: str | None = None
+    source_message_preview: str | None = None

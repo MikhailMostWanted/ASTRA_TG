@@ -445,6 +445,23 @@ class MessageRepository:
             for chat_id, message_count in result.all()
         }
 
+    async def count_chats_ready_for_reply(self, *, min_messages: int = 3) -> int:
+        eligible_chat_ids = (
+            select(Message.chat_id)
+            .join(Chat, Message.chat_id == Chat.id)
+            .where(
+                Chat.is_enabled.is_(True),
+                Chat.type != "channel",
+            )
+            .group_by(Message.chat_id)
+            .having(func.count(Message.id) >= min_messages)
+            .subquery()
+        )
+        result = await self.session.execute(
+            select(func.count()).select_from(eligible_chat_ids)
+        )
+        return int(result.scalar_one())
+
 
 @dataclass(slots=True)
 class DigestRepository:
@@ -652,6 +669,22 @@ class PersonMemoryRepository:
         ]
         matches.sort(key=lambda item: _person_match_rank(item, lowered, lowered_handle))
         return matches[:limit]
+
+    async def get_people_memory_by_keys(self, person_keys: Sequence[str]) -> list[PersonMemory]:
+        normalized_keys = [key for key in dict.fromkeys(person_keys) if key]
+        if not normalized_keys:
+            return []
+
+        result = await self.session.execute(
+            select(PersonMemory)
+            .where(PersonMemory.person_key.in_(normalized_keys))
+            .order_by(
+                desc(PersonMemory.importance_score),
+                func.lower(PersonMemory.display_name),
+                PersonMemory.person_key,
+            )
+        )
+        return list(result.scalars().all())
 
     async def list_people_memory(self, *, limit: int | None = None) -> list[PersonMemory]:
         statement = select(PersonMemory).order_by(

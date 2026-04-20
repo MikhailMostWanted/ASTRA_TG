@@ -220,6 +220,9 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             assert "Данных для digest (24h): да" in status_text
             assert "Memory-карт чатов: 0" in status_text
             assert "Memory-карт людей: 0" in status_text
+            assert "Reply layer: готов" in status_text
+            assert "Чатов с данными для reply: 0" in status_text
+            assert "Опора reply на memory: нет" in status_text
             assert "Последний rebuild memory: ещё не выполнялся" in status_text
             assert "Данных для memory: да" in status_text
             assert "Схема БД: 20260420_01" in status_text

@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки и memory-карты по выбранным Telegram-источникам. Reply suggestions, reminders и расширение провайдеров запланированы, но пока не реализованы как бизнес-логика.
+Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты и первый reply coach по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис, а style/provider layer и reminders остаются следующими шагами.
 
 ## Зоны ответственности модулей
 
@@ -10,7 +10,7 @@
 - `bot/` содержит aiogram routing и тонкие Telegram-handlers.
 - `bot/` теперь также даёт Telegram-интерфейс для управления allowlist источников, базовыми настройками digest и приёма входящих updates для ingest.
 - `worker/` содержит точки входа для фонового bootstrap/run-once сценария.
-- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders и статусные сводки.
+- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine и статусные сводки.
 - `config/` содержит общие настройки из окружения.
 - `storage/` содержит SQLAlchemy runtime, bootstrap через Alembic и репозитории доступа к данным.
 - `models/` содержит ORM-схему SQLite для MVP-сущностей.
@@ -72,3 +72,17 @@
 - `storage/repositories.py` даёт upsert/get/search/count API для `chat_memory`, `people_memory` и нужных message-агрегатов.
 
 Ключевой принцип этого слоя: память строится только по локальной SQLite-БД и остаётся честной, предсказуемой и полностью детерминированной. Это подготовительный слой под будущие reply suggestions, а не попытка сделать “умную” persona-модель на эвристиках.
+
+## Reply pipeline
+
+Первый рабочий reply MVP теперь устроен так:
+
+- `bot/handlers/management.py` подключает `/reply`, но сам остаётся тонким;
+- `services/reply_context_builder.py` собирает reply-context только из локальной БД: последние сообщения чата, `chat_memory`, связанный `people_memory`, признаки открытых хвостов и конфликтов;
+- `services/reply_classifier.py` определяет тип ситуации простыми эвристиками: вопрос, просьба, лёгкий бытовой обмен, напряжённый фрагмент или сценарий, где лучше не отвечать сразу;
+- `services/reply_strategy.py` выбирает безопасную стратегию ответа, формирует короткий draft, риск-метку и уверенность;
+- `services/reply_engine.py` оркестрирует весь flow и возвращает структурированный результат;
+- `services/reply_formatter.py` превращает его в Telegram-friendly сообщение для `/reply`;
+- `storage/repositories.py` даёт минимальные выборки и агрегаты для reply readiness и связанных memory-карт.
+
+Ключевой принцип этого слоя: reply suggestions строятся только по локальным `messages + chat_memory + people_memory`. Здесь нет внешних LLM, магического style cloning или автоответа. Это промежуточный слой перед будущим provider/style layer, а не его замена.

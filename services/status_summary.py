@@ -31,6 +31,7 @@ class BotStatusService:
         enabled_sources = await self.chat_repository.count_enabled_chats()
         digest_sources = await self.chat_repository.count_digest_enabled_chats()
         total_messages = await self.message_repository.count_messages()
+        reply_ready_chats = await self.message_repository.count_chats_ready_for_reply()
         message_counts = await self.message_repository.count_messages_by_chat()
         last_message_at = await self.message_repository.get_last_message_timestamp()
         total_digests = await self.digest_repository.count_digests()
@@ -75,6 +76,13 @@ class BotStatusService:
             ),
             f"Memory-карт чатов: {total_chat_memory}",
             f"Memory-карт людей: {total_people_memory}",
+            "Reply layer: готов",
+            f"Чатов с данными для reply: {reply_ready_chats}",
+            (
+                "Опора reply на memory: да"
+                if total_chat_memory > 0 or total_people_memory > 0
+                else "Опора reply на memory: нет"
+            ),
             (
                 f"Последний rebuild memory: {_format_timestamp(last_memory_rebuild)}"
                 if last_memory_rebuild is not None

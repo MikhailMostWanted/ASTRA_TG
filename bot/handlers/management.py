@@ -13,6 +13,11 @@ from services.digest_target import DigestTargetService
 from services.memory_builder import MemoryService
 from services.memory_formatter import MemoryFormatter
 from services.people_memory_builder import PeopleMemoryBuilder
+from services.reply_classifier import ReplyClassifier
+from services.reply_context_builder import ReplyContextBuilder
+from services.reply_engine import ReplyEngineService
+from services.reply_formatter import ReplyFormatter
+from services.reply_strategy import ReplyStrategyResolver
 from services.source_registry import SourceRegistryService
 from services.status_summary import BotStatusService
 from services.telegram_lookup import TelegramChatResolver
@@ -142,6 +147,26 @@ async def handle_settings_command(
     async with session_factory() as session:
         service = _build_status_service(session)
         await message.answer(await service.build_settings_message())
+
+
+@router.message(Command("reply"))
+async def handle_reply_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    try:
+        reference = PARSER.parse_required_reference(command.args, command_name="reply")
+    except ValueError as error:
+        await message.answer(str(error))
+        return
+
+    async with session_factory() as session:
+        service = _build_reply_service(session)
+        formatter = ReplyFormatter()
+        result = await service.build_reply(reference)
+
+    await message.answer(formatter.format_result(result))
 
 
 @router.message(Command("digest_now"))
@@ -285,4 +310,23 @@ def _build_memory_service(session: AsyncSession) -> MemoryService:
         chat_builder=ChatMemoryBuilder(),
         people_builder=PeopleMemoryBuilder(),
         formatter=MemoryFormatter(),
+    )
+
+
+def _build_reply_service(session: AsyncSession) -> ReplyEngineService:
+    message_repository = MessageRepository(session)
+    chat_memory_repository = ChatMemoryRepository(session)
+    person_memory_repository = PersonMemoryRepository(session)
+    return ReplyEngineService(
+        chat_repository=ChatRepository(session),
+        message_repository=message_repository,
+        chat_memory_repository=chat_memory_repository,
+        person_memory_repository=person_memory_repository,
+        context_builder=ReplyContextBuilder(
+            message_repository=message_repository,
+            chat_memory_repository=chat_memory_repository,
+            person_memory_repository=person_memory_repository,
+        ),
+        classifier=ReplyClassifier(),
+        strategy_resolver=ReplyStrategyResolver(),
     )
