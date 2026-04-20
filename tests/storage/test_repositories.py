@@ -9,6 +9,7 @@ from storage.repositories import (
     DigestRepository,
     MessageRepository,
     SettingRepository,
+    SystemRepository,
 )
 
 
@@ -26,6 +27,7 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
             messages = MessageRepository(session)
             digests = DigestRepository(session)
             repo_settings = SettingRepository(session)
+            system = SystemRepository(session)
 
             created_chat = await chats.upsert_chat(
                 telegram_chat_id=100500,
@@ -55,6 +57,23 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
             assert updated_chat.title == "Семья и близкие"
             assert updated_chat.is_enabled is False
             assert updated_chat.exclude_from_digest is True
+
+            listed_chats = await chats.list_chats()
+            assert [chat.telegram_chat_id for chat in listed_chats] == [100500]
+
+            enabled_chats = await chats.list_enabled_chats()
+            assert enabled_chats == []
+
+            fetched_by_handle = await chats.find_chat_by_handle_or_telegram_id("@family")
+            assert fetched_by_handle is not None
+            assert fetched_by_handle.telegram_chat_id == 100500
+
+            reenabled_chat = await chats.set_chat_enabled("@family", is_enabled=True)
+            await session.commit()
+
+            assert reenabled_chat is not None
+            assert reenabled_chat.is_enabled is True
+            assert [chat.telegram_chat_id for chat in await chats.list_enabled_chats()] == [100500]
 
             first_message = await messages.create_message(
                 chat_id=updated_chat.id,
@@ -124,6 +143,15 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
             assert fetched_setting is not None
             assert saved_setting.id == fetched_setting.id
             assert fetched_setting.value_json == {"enabled": True}
+
+            await repo_settings.set_value(
+                key="digest.target.label",
+                value_text="@astra_digest",
+            )
+            await session.commit()
+
+            assert await repo_settings.get_value("digest.target.label") == "@astra_digest"
+            assert await system.get_schema_revision() == "20260420_01"
 
         await runtime.dispose()
 

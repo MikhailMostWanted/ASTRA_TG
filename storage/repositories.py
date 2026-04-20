@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import desc, select, text
+from sqlalchemy import desc, func, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Chat, Digest, DigestItem, Message, Setting
@@ -70,6 +71,57 @@ class ChatRepository:
             select(Chat).where(Chat.telegram_chat_id == telegram_chat_id)
         )
         return result.scalar_one_or_none()
+
+    async def list_chats(self) -> list[Chat]:
+        result = await self.session.execute(
+            select(Chat).order_by(
+                desc(Chat.is_enabled),
+                func.lower(Chat.title),
+                Chat.telegram_chat_id,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def list_enabled_chats(self) -> list[Chat]:
+        result = await self.session.execute(
+            select(Chat)
+            .where(Chat.is_enabled.is_(True))
+            .order_by(func.lower(Chat.title), Chat.telegram_chat_id)
+        )
+        return list(result.scalars().all())
+
+    async def count_chats(self) -> int:
+        result = await self.session.execute(select(func.count()).select_from(Chat))
+        return int(result.scalar_one())
+
+    async def count_enabled_chats(self) -> int:
+        result = await self.session.execute(
+            select(func.count()).select_from(Chat).where(Chat.is_enabled.is_(True))
+        )
+        return int(result.scalar_one())
+
+    async def find_chat_by_handle_or_telegram_id(self, reference: str | int) -> Chat | None:
+        telegram_chat_id = _parse_telegram_chat_id(reference)
+        if telegram_chat_id is not None:
+            return await self.get_by_telegram_chat_id(telegram_chat_id)
+
+        normalized_handle = _normalize_handle(reference)
+        if normalized_handle is None:
+            return None
+
+        result = await self.session.execute(
+            select(Chat).where(func.lower(Chat.handle) == normalized_handle)
+        )
+        return result.scalar_one_or_none()
+
+    async def set_chat_enabled(self, reference: str | int, *, is_enabled: bool) -> Chat | None:
+        chat = await self.find_chat_by_handle_or_telegram_id(reference)
+        if chat is None:
+            return None
+
+        chat.is_enabled = is_enabled
+        await self.session.flush()
+        return chat
 
 
 @dataclass(slots=True)
@@ -221,3 +273,49 @@ class SettingRepository:
 
         await self.session.flush()
         return setting
+
+
+@dataclass(slots=True)
+class SystemRepository:
+    session: AsyncSession
+
+    async def get_schema_revision(self) -> str | None:
+        try:
+            result = await self.session.execute(
+                text("SELECT version_num FROM alembic_version LIMIT 1")
+            )
+        except OperationalError:
+            return None
+
+        return result.scalar_one_or_none()
+
+
+def _normalize_handle(reference: str | int) -> str | None:
+    if not isinstance(reference, str):
+        return None
+
+    normalized = reference.strip().lower()
+    if not normalized:
+        return None
+
+    return normalized.lstrip("@")
+
+
+def _parse_telegram_chat_id(reference: str | int) -> int | None:
+    if isinstance(reference, int):
+        return reference
+
+    if not isinstance(reference, str):
+        return None
+
+    normalized = reference.strip()
+    if not normalized:
+        return None
+
+    if normalized.startswith("@"):
+        return None
+
+    try:
+        return int(normalized)
+    except ValueError:
+        return None

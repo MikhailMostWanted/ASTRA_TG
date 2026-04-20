@@ -5,6 +5,7 @@ from aiogram import Bot, Dispatcher
 from bot.router import build_dispatcher
 from config.settings import Settings
 from core.logging import configure_logging
+from services.bot_commands import build_bot_commands
 from storage.database import DatabaseRuntime, bootstrap_database, build_database_runtime
 
 
@@ -34,7 +35,11 @@ async def run_bot(settings: Settings | None = None) -> None:
 
     try:
         await bootstrap_database(runtime.database)
-        await runtime.dispatcher.start_polling(runtime.bot)
+        await configure_bot_commands(runtime.bot)
+        await runtime.dispatcher.start_polling(
+            runtime.bot,
+            session_factory=runtime.database.session_factory,
+        )
     finally:
         await runtime.database.dispose()
         await runtime.bot.session.close()
@@ -42,3 +47,7 @@ async def run_bot(settings: Settings | None = None) -> None:
 
 async def main() -> None:
     await run_bot()
+
+
+async def configure_bot_commands(bot: Bot) -> None:
+    await bot.set_my_commands(build_bot_commands())

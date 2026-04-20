@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass
 
+from services.bot_commands import BOT_COMMAND_SPECS
 from worker.jobs import list_registered_jobs
 
 
@@ -11,10 +12,21 @@ LOGGER = logging.getLogger(__name__)
 class BotStartupService:
     def build_start_message(self) -> str:
         return (
-            "Astra AFT skeleton is running.\n"
-            "TODO: digest summaries, memory, reply suggestions, and reminders "
-            "are not implemented yet."
+            "Astra AFT — Telegram-first слой управления для будущих digest-сводок.\n\n"
+            "Сейчас основной сценарий такой: выбрать нужные Telegram-источники, "
+            "сохранить канал доставки digest и держать конфигурацию в порядке.\n\n"
+            "С чего начать:\n"
+            "1. Добавить источники через /source_add или посмотреть список через /sources.\n"
+            "2. Задать канал доставки через /digest_target.\n"
+            "3. После этого использовать digest-сценарий, когда движок сводок будет подключён."
         )
+
+    def build_help_message(self) -> str:
+        command_lines = [
+            f"/{spec.command} — {spec.description}"
+            for spec in BOT_COMMAND_SPECS
+        ]
+        return "Команды Astra AFT\n\n" + "\n".join(command_lines)
 
 
 @dataclass(slots=True, frozen=True)
