@@ -1,32 +1,34 @@
-# Architecture Note
+# Заметка по архитектуре
 
-## Intent
+## Назначение
 
-This repository is a local-first, single-user MVP. The first shipped value is digest summaries from selected Telegram sources. Memory, reply suggestions, reminders, and provider expansion are planned but intentionally not implemented in this skeleton.
+Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки по выбранным Telegram-источникам. Memory, reply suggestions, reminders и расширение провайдеров запланированы, но пока не реализованы как бизнес-логика.
 
-## Module responsibilities
+## Зоны ответственности модулей
 
-- `apps/` contains runnable entrypoints only.
-- `bot/` contains aiogram routing and thin Telegram handlers.
-- `worker/` contains background-job registration points.
-- `services/` contains application logic that handlers and entrypoints call.
-- `config/` contains shared environment-driven settings.
-- `storage/` contains SQLAlchemy bootstrap and session setup.
-- `models/` is reserved for ORM models.
-- `schemas/` contains typed payloads and transport models.
-- `adapters/` defines reusable adapter boundaries.
-- `telegram_bot/`, `business/`, and `fullaccess/` hold adapter implementations for future access modes.
-- `migrations/` contains Alembic configuration.
+- `apps/` содержит только runnable entrypoint’ы.
+- `bot/` содержит aiogram routing и тонкие Telegram-handlers.
+- `worker/` содержит точки входа для фонового bootstrap/run-once сценария.
+- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы.
+- `config/` содержит общие настройки из окружения.
+- `storage/` содержит SQLAlchemy runtime, bootstrap через Alembic и репозитории доступа к данным.
+- `models/` содержит ORM-схему SQLite для MVP-сущностей.
+- `schemas/` содержит typed payloads и transport models.
+- `adapters/` задаёт переиспользуемые границы адаптеров.
+- `telegram_bot/`, `business/` и `fullaccess/` содержат реализации адаптеров для будущих режимов доступа.
+- `migrations/` содержит конфигурацию Alembic и ревизии схемы.
 
-## Boundary rules
+## Правила границ
 
-- Keep Telegram handlers thin. They should validate/update transport details and call services.
-- Keep product logic out of aiogram handlers.
-- Keep adapter boundaries explicit so future business/full-access modes do not leak into bot handlers.
-- Prefer additive modules over growing monolith files.
+- Держать Telegram-handlers тонкими: они должны валидировать вход и вызывать сервисы.
+- Не тянуть продуктовую логику в aiogram handlers.
+- Держать SQL-доступ внутри `storage/`-репозиториев, а не размазывать raw queries по сервисам.
+- Сохранять явные границы адаптеров, чтобы будущие `business/fullaccess` режимы не протекали в bot-handlers.
+- Предпочитать аддитивные модули вместо разрастания монолитных файлов.
 
-## Near-term evolution
+## Ближайшее развитие
 
-- Add source-selection and digest orchestration under `services/` plus adapter-backed fetchers.
-- Add ORM models and Alembic revisions when the first persistent entities are defined.
-- Add reminder, memory, and reply modules as separate services instead of attaching them to handlers.
+- Добавить orchestration слоя источников и digest под `services/` с опорой на adapters.
+- Расширять миграции и репозитории постепенно, когда станут реальными workflows для digest/memory/reminders.
+- Переиспользовать `messages` и `messages_fts` для будущего поиска и retrieval-сценариев.
+- Добавлять reminder, memory и reply-модули как отдельные сервисы, а не как код внутри handlers.

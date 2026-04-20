@@ -3,5 +3,4 @@ from sqlalchemy.orm import DeclarativeBase
 
 
 class Base(AsyncAttrs, DeclarativeBase):
-    """Declarative base for future ORM models."""
-
+    """Базовый declarative-класс для ORM-моделей."""

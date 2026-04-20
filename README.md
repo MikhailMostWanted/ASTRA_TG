@@ -1,13 +1,13 @@
 # Astra AFT
 
-Astra AFT is a local-first Telegram assistant MVP. This repository currently contains only the foundational project skeleton:
+Astra AFT — локальный MVP Telegram-ассистента. Репозиторий уже содержит базовый skeleton проекта:
 
-- `apps/bot` for the Telegram bot entrypoint,
-- `apps/worker` for background/bootstrap tasks,
-- shared configuration, storage, and adapter boundaries,
-- no real digest/memory/reply/reminder logic yet.
+- `apps/bot` для entrypoint Telegram-бота,
+- `apps/worker` для фонового bootstrap/run-once сценария,
+- общие границы `config`, `storage`, `services` и `adapters`,
+- без реализованной бизнес-логики digest/memory/reply/reminder.
 
-## Stack
+## Стек
 
 - Python 3.12+
 - aiogram
@@ -17,7 +17,7 @@ Astra AFT is a local-first Telegram assistant MVP. This repository currently con
 - pydantic-settings
 - pytest
 
-## Local setup
+## Локальный запуск
 
 ```bash
 python3.12 -m venv .venv
@@ -26,51 +26,61 @@ pip install -e ".[dev]"
 cp .env.example .env
 ```
 
-Fill `TELEGRAM_BOT_TOKEN` in `.env` before starting the bot.
+Перед запуском бота заполните `TELEGRAM_BOT_TOKEN` в `.env`.
 
-## Local commands
+## Основные команды
 
-Run tests:
+Запуск тестов:
 
 ```bash
 pytest
 ```
 
-Run the one-shot worker bootstrap:
+Одноразовый bootstrap worker-процесса:
 
 ```bash
 python -m apps.worker
 ```
 
-Run the Telegram bot:
+Запуск Telegram-бота:
 
 ```bash
 python -m apps.bot
 ```
 
-Initialize or inspect migrations:
+Применение и создание миграций:
 
 ```bash
 alembic upgrade head
-alembic revision -m "describe change"
+alembic revision -m "описание изменения"
 ```
 
-## Current scope
+## База данных и storage
 
-Implemented now:
+- SQLite остаётся единственной локальной БД для MVP.
+- Прикладные таблицы создаются только через Alembic-миграции.
+- `bootstrap_database()` на старте bot/worker доводит схему до `head`.
+- ORM-модели лежат в `models/`.
+- Первый слой доступа к данным лежит в `storage/repositories.py`.
+- Полнотекстовый поиск по сообщениям подготовлен через SQLite FTS5: виртуальная таблица `messages_fts` и триггеры на `messages`.
 
-- project/package structure,
-- environment-based settings,
-- async SQLite bootstrap,
-- thin bot handler wiring,
-- stub adapters for future provider layers,
-- Alembic baseline configuration.
+## Текущее покрытие
 
-Still intentionally stubbed:
+Сейчас уже есть:
 
-- digest engine,
-- memory layer,
-- reply suggestion engine,
-- reminder extraction,
-- Telegram source syncing beyond the bot shell,
-- business/full-access adapter behavior.
+- структура пакетов и entrypoint’ов,
+- настройки из окружения,
+- async runtime для SQLite и bootstrap через Alembic,
+- начальная ORM-схема для `chats/messages/digests/digest_items/people_memory/chat_memory/tasks/reminders/settings`,
+- репозиторный слой для `chats`, `messages`, `digests` и `settings`,
+- тонкая обвязка bot/worker,
+- первая реальная миграция локальной схемы хранения.
+
+Пока намеренно не реализованы:
+
+- генерация digest,
+- суммаризация memory,
+- reply suggestion,
+- извлечение reminder/task из сообщений,
+- полноценная синхронизация источников Telegram,
+- бизнес-логика для `business/` и `fullaccess/`.

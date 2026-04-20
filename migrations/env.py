@@ -8,6 +8,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from config.settings import Settings
+import models  # noqa: F401
 from storage.base import Base
 
 
@@ -16,8 +17,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-settings = Settings()
-config.set_main_option("sqlalchemy.url", settings.database_url)
+database_url = config.attributes.get("database_url")
+if database_url is None:
+    database_url = Settings().database_url
+
+config.set_main_option("sqlalchemy.url", database_url)
 target_metadata = Base.metadata
 
 

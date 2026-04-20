@@ -1,0 +1,130 @@
+import asyncio
+from datetime import datetime, timezone
+from pathlib import Path
+
+from config.settings import Settings
+from storage.database import build_database_runtime, bootstrap_database
+from storage.repositories import (
+    ChatRepository,
+    DigestRepository,
+    MessageRepository,
+    SettingRepository,
+)
+
+
+def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "repositories" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+
+        settings = Settings()
+        runtime = build_database_runtime(settings)
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            digests = DigestRepository(session)
+            repo_settings = SettingRepository(session)
+
+            created_chat = await chats.upsert_chat(
+                telegram_chat_id=100500,
+                title="Семья",
+                handle="family",
+                chat_type="group",
+                category="private",
+                summary_schedule="daily",
+                reply_assist_enabled=True,
+                auto_reply_mode="manual",
+            )
+            await session.commit()
+
+            updated_chat = await chats.upsert_chat(
+                telegram_chat_id=100500,
+                title="Семья и близкие",
+                handle="family",
+                chat_type="group",
+                is_enabled=False,
+                exclude_from_digest=True,
+            )
+            await session.commit()
+
+            fetched_chat = await chats.get_by_telegram_chat_id(100500)
+            assert fetched_chat is not None
+            assert fetched_chat.id == created_chat.id
+            assert updated_chat.title == "Семья и близкие"
+            assert updated_chat.is_enabled is False
+            assert updated_chat.exclude_from_digest is True
+
+            first_message = await messages.create_message(
+                chat_id=updated_chat.id,
+                telegram_message_id=1,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                raw_text="Привет",
+                normalized_text="привет",
+                has_media=False,
+            )
+            second_message = await messages.create_message(
+                chat_id=updated_chat.id,
+                telegram_message_id=2,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                raw_text="Не забудь купить хлеб",
+                normalized_text="не забудь купить хлеб",
+                reply_to_message_id=first_message.id,
+                has_media=False,
+            )
+            await session.commit()
+
+            recent_messages = await messages.get_recent_messages(chat_id=updated_chat.id, limit=5)
+            assert [message.telegram_message_id for message in recent_messages] == [2, 1]
+
+            fts_messages = await messages.search_full_text("хлеб", limit=5)
+            assert [message.telegram_message_id for message in fts_messages] == [2]
+
+            digest = await digests.create_digest(
+                chat_id=updated_chat.id,
+                window_start=datetime(2026, 4, 20, 8, 0, tzinfo=timezone.utc),
+                window_end=datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc),
+                summary_short="Короткая сводка",
+                summary_long="Подробная сводка",
+                delivered_to_chat_id=100500,
+                delivered_message_id=22,
+                items=[
+                    {
+                        "source_chat_id": updated_chat.id,
+                        "source_message_id": second_message.id,
+                        "title": "Покупки",
+                        "summary": "Нужно купить хлеб",
+                        "sort_order": 1,
+                    }
+                ],
+            )
+            await session.commit()
+
+            assert digest.items[0].title == "Покупки"
+            assert digest.items[0].source_message_id == second_message.id
+
+            missing_setting = await repo_settings.get_value("digest.enabled")
+            assert missing_setting is None
+
+            saved_setting = await repo_settings.set_value(
+                key="digest.enabled",
+                value_json={"enabled": True},
+            )
+            await session.commit()
+
+            fetched_setting = await repo_settings.get_by_key("digest.enabled")
+            assert fetched_setting is not None
+            assert saved_setting.id == fetched_setting.id
+            assert fetched_setting.value_json == {"enabled": True}
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())

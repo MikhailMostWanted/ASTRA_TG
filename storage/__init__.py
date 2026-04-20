@@ -1,1 +1,1 @@
-"""Database bootstrap helpers."""
+"""Помощники для bootstrap базы данных и репозиториев."""
