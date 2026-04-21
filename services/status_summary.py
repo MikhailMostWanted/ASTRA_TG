@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from config.settings import Settings
 from services.bot_owner import BotOwnerService
 from services.digest_target import DigestTargetService
 from services.digest_window import parse_digest_window
 from services.persona_core import PersonaCoreService
+from services.providers.manager import ProviderManager
 from storage.repositories import (
     ChatRepository,
     ChatMemoryRepository,
@@ -37,6 +39,7 @@ class BotStatusService:
     task_repository: TaskRepository | None = None
     reminder_repository: ReminderRepository | None = None
     reply_example_repository: ReplyExampleRepository | None = None
+    provider_manager: ProviderManager | None = None
 
     async def build_status_message(self) -> str:
         total_sources = await self.chat_repository.count_chats()
@@ -92,6 +95,7 @@ class BotStatusService:
         digest_target = await DigestTargetService(self.setting_repository).get_target()
         owner_chat_id = await BotOwnerService(self.setting_repository).get_owner_chat_id()
         schema_revision = await self.system_repository.get_schema_revision()
+        provider_status = await self._get_provider_status(check_api=False)
         digest_window = parse_digest_window(None)
         digest_window_counts = await self.message_repository.count_messages_by_digest_chat(
             window_start=digest_window.start,
@@ -106,6 +110,7 @@ class BotStatusService:
             "Бот: жив",
             "Хранилище: SQLite",
             "Ingest: активен",
+            "Deterministic mode: активен",
             f"Всего источников: {total_sources}",
             f"Активных источников: {enabled_sources}",
             f"Digest-источников: {digest_sources}",
@@ -123,6 +128,17 @@ class BotStatusService:
             f"Memory-карт чатов: {total_chat_memory}",
             f"Memory-карт людей: {total_people_memory}",
             "Reply layer: готов",
+            "Provider layer: готов" if provider_status.configured else "Provider layer: не готов",
+            (
+                "LLM refine для reply: доступен"
+                if provider_status.reply_refine_available
+                else "LLM refine для reply: недоступен"
+            ),
+            (
+                "LLM refine для digest: доступен"
+                if provider_status.digest_refine_available
+                else "LLM refine для digest: недоступен"
+            ),
             "Reminder layer: готов" if owner_chat_id is not None else "Reminder layer: не готов",
             f"Кандидатных задач: {candidate_tasks}",
             f"Подтверждено задач: {confirmed_tasks}",
@@ -184,6 +200,41 @@ class BotStatusService:
         ]
         return "\n".join(lines)
 
+    async def build_provider_status_message(self) -> str:
+        status = await self._get_provider_status(check_api=True)
+        lines = [
+            "Provider layer Astra AFT",
+            "",
+            f"Слой: {'включён' if status.enabled else 'выключен'}",
+            f"Провайдер: {status.provider_name or 'не выбран'}",
+            f"Модель fast: {status.model_fast or 'не задана'}",
+            f"Модель deep: {status.model_deep or 'не задана'}",
+            f"Таймаут: {status.timeout_seconds:.1f}s",
+            "API: доступен" if status.available else "API: недоступен",
+            (
+                "LLM refine для reply: включён"
+                if status.reply_refine_enabled
+                else "LLM refine для reply: выключен"
+            ),
+            (
+                "LLM refine для digest: включён"
+                if status.digest_refine_enabled
+                else "LLM refine для digest: выключен"
+            ),
+            (
+                "Reply refine runtime: доступен"
+                if status.reply_refine_available
+                else "Reply refine runtime: недоступен"
+            ),
+            (
+                "Digest refine runtime: доступен"
+                if status.digest_refine_available
+                else "Digest refine runtime: недоступен"
+            ),
+            f"Причина: {status.reason}",
+        ]
+        return "\n".join(lines)
+
     async def build_settings_message(self) -> str:
         digest_target = await DigestTargetService(self.setting_repository).get_target()
         owner_chat_id = await BotOwnerService(self.setting_repository).get_owner_chat_id()
@@ -233,6 +284,10 @@ class BotStatusService:
             sections=sections,
             max_message_length=max_message_length,
         )
+
+    async def _get_provider_status(self, *, check_api: bool):
+        manager = self.provider_manager or ProviderManager.from_settings(Settings())
+        return await manager.get_status(check_api=check_api)
 
 
 def _chunk_sections(

@@ -7,6 +7,7 @@ from services.digest_builder import DigestBuildResult, DigestBuilder
 from services.digest_formatter import DigestFormatter
 from services.digest_target import DigestTargetService, DigestTargetSnapshot
 from services.digest_window import DigestWindow, parse_digest_window
+from services.providers.digest_refiner import DigestLLMRefiner
 from storage.repositories import DigestRepository, MessageRepository, SettingRepository
 
 
@@ -24,6 +25,11 @@ class DigestExecutionPlan:
     digest_id: int | None
     message_count: int
     source_count: int
+    llm_refine_requested: bool = False
+    llm_refine_applied: bool = False
+    llm_refine_provider: str | None = None
+    llm_refine_notes: tuple[str, ...] = ()
+    llm_refine_guardrail_flags: tuple[str, ...] = ()
 
     @property
     def has_digest(self) -> bool:
@@ -42,12 +48,14 @@ class DigestEngineService:
     setting_repository: SettingRepository
     builder: DigestBuilder
     formatter: DigestFormatter
+    digest_refiner: DigestLLMRefiner | None = None
 
     async def build_manual_digest(
         self,
         window_argument: str | None,
         *,
         now=None,
+        use_provider_improvement: bool = False,
     ) -> DigestExecutionPlan:
         window = parse_digest_window(window_argument, now=now)
         target = await DigestTargetService(self.setting_repository).get_target()
@@ -77,6 +85,19 @@ class DigestEngineService:
             records=records,
             message_counts=message_counts,
         )
+        llm_requested = False
+        llm_applied = False
+        llm_notes: tuple[str, ...] = ()
+        llm_flags: tuple[str, ...] = ()
+        llm_provider_name: str | None = None
+        if use_provider_improvement and self.digest_refiner is not None:
+            refinement = await self.digest_refiner.refine(build_result)
+            llm_requested = refinement.requested
+            llm_applied = refinement.applied
+            llm_notes = refinement.notes
+            llm_flags = refinement.flags
+            llm_provider_name = refinement.provider_name
+            build_result = refinement.build_result
         rendered = self.formatter.format(build_result)
         digest = await self.digest_repository.create_digest(
             chat_id=None,
@@ -94,6 +115,11 @@ class DigestEngineService:
             digest_id=digest.id,
             message_count=build_result.total_messages,
             source_count=build_result.source_count,
+            llm_refine_requested=llm_requested,
+            llm_refine_applied=llm_applied,
+            llm_refine_provider=llm_provider_name,
+            llm_refine_notes=llm_notes,
+            llm_refine_guardrail_flags=llm_flags,
         )
 
 

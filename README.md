@@ -10,6 +10,7 @@ Astra AFT — локальный MVP Telegram-ассистента. Репози
 - первый локальный memory MVP по чатам и людям поверх уже сохранённых сообщений.
 - первый локальный reply coach MVP по уже сохранённым сообщениям и memory-картам.
 - первый локальный reminders MVP с подтверждением кандидатов и доставкой из worker.
+- optional provider layer для безопасного LLM-refine поверх уже существующих deterministic reply и digest пайплайнов.
 
 ## Стек
 
@@ -31,6 +32,31 @@ cp .env.example .env
 ```
 
 Перед запуском бота заполните `TELEGRAM_BOT_TOKEN` в `.env`.
+
+## Provider layer
+
+Deterministic режим остаётся основным и работает даже при полностью пустом LLM-конфиге.
+
+Опциональный provider layer включается только через `.env`:
+
+```env
+LLM_ENABLED=true
+LLM_PROVIDER=openai_compatible
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=...
+LLM_MODEL_FAST=gpt-4.1-mini
+LLM_MODEL_DEEP=gpt-4.1
+LLM_TIMEOUT=15
+LLM_REFINE_REPLY_ENABLED=true
+LLM_REFINE_DIGEST_ENABLED=true
+```
+
+Что важно:
+
+- если `LLM_ENABLED=false`, `/reply` и `/digest_now` продолжают работать как раньше;
+- provider не вшит в бизнес-логику и сидит отдельным abstraction layer в `services/providers/`;
+- LLM используется только как optional refinement поверх уже собранного deterministic baseline;
+- если provider не настроен, недоступен или не проходит guardrails, сервис честно откатывается к локальному результату.
 
 ## Основные команды
 
@@ -57,6 +83,7 @@ python -m apps.bot
 - `/start` — короткий онбординг и порядок первого запуска.
 - `/help` — список доступных команд.
 - `/status` — техническая сводка по состоянию проекта и ingest-метрикам.
+- `/provider_status` — состояние optional provider layer, моделей и runtime-доступности API.
 - `/reminders_scan [24h|3d] [chat_id|@username]` — просканировать локальные сообщения на задачи и reminders-кандидаты.
 - `/tasks` — показать активные задачи.
 - `/reminders` — показать активные reminders.
@@ -69,7 +96,9 @@ python -m apps.bot
 - `/person_memory <person_key|имя|@username>` — показать memory-card по человеку.
 - `/digest_target <chat_id|@username>` — сохранить чат или канал доставки digest.
 - `/digest_now [12h|24h|3d]` — вручную собрать digest по сохранённым сообщениям.
+- `/digest_llm [12h|24h|3d]` — собрать digest и, если provider доступен, мягко улучшить wording поверх deterministic baseline.
 - `/reply <chat_id|@username>` — получить persona-aware подсказку ответа по конкретному чату.
+- `/reply_llm <chat_id|@username>` — получить ту же подсказку с optional LLM-refine поверх baseline reply.
 - `/examples_rebuild [chat_id|@username]` — пересобрать локальную базу reply examples по сохранённым сообщениям.
 - `/reply_examples <chat_id|@username>` — показать похожие прошлые реальные ответы для текущей reply-ситуации.
 - `/style_profiles` — показать доступные встроенные style-профили.
@@ -78,6 +107,12 @@ python -m apps.bot
 - `/style_status <chat_id|@username>` — показать effective style-профиль чата и источник выбора.
 - `/persona_status` — показать состояние owner persona core и guardrails.
 - `/settings` — показать базовые настройки Astra AFT.
+
+`/status` теперь отдельно показывает:
+
+- что deterministic mode активен;
+- готов ли provider layer;
+- доступны ли LLM refine режимы для reply и digest.
 
 Для `/source_add` и `/digest_target` поддержан best-effort сценарий через форвард или reply:
 
@@ -117,6 +152,8 @@ python -m apps.bot
 - digest строится детерминированным локальным движком без LLM;
 - итог сохраняется в `digests` и `digest_items`;
 - бот показывает preview в текущем чате и, если задан `digest target`, одновременно публикует digest туда же.
+- `/digest_llm` использует тот же локальный pipeline, а затем при доступном provider может чуть улучшить `summary_short`, overview и key-source wording;
+- source of truth по данным остаётся в локальной БД и deterministic builder, provider не должен придумывать новые события.
 
 Поддержанные окна для ручного запуска:
 
@@ -167,6 +204,8 @@ python -m apps.bot
 - поверх локальной истории теперь сидит и отдельный few-shot retrieval layer: он собирает пары `входящий контекст -> мой реальный ответ`, хранит их в `reply_examples` и подмешивает похожие примеры в `/reply` как дополнительную опору;
 - текущая цель слоя — не style cloning и не personality mining, а безопасный управляемый Telegram-ответ с понятной причиной выбора;
 - в ответе бот показывает стиль, факт применения persona, наличие few-shot support, итоговую серию сообщений, краткое объяснение, риск и уверенность.
+- `/reply_llm` сначала строит тот же deterministic baseline, а потом при доступном provider может мягко refine-ить формулировку поверх готовой серии;
+- если provider недоступен или LLM-кандидат не проходит guardrails, бот честно сообщает про fallback и оставляет локальный deterministic ответ.
 
 Что умеет reply engine на этом шаге:
 

@@ -233,6 +233,10 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             assert "Memory-карт чатов: 0" in status_text
             assert "Memory-карт людей: 0" in status_text
             assert "Reply layer: готов" in status_text
+            assert "Deterministic mode: активен" in status_text
+            assert "Provider layer: не готов" in status_text
+            assert "LLM refine для reply: недоступен" in status_text
+            assert "LLM refine для digest: недоступен" in status_text
             assert "Reminder layer: не готов" in status_text
             assert "Кандидатных задач: 0" in status_text
             assert "Подтверждено задач: 0" in status_text

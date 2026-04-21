@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from services.persona_adapter import PersonaAdapter
 from services.persona_core import PersonaCoreService
 from services.persona_guardrails import PersonaGuardrails
+from services.providers.reply_refiner import ReplyLLMRefiner
 from services.reply_context_builder import ReplyContextBuilder
 from services.reply_examples_models import ReplyExamplesRetrievalResult
 from services.reply_examples_retriever import ReplyExamplesRetriever
@@ -31,8 +32,14 @@ class ReplyEngineService:
     persona_adapter: PersonaAdapter
     persona_guardrails: PersonaGuardrails
     reply_examples_retriever: ReplyExamplesRetriever | None = None
+    reply_refiner: ReplyLLMRefiner | None = None
 
-    async def build_reply(self, reference: str) -> ReplyResult:
+    async def build_reply(
+        self,
+        reference: str,
+        *,
+        use_provider_refinement: bool = False,
+    ) -> ReplyResult:
         chat = await self.chat_repository.find_chat_by_handle_or_telegram_id(reference)
         if chat is None:
             return ReplyResult(
@@ -121,6 +128,25 @@ class ReplyEngineService:
                 else ("Persona core не загружен, оставил style-aware серию.",)
             )
 
+        llm_requested = False
+        llm_applied = False
+        llm_notes: tuple[str, ...] = ()
+        llm_flags: tuple[str, ...] = ()
+        llm_provider_name: str | None = None
+        if use_provider_refinement and self.reply_refiner is not None:
+            refinement = await self.reply_refiner.refine(
+                context=context_or_issue,
+                style_selection=style_selection,
+                persona_state=persona_state,
+                baseline_messages=final_messages,
+            )
+            llm_requested = refinement.requested
+            llm_applied = refinement.applied
+            llm_notes = refinement.notes
+            llm_flags = refinement.flags
+            llm_provider_name = refinement.provider_name
+            final_messages = refinement.messages
+
         return ReplyResult(
             kind="suggestion",
             chat_id=chat.id,
@@ -148,6 +174,11 @@ class ReplyEngineService:
                 few_shot_match_count=draft.few_shot_match_count,
                 few_shot_notes=draft.few_shot_notes or few_shot_support.notes,
                 alternative_action=draft.alternative_action,
+                llm_refine_requested=llm_requested,
+                llm_refine_applied=llm_applied,
+                llm_refine_provider=llm_provider_name,
+                llm_refine_notes=llm_notes,
+                llm_refine_guardrail_flags=llm_flags,
             ),
             source_sender_name=context_or_issue.target_message.sender_name,
             source_message_preview=draft.source_message_preview,

@@ -12,6 +12,15 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     database_url: str = DEFAULT_DATABASE_URL
     log_level: str = "INFO"
+    llm_enabled: bool = False
+    llm_provider: str | None = None
+    llm_base_url: str | None = None
+    llm_api_key: str | None = None
+    llm_model_fast: str | None = None
+    llm_model_deep: str | None = None
+    llm_timeout: float = 15.0
+    llm_refine_reply_enabled: bool = False
+    llm_refine_digest_enabled: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

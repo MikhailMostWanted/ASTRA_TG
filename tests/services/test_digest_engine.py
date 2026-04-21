@@ -14,6 +14,7 @@ from storage.repositories import (
     MessageRepository,
     SettingRepository,
 )
+from services.providers.models import ProviderExecutionResult, ProviderStatus
 
 
 def _load_digest_module(name: str):
@@ -73,6 +74,28 @@ class FakeIncomingMessage:
     async def answer(self, text: str):
         self.answers.append(text)
         return SimpleNamespace(message_id=1000 + len(self.answers))
+
+
+class FakeUnavailableProviderManager:
+    async def get_status(self, *, check_api: bool = False):
+        return ProviderStatus(
+            enabled=True,
+            configured=False,
+            provider_name="openai_compatible",
+            model_fast="test-fast",
+            model_deep="test-deep",
+            timeout_seconds=15.0,
+            available=False,
+            reason="API сейчас недоступен.",
+            reply_refine_enabled=True,
+            digest_refine_enabled=True,
+            reply_refine_available=False,
+            digest_refine_available=False,
+            api_checked=check_api,
+        )
+
+    async def improve_digest(self, request):
+        return ProviderExecutionResult.failure("API сейчас недоступен.")
 
 
 def test_digest_engine_builds_and_saves_digest_from_messages(monkeypatch, tmp_path: Path) -> None:
@@ -252,6 +275,76 @@ def test_digest_engine_skips_disabled_and_excluded_sources(monkeypatch, tmp_path
             saved_digest = await digests.get_last_digest()
             assert saved_digest is not None
             assert [item.title for item in saved_digest.items] == ["Активный источник"]
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_digest_llm_handler_falls_back_to_deterministic_digest_when_provider_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "digest-llm-fallback" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("LLM_ENABLED", "true")
+        monkeypatch.setenv("LLM_PROVIDER", "openai_compatible")
+        monkeypatch.setenv("LLM_BASE_URL", "https://example.invalid/v1")
+        monkeypatch.setenv("LLM_API_KEY", "test-key")
+        monkeypatch.setenv("LLM_MODEL_FAST", "test-fast")
+        monkeypatch.setenv("LLM_MODEL_DEEP", "test-deep")
+        monkeypatch.setenv("LLM_REFINE_DIGEST_ENABLED", "true")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+
+            source_chat = await chats.upsert_chat(
+                telegram_chat_id=-100400,
+                title="Новости релизов",
+                handle="release_news",
+                chat_type="channel",
+                is_enabled=True,
+            )
+            await session.commit()
+
+            await messages.create_message(
+                chat_id=source_chat.id,
+                telegram_message_id=1,
+                sender_name="Редакция",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 9, 30, tzinfo=timezone.utc),
+                raw_text="Деплой на staging завершён, проверяем отчёты по конверсии и отклики пользователей.",
+                normalized_text="Деплой на staging завершён, проверяем отчёты по конверсии и отклики пользователей.",
+            )
+            await session.commit()
+
+        management_module = importlib.import_module("bot.handlers.management")
+        monkeypatch.setattr(
+            management_module,
+            "_build_provider_manager",
+            lambda: FakeUnavailableProviderManager(),
+        )
+
+        fake_bot = FakeBot()
+        fake_message = FakeIncomingMessage(bot=fake_bot, chat_id=901)
+        await management_module.handle_digest_llm_command(
+            fake_message,
+            SimpleNamespace(args="24h"),
+            runtime.session_factory,
+        )
+
+        assert fake_bot.sent_messages
+        assert any("Digest Astra AFT" in sent.text for sent in fake_bot.sent_messages)
+        assert any("Новости релизов" in sent.text for sent in fake_bot.sent_messages)
+        assert any("API сейчас недоступен" in answer for answer in fake_message.answers)
+        assert any("детерминированный digest" in answer.lower() for answer in fake_message.answers)
 
         await runtime.dispose()
 

@@ -38,24 +38,54 @@ class ReplyFormatter:
                 if suggestion.few_shot_found
                 else "Few-shot support: не найден"
             ),
-            "Итоговая серия:",
-            *self.style_formatter.format_reply_messages(
-                suggestion.final_reply_messages or suggestion.reply_messages
-            ),
-            "",
-            f"Почему: {suggestion.reason_short}",
-            f"Что сделал few-shot-слой: {'; '.join(suggestion.few_shot_notes)}",
-            f"Что сделал style-слой: {'; '.join(suggestion.style_notes)}",
-            f"Что сделал persona-слой: {'; '.join(suggestion.persona_notes)}",
-            (
-                "Guardrails: ok"
-                if not suggestion.guardrail_flags
-                else f"Guardrails: {', '.join(suggestion.guardrail_flags)}"
-            ),
-            f"Риск: {suggestion.risk_label}",
-            f"Уверенность: {round(suggestion.confidence * 100)}%",
-            f"Стратегия: {suggestion.strategy}",
         ]
+        if suggestion.llm_refine_requested:
+            lines.append(
+                (
+                    f"LLM-refine: применён ({suggestion.llm_refine_provider or 'provider'})"
+                    if suggestion.llm_refine_applied
+                    else "LLM-refine: fallback"
+                )
+            )
+        lines.extend(
+            [
+                "Итоговая серия:",
+                *self.style_formatter.format_reply_messages(
+                    suggestion.final_reply_messages or suggestion.reply_messages
+                ),
+                "",
+                f"Почему: {suggestion.reason_short}",
+                f"Что сделал few-shot-слой: {'; '.join(suggestion.few_shot_notes)}",
+                f"Что сделал style-слой: {'; '.join(suggestion.style_notes)}",
+                f"Что сделал persona-слой: {'; '.join(suggestion.persona_notes)}",
+            ]
+        )
+        if suggestion.llm_refine_requested:
+            lines.extend(
+                [
+                    f"Что сделал LLM-слой: {'; '.join(suggestion.llm_refine_notes)}",
+                    (
+                        "LLM-guardrails: ok"
+                        if not suggestion.llm_refine_guardrail_flags
+                        else (
+                            "LLM-guardrails: "
+                            + ", ".join(suggestion.llm_refine_guardrail_flags)
+                        )
+                    ),
+                ]
+            )
+        lines.extend(
+            [
+                (
+                    "Guardrails: ok"
+                    if not suggestion.guardrail_flags
+                    else f"Guardrails: {', '.join(suggestion.guardrail_flags)}"
+                ),
+                f"Риск: {suggestion.risk_label}",
+                f"Уверенность: {round(suggestion.confidence * 100)}%",
+                f"Стратегия: {suggestion.strategy}",
+            ]
+        )
         if suggestion.alternative_action:
             lines.append(f"Вместо ответа: {suggestion.alternative_action}")
         return "\n".join(lines)

@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты, reply coach и reminders по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис: сначала safe draft, потом style layer, затем детерминированный owner persona layer с guardrails, а теперь ещё и локальный few-shot retrieval layer поверх реальных прошлых ответов владельца. Reminder слой тоже уже подключён как локальный детерминированный pipeline: scan по сохранённым сообщениям, подтверждение кандидатов и доставка due reminders через worker.
+Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты, reply coach и reminders по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис: сначала safe draft, потом style layer, затем детерминированный owner persona layer с guardrails, а теперь ещё и локальный few-shot retrieval layer поверх реальных прошлых ответов владельца. Reminder слой тоже уже подключён как локальный детерминированный pipeline: scan по сохранённым сообщениям, подтверждение кандидатов и доставка due reminders через worker. Поверх этих deterministic пайплайнов теперь добавлен optional provider layer: он не меняет source of truth и не обязателен для работы проекта.
 
 ## Зоны ответственности модулей
 
@@ -10,7 +10,7 @@
 - `bot/` содержит aiogram routing и тонкие Telegram-handlers.
 - `bot/` теперь также даёт Telegram-интерфейс для управления allowlist источников, базовыми настройками digest и приёма входящих updates для ingest.
 - `worker/` содержит точки входа для фонового bootstrap/run-once сценария.
-- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine, style layer, persona layer, local few-shot retrieval layer, reminder extraction/delivery и статусные сводки.
+- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine, style layer, persona layer, local few-shot retrieval layer, reminder extraction/delivery, provider layer и статусные сводки.
 - `config/` содержит общие настройки из окружения.
 - `storage/` содержит SQLAlchemy runtime, bootstrap через Alembic и репозитории доступа к данным.
 - `models/` содержит ORM-схему SQLite для MVP-сущностей.
@@ -27,6 +27,21 @@
 - Сохранять явные границы адаптеров, чтобы будущие `business/fullaccess` режимы не протекали в bot-handlers.
 - Предпочитать аддитивные модули вместо разрастания монолитных файлов.
 - Использовать bot layer как bridge между `storage/` и будущим digest engine, а не как место для самой digest-логики.
+- Provider layer держать отдельным и опциональным: никаких прямых вызовов конкретного вендора из reply/digest бизнес-логики.
+
+## Provider layer
+
+Provider layer устроен как отдельный верхний слой над уже существующими deterministic пайплайнами:
+
+- `services/providers/base.py` задаёт минимальный контракт для short-form rewrite и structured digest improvement задач;
+- `services/providers/models.py` хранит типы задач, prompt/request/response модели и provider status;
+- `services/providers/factory.py` и `services/providers/manager.py` собирают runtime, знают про `LLM_ENABLED`, выбранный provider, модели, runtime-статус и graceful fallback;
+- `services/providers/openai_compatible.py` даёт один HTTP-адаптер под OpenAI-compatible `/chat/completions`;
+- `services/providers/prompts.py` строит короткие и жёсткие prompt’ы без giant prompt spaghetti;
+- `services/providers/guardrails.py` проверяет, что refine-кандидаты не уезжают в литературщину, не добавляют факты и не ломают Telegram-ритм;
+- `services/providers/reply_refiner.py` и `services/providers/digest_refiner.py` встраивают provider только как optional refinement поверх уже готового baseline.
+
+Ключевой принцип этого слоя: baseline truth остаётся в локальной SQLite-БД, deterministic builder’ах и локальных guardrails. Provider может только улучшить wording. Если он не настроен, упал или отдал плохой candidate, сервис обязан откатиться к baseline.
 
 ## Ingest pipeline
 
@@ -44,13 +59,14 @@
 Первый реальный digest MVP теперь устроен так:
 
 - `bot/handlers/management.py` подключает `/digest_now`, но сам остаётся тонким;
+- тот же handler теперь даёт и `/digest_llm`, который вызывает тот же deterministic pipeline и только потом optional provider refine;
 - `services/digest_window.py` разбирает окно вида `12h`, `24h`, `3d` и фиксирует точные UTC-границы;
 - `services/digest_engine.py` оркестрирует весь flow: чтение данных, сборку digest, сохранение в БД и публикацию;
 - `services/digest_builder.py` детерминированно группирует сообщения по источникам, отбрасывает шум, частично схлопывает дубли и выбирает наиболее содержательные пункты;
 - `services/digest_formatter.py` превращает результат в Telegram-friendly текст и режет его на chunk’и при необходимости;
 - `storage/repositories.py` отдаёт сообщения только из активных digest-источников и сохраняет итог в `digests` и `digest_items`.
 
-Ключевой принцип этого слоя: digest вызывается только по локальной SQLite-БД. В момент `/digest_now` бот не читает Telegram напрямую, а работает по уже накопленным данным из `messages`.
+Ключевой принцип этого слоя: digest вызывается только по локальной SQLite-БД. В момент `/digest_now` и `/digest_llm` бот не читает Telegram напрямую, а работает по уже накопленным данным из `messages`. Даже в LLM-assisted режиме provider меняет только wording `summary_short`, overview и key-source блоков; данные и детали по источникам остаются локальными.
 
 ## Reminder pipeline
 
@@ -91,7 +107,7 @@
 
 Первый рабочий reply MVP теперь устроен так:
 
-- `bot/handlers/management.py` подключает `/reply`, но сам остаётся тонким;
+- `bot/handlers/management.py` подключает `/reply` и `/reply_llm`, но сам остаётся тонким;
 - `services/reply_context_builder.py` собирает reply-context только из локальной БД: последние сообщения чата, `chat_memory`, связанный `people_memory`, признаки открытых хвостов и конфликтов;
 - `services/reply_classifier.py` определяет тип ситуации простыми эвристиками: вопрос, просьба, лёгкий бытовой обмен, напряжённый фрагмент или сценарий, где лучше не отвечать сразу;
 - `services/reply_strategy.py` выбирает безопасную стратегию ответа и формирует базовый safe draft;
@@ -104,10 +120,11 @@
 - `services/persona_adapter.py` мягко обогащает style-aware серию owner-like ритмом, связками и ограничениями;
 - `services/persona_guardrails.py` проверяет длину, литературность, шумную пунктуацию, грубость и карикатурные паттерны;
 - `services/reply_engine.py` оркестрирует весь flow и возвращает структурированный persona-aware результат с few-shot support;
+- `services/providers/reply_refiner.py` может дополнительно refine-ить финальную серию поверх готового baseline, но только через provider manager и с обязательным fallback;
 - `services/reply_formatter.py` превращает его в Telegram-friendly сообщение для `/reply`;
 - `storage/repositories.py` даёт минимальные выборки и агрегаты для reply readiness, style profiles, chat overrides, `settings` и связанных memory-карт.
 
-Ключевой принцип этого слоя: reply suggestions строятся только по локальным `messages + chat_memory + people_memory + reply_examples`, а style/persona/few-shot adaptation остаётся полностью структурированной и детерминированной. Здесь нет внешних LLM, автоматического обучения на всём архиве, embeddings, vector DB, магического style cloning или автоответа. Few-shot слой — это объяснимый retrieval MVP, который готовит базу под будущий более глубокий provider-aware reply layer, но сам остаётся локальным и безопасным.
+Ключевой принцип этого слоя: reply suggestions строятся только по локальным `messages + chat_memory + people_memory + reply_examples`, а style/persona/few-shot adaptation остаётся полностью структурированной и детерминированной. Здесь нет обязательного внешнего LLM, автоматического обучения на всём архиве, embeddings, vector DB, магического style cloning или автоответа. Few-shot слой — это объяснимый retrieval MVP, который готовит базу под provider-aware reply layer, но сам остаётся локальным и безопасным. `/reply_llm` лишь мягко улучшает wording поверх уже построенного baseline и обязан откатываться назад при любой проблеме.
 
 ## Few-shot retrieval layer
 

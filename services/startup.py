@@ -24,9 +24,10 @@ class BotStartupService:
             "2. Накопить сообщения из разрешённых чатов.\n"
             "3. Вызвать /memory_rebuild и проверить /chat_memory или /person_memory.\n"
             "4. Вызвать /examples_rebuild, чтобы собрать локальные reply examples.\n"
-            "5. Для подсказки ответа вызвать /reply <chat_id|@username> или /reply_examples <chat_id|@username>.\n"
+            "5. Для подсказки ответа вызвать /reply <chat_id|@username> или, если provider включён, /reply_llm <chat_id|@username>.\n"
             "6. Для reminders вызвать /reminders_scan и подтвердить карточки.\n"
-            "7. Задать канал доставки через /digest_target и вызвать /digest_now."
+            "7. Задать канал доставки через /digest_target и вызвать /digest_now или /digest_llm.\n"
+            "8. Проверить optional provider layer через /provider_status."
         )
 
     def build_help_message(self) -> str:

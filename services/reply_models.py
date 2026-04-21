@@ -80,6 +80,11 @@ class ReplySuggestion:
     few_shot_match_count: int
     few_shot_notes: tuple[str, ...]
     alternative_action: str | None = None
+    llm_refine_requested: bool = False
+    llm_refine_applied: bool = False
+    llm_refine_provider: str | None = None
+    llm_refine_notes: tuple[str, ...] = ()
+    llm_refine_guardrail_flags: tuple[str, ...] = ()
 
     @property
     def reply_text(self) -> str:

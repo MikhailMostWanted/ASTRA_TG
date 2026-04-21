@@ -5,6 +5,7 @@ from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from bot.handlers.common import remember_owner_chat_if_private
+from config.settings import Settings
 from services.chat_memory_builder import ChatMemoryBuilder
 from services.command_parser import BotCommandParser
 from services.digest_builder import DigestBuilder
@@ -18,6 +19,9 @@ from services.persona_adapter import PersonaAdapter
 from services.persona_core import PersonaCoreService
 from services.persona_formatter import PersonaFormatter
 from services.persona_guardrails import PersonaGuardrails
+from services.providers.digest_refiner import DigestLLMRefiner
+from services.providers.manager import ProviderManager
+from services.providers.reply_refiner import ReplyLLMRefiner
 from services.reply_classifier import ReplyClassifier
 from services.reply_context_builder import ReplyContextBuilder
 from services.reply_engine import ReplyEngineService
@@ -62,6 +66,17 @@ async def handle_status_command(
         await remember_owner_chat_if_private(message, session)
         service = _build_status_service(session)
         await message.answer(await service.build_status_message())
+
+
+@router.message(Command("provider_status"))
+async def handle_provider_status_command(
+    message: Message,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        service = _build_status_service(session)
+        await message.answer(await service.build_provider_status_message())
 
 
 @router.message(Command("sources"))
@@ -202,6 +217,30 @@ async def handle_reply_command(
         service = _build_reply_service(session)
         formatter = ReplyFormatter()
         result = await service.build_reply(reference)
+
+    await message.answer(formatter.format_result(result))
+
+
+@router.message(Command("reply_llm"))
+async def handle_reply_llm_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    try:
+        reference = PARSER.parse_required_reference(command.args, command_name="reply_llm")
+    except ValueError as error:
+        await message.answer(str(error))
+        return
+
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        service = _build_reply_service(session)
+        formatter = ReplyFormatter()
+        result = await service.build_reply(
+            reference,
+            use_provider_refinement=True,
+        )
 
     await message.answer(formatter.format_result(result))
 
@@ -375,13 +414,7 @@ async def handle_digest_now_command(
     async with session_factory() as session:
         await remember_owner_chat_if_private(message, session)
         digest_repository = DigestRepository(session)
-        engine = DigestEngineService(
-            message_repository=MessageRepository(session),
-            digest_repository=digest_repository,
-            setting_repository=SettingRepository(session),
-            builder=DigestBuilder(),
-            formatter=DigestFormatter(),
-        )
+        engine = _build_digest_service(session)
         try:
             plan = await engine.build_manual_digest(command.args)
         except ValueError as error:
@@ -395,6 +428,39 @@ async def handle_digest_now_command(
         )
         await session.commit()
 
+    if publish_result.notice:
+        await message.answer(publish_result.notice)
+
+
+@router.message(Command("digest_llm"))
+async def handle_digest_llm_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        digest_repository = DigestRepository(session)
+        engine = _build_digest_service(session)
+        try:
+            plan = await engine.build_manual_digest(
+                command.args,
+                use_provider_improvement=True,
+            )
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+
+        publish_result = await DigestPublisherService(digest_repository).publish(
+            plan=plan,
+            preview_chat_id=message.chat.id,
+            sender=message.bot,
+        )
+        await session.commit()
+
+    llm_notice = _build_digest_llm_notice(plan)
+    if llm_notice:
+        await message.answer(llm_notice)
     if publish_result.notice:
         await message.answer(publish_result.notice)
 
@@ -503,6 +569,7 @@ def _build_status_service(session: AsyncSession) -> BotStatusService:
         task_repository=TaskRepository(session),
         reminder_repository=ReminderRepository(session),
         reply_example_repository=ReplyExampleRepository(session),
+        provider_manager=_build_provider_manager(),
     )
 
 
@@ -525,6 +592,7 @@ def _build_reply_service(session: AsyncSession) -> ReplyEngineService:
     chat_memory_repository = ChatMemoryRepository(session)
     person_memory_repository = PersonMemoryRepository(session)
     setting_repository = SettingRepository(session)
+    provider_manager = _build_provider_manager()
     return ReplyEngineService(
         chat_repository=ChatRepository(session),
         message_repository=message_repository,
@@ -548,6 +616,18 @@ def _build_reply_service(session: AsyncSession) -> ReplyEngineService:
         persona_adapter=PersonaAdapter(),
         persona_guardrails=PersonaGuardrails(),
         reply_examples_retriever=_build_reply_examples_retriever(session),
+        reply_refiner=ReplyLLMRefiner(provider_manager=provider_manager),
+    )
+
+
+def _build_digest_service(session: AsyncSession) -> DigestEngineService:
+    return DigestEngineService(
+        message_repository=MessageRepository(session),
+        digest_repository=DigestRepository(session),
+        setting_repository=SettingRepository(session),
+        builder=DigestBuilder(),
+        formatter=DigestFormatter(),
+        digest_refiner=DigestLLMRefiner(provider_manager=_build_provider_manager()),
     )
 
 
@@ -595,3 +675,22 @@ def _build_style_service(session: AsyncSession) -> StyleProfileService:
 
 def _build_persona_service(session: AsyncSession) -> PersonaCoreService:
     return PersonaCoreService(SettingRepository(session))
+
+
+def _build_provider_manager() -> ProviderManager:
+    return ProviderManager.from_settings(Settings())
+
+
+def _build_digest_llm_notice(plan) -> str | None:
+    if not plan.llm_refine_requested:
+        return None
+    header = (
+        f"LLM-improve: применён ({plan.llm_refine_provider or 'provider'})"
+        if plan.llm_refine_applied
+        else "LLM-improve: fallback, показан детерминированный digest."
+    )
+    notes = " ".join(plan.llm_refine_notes).strip()
+    if plan.llm_refine_guardrail_flags:
+        guardrails = ", ".join(plan.llm_refine_guardrail_flags)
+        notes = f"{notes} Guardrails: {guardrails}.".strip()
+    return "\n".join(line for line in (header, notes) if line)
