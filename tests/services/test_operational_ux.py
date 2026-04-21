@@ -302,3 +302,53 @@ def test_checklist_accepts_fully_ready_system(monkeypatch, tmp_path: Path) -> No
         await runtime.dispose()
 
     asyncio.run(run_assertions())
+
+
+def test_status_and_doctor_include_operational_hardening_context(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "operational-hardening" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("LLM_ENABLED", "false")
+        monkeypatch.setenv("FULLACCESS_ENABLED", "false")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            settings_repo = SettingRepository(session)
+            await settings_repo.set_value(
+                key="ops.error.provider.last",
+                value_json={
+                    "timestamp": "2026-04-21T12:00:00+00:00",
+                    "message": "provider timeout",
+                },
+            )
+            await settings_repo.set_value(
+                key="ops.error.worker.last",
+                value_json={
+                    "timestamp": "2026-04-21T12:05:00+00:00",
+                    "message": "reminder failed",
+                },
+            )
+            await settings_repo.set_value(
+                key="ops.startup.bot.last",
+                value_json={
+                    "warnings": ["owner chat неизвестен"],
+                    "critical_issues": [],
+                },
+            )
+            await session.commit()
+
+            service = _build_status_service(session)
+            status_text = await service.build_status_message()
+            doctor_text = await service.build_doctor_message()
+
+            assert "backup" in status_text.lower()
+            assert "export" in status_text.lower()
+            assert "startup" in doctor_text.lower()
+            assert "provider timeout" in doctor_text.lower()
+            assert "reminder failed" in doctor_text.lower()
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())

@@ -116,6 +116,14 @@ python -m fullaccess.cli logout
 pytest
 ```
 
+Operational utilities:
+
+```bash
+python -m apps.ops status
+python -m apps.ops backup
+python -m apps.ops export
+```
+
 Одноразовый bootstrap worker-процесса:
 
 ```bash
@@ -162,6 +170,68 @@ python -m apps.bot
 - Full-access experimental: `/fullaccess_status`, `/fullaccess_login [код]`, `/fullaccess_logout`, `/fullaccess_chats`, `/fullaccess_sync <chat_id|@username>`
 
 `/status` теперь не пытается быть giant log. Он показывает короткую operational сводку: готовность, состояние ключевых слоёв и следующую рекомендуемую команду. Подробности и причины вынесены в `/checklist` и `/doctor`.
+
+## Безопасный ежедневный запуск
+
+Базовый безопасный цикл теперь такой:
+
+1. Запусти `python -m apps.bot` и смотри стартовую self-check сводку в логах.
+2. Для фоновой доставки reminders запускай `python -m apps.worker` отдельным run-once шагом или по cron.
+3. Перед ручными экспериментами проверь `python -m apps.ops status`.
+4. Перед изменениями данных сделай `python -m apps.ops backup`.
+5. Для компактной диагностики проекта выгрузи `python -m apps.ops export`.
+
+Что теперь проверяется на старте `apps.bot` и `apps.worker`:
+
+- доступность БД и применённость миграций;
+- обязательные env для bot layer;
+- состояние provider layer: настроен или честно disabled;
+- состояние experimental full-access: готов или честно disabled/not-ready;
+- owner chat;
+- worker jobs и базовая готовность delivery-контура.
+
+Если критично не хватает конфигурации, entrypoint больше не стартует молча в полуживом состоянии.
+
+## Backup и diagnostic export
+
+`python -m apps.ops backup`:
+
+- делает локальную timestamped-копию SQLite-базы в `var/backups/`;
+- использует штатный SQLite backup API, без небезопасных трюков;
+- сохраняет путь последнего backup в operational state.
+
+`python -m apps.ops export`:
+
+- пишет компактную JSON-сводку в `var/exports/`;
+- показывает количества источников, сообщений, digest, memory cards, reply examples, tasks/reminders;
+- добавляет состояние provider/full-access;
+- добавляет последние operational timestamps: digest, memory rebuild, reminder delivery, full-access sync, backup, export;
+- включает recent errors и startup warnings, если они были.
+
+## Логи и ошибки
+
+Теперь у проекта есть единый structured logging layer:
+
+- startup/boot события для `apps.bot`, `apps.worker`, `storage`;
+- ключевые точки `digest`, `reply`, `reminders`, `provider`, `full-access`;
+- короткие event names и уровни `info/warning/error`;
+- маскирование чувствительных полей вроде token/api key/session.
+
+Handler-ошибки и worker-ошибки больше не должны ронять весь процесс от одного плохого кейса:
+
+- пользователь получает короткое сообщение вроде `Операция не выполнена.`, `Источник не найден.`, `Провайдер сейчас недоступен.`, `full-access не настроен.`;
+- в лог уходит реальная причина;
+- reminder worker продолжает run даже если один reminder сломался;
+- recent errors и startup warnings попадают в `/doctor` и operational export.
+
+## Типичные проблемы
+
+- `TELEGRAM_BOT_TOKEN не задан`: bot не стартует, проверь `.env`.
+- `Provider layer не готов`: deterministic fallback останется рабочим, детали смотри в `/provider_status` и `/doctor`.
+- `Experimental full-access не готов`: это не ломает bot-first контур, смотри `/fullaccess_status`.
+- `owner chat пока неизвестен`: открой личный чат с ботом и отправь `/start`.
+- `reminders некуда доставлять` или worker warning: проверь owner chat и запуск `python -m apps.worker`.
+- Нужен быстрый срез состояния без чтения БД руками: используй `python -m apps.ops export`.
 
 Для `/source_add` и `/digest_target` поддержан best-effort сценарий через форвард или reply:
 

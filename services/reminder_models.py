@@ -50,3 +50,5 @@ class ReminderDeliveryResult:
     blocked_count: int
     due_count: int
     last_notification_at: datetime | None
+    failed_count: int = 0
+    skipped_count: int = 0

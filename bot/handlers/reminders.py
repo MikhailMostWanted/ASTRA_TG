@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from bot.handlers.common import remember_owner_chat_if_private
 from services.command_parser import BotCommandParser
+from services.error_handling import user_safe_handler
 from services.reminder_extractor import ReminderExtractor
 from services.reminder_formatter import ReminderFormatter, parse_reminder_callback_data
 from services.reminder_service import ReminderService
@@ -24,6 +25,7 @@ PARSER = BotCommandParser()
 
 
 @router.message(Command("reminders_scan"))
+@user_safe_handler("bot.reminders_scan")
 async def handle_reminders_scan_command(
     message: Message,
     command: CommandObject,
@@ -50,6 +52,7 @@ async def handle_reminders_scan_command(
 
 
 @router.message(Command("tasks"))
+@user_safe_handler("bot.tasks")
 async def handle_tasks_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -63,6 +66,7 @@ async def handle_tasks_command(
 
 
 @router.message(Command("reminders"))
+@user_safe_handler("bot.reminders")
 async def handle_reminders_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -76,6 +80,7 @@ async def handle_reminders_command(
 
 
 @router.callback_query(F.data.startswith("reminder:"))
+@user_safe_handler("bot.reminder_callback")
 async def handle_reminder_callback(
     callback: CallbackQuery,
     session_factory: async_sessionmaker[AsyncSession],

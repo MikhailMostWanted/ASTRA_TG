@@ -44,6 +44,30 @@
 
 Ключевой принцип этого слоя: никакой новой hidden logic. Только явные правила готовности, короткие рекомендации и честные warning-сообщения вроде «нет активных источников», «в БД ещё нет сообщений», «memory cards ещё не строились» или «provider выключен, deterministic fallback активен».
 
+## Hardening / operational layer
+
+На текущем шаге поверх operational UX добавлен отдельный hardening-слой для повседневной эксплуатации. Это не новая продуктовая функция, а слой спокойной эксплуатации поверх уже существующих bot/digest/memory/reply/reminders/provider/full-access контуров.
+
+Что входит в этот слой:
+
+- `core/logging.py` — единый structured logging formatter и helper’ы для event-based логов без утечки token/api key/session секретов;
+- `services/error_handling.py` — единый handler guard для Telegram-команд с короткими user-facing ошибками и нормальным логированием причины;
+- `services/startup_validation.py` — startup self-check для `apps.bot` и `apps.worker`;
+- `services/operational_state.py` — компактное хранение startup reports, recent errors, backup/export/full-access sync фактов в `settings`;
+- `services/operational_tools.py` и `apps/ops` — локальные backup/export utilities;
+- расширение `services/system_readiness.py` и `services/status_summary.py` hardening-данными: backup/export availability, recent errors, startup warnings, последние operational timestamps;
+- усиление `services/reminder_delivery.py` и `services/startup.py` для устойчивого worker run с per-reminder/per-job error handling и summary по run.
+
+Архитектурный принцип здесь тот же:
+
+- handlers остаются тонкими;
+- logging отдельно;
+- error handling отдельно;
+- startup validation отдельно;
+- worker hardening отдельно;
+- backup/export utilities отдельно;
+- никакой giant admin panel, dashboard или внешней инфраструктуры.
+
 ## Provider layer
 
 Provider layer устроен как отдельный верхний слой над уже существующими deterministic пайплайнами:

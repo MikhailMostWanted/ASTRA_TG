@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from config.settings import Settings
+from core.logging import get_logger, log_event
 from fullaccess.client import (
     FullAccessClientFactory,
     build_fullaccess_client,
@@ -16,10 +17,12 @@ from fullaccess.models import (
     FullAccessRemoteMessage,
     FullAccessSyncResult,
 )
-from storage.repositories import ChatRepository, MessageRepository
+from services.operational_state import OperationalStateService
+from storage.repositories import ChatRepository, MessageRepository, SettingRepository
 
 
 CHAT_LIST_LIMIT = 25
+LOGGER = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -27,6 +30,7 @@ class FullAccessSyncService:
     settings: Settings
     chat_repository: ChatRepository
     message_repository: MessageRepository
+    setting_repository: SettingRepository | None = None
     client_factory: FullAccessClientFactory = build_fullaccess_client
     transport_available: bool | None = None
 
@@ -43,6 +47,14 @@ class FullAccessSyncService:
 
     async def sync_chat(self, reference: str) -> FullAccessSyncResult:
         config = await self._require_read_ready_config()
+        log_event(
+            LOGGER,
+            20,
+            "fullaccess.sync.started",
+            "Начат ручной full-access sync.",
+            reference=reference,
+            sync_limit=config.sync_limit,
+        )
         chat_summary, remote_messages = await self.client_factory(config).fetch_history(
             reference,
             limit=config.sync_limit,
@@ -98,6 +110,26 @@ class FullAccessSyncService:
             else:
                 updated_count += 1
 
+        if self.setting_repository is not None:
+            await OperationalStateService(self.setting_repository).record_fullaccess_sync(
+                reference=reference,
+                scanned_count=scanned_count,
+                created_count=created_count,
+                updated_count=updated_count,
+                skipped_count=skipped_count,
+            )
+        log_event(
+            LOGGER,
+            20,
+            "fullaccess.sync.completed",
+            "Ручной full-access sync завершён.",
+            reference=reference,
+            scanned_count=scanned_count,
+            created_count=created_count,
+            updated_count=updated_count,
+            skipped_count=skipped_count,
+            local_chat_id=local_chat.id,
+        )
         return FullAccessSyncResult(
             chat=chat_summary,
             local_chat_id=local_chat.id,
@@ -111,18 +143,38 @@ class FullAccessSyncService:
     async def _require_read_ready_config(self) -> FullAccessConfig:
         config = FullAccessConfig.from_settings(self.settings)
         if not config.enabled:
+            await _record_fullaccess_error_if_possible(
+                self.setting_repository,
+                "Experimental full-access слой выключен. Включи FULLACCESS_ENABLED=true."
+            )
             raise ValueError("Experimental full-access слой выключен. Включи FULLACCESS_ENABLED=true.")
         if not config.api_credentials_configured:
+            await _record_fullaccess_error_if_possible(
+                self.setting_repository,
+                "Сначала задай FULLACCESS_API_ID и FULLACCESS_API_HASH.",
+            )
             raise ValueError("Сначала задай FULLACCESS_API_ID и FULLACCESS_API_HASH.")
         if not _transport_available(self.client_factory, self.transport_available):
+            await _record_fullaccess_error_if_possible(
+                self.setting_repository,
+                "Telethon не установлен. Установи optional dependency: pip install -e '.[fullaccess]'."
+            )
             raise ValueError(
                 "Telethon не установлен. Установи optional dependency: pip install -e '.[fullaccess]'."
             )
         try:
             authorized = await self.client_factory(config).is_authorized()
         except (RuntimeError, ValueError) as error:
+            await _record_fullaccess_error_if_possible(
+                self.setting_repository,
+                f"Не удалось открыть user-session: {error}",
+            )
             raise ValueError(f"Не удалось открыть user-session: {error}") from error
         if not authorized:
+            await _record_fullaccess_error_if_possible(
+                self.setting_repository,
+                "Пользовательская session не авторизована. Сначала выполни /fullaccess_login."
+            )
             raise ValueError(
                 "Пользовательская session не авторизована. Сначала выполни /fullaccess_login."
             )
@@ -215,3 +267,22 @@ def _normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+async def _record_fullaccess_error_if_possible(
+    setting_repository: SettingRepository | None,
+    message: str,
+) -> None:
+    if setting_repository is None:
+        return
+    await OperationalStateService(setting_repository).record_error(
+        "fullaccess",
+        message=message,
+    )
+    log_event(
+        LOGGER,
+        30,
+        "fullaccess.sync.warning",
+        "Full-access sync требует ручного вмешательства.",
+        reason=message,
+    )

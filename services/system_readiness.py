@@ -8,6 +8,7 @@ from fullaccess.auth import FullAccessAuthService
 from fullaccess.models import FullAccessStatusReport
 from services.bot_owner import BotOwnerService
 from services.digest_target import DigestTargetService
+from services.operational_state import OperationalStateService
 from services.digest_window import parse_digest_window
 from services.persona_core import PersonaCoreService, PersonaState
 from services.providers.manager import ProviderManager
@@ -64,6 +65,17 @@ class OperationalFacts:
     provider_status: ProviderStatus
     fullaccess_status: FullAccessStatusReport | None
     worker_jobs: tuple[str, ...]
+    backup_tool_available: bool
+    export_tool_available: bool
+    last_backup_at: datetime | None
+    last_backup_path: str | None
+    last_export_at: datetime | None
+    last_export_path: str | None
+    last_fullaccess_sync_at: datetime | None
+    recent_worker_error: str | None
+    recent_provider_error: str | None
+    recent_fullaccess_error: str | None
+    startup_warnings: tuple[str, ...]
 
     @property
     def has_messages(self) -> bool:
@@ -143,6 +155,7 @@ class SystemReadinessService:
     reply_example_repository: ReplyExampleRepository | None = None
     provider_manager: ProviderManager | None = None
     fullaccess_auth_service: FullAccessAuthService | None = None
+    settings: Settings | None = None
 
     async def build_report(self) -> OperationalReport:
         facts = await self._collect_facts()
@@ -167,6 +180,8 @@ class SystemReadinessService:
         )
 
     async def _collect_facts(self) -> OperationalFacts:
+        effective_settings = self.settings or Settings()
+        state_service = OperationalStateService(self.setting_repository)
         total_sources = await self.chat_repository.count_chats()
         active_sources = await self.chat_repository.count_enabled_chats()
         digest_sources = await self.chat_repository.count_digest_enabled_chats()
@@ -226,6 +241,14 @@ class SystemReadinessService:
             if self.fullaccess_auth_service is not None
             else None
         )
+        last_backup = await state_service.get_named_snapshot("backup")
+        last_export = await state_service.get_named_snapshot("export")
+        last_fullaccess_sync = await state_service.get_named_snapshot("fullaccess_sync")
+        last_worker_error = await state_service.get_error("worker")
+        last_provider_error = await state_service.get_error("provider")
+        last_fullaccess_error = await state_service.get_error("fullaccess")
+        bot_startup = await state_service.get_named_snapshot("bot_startup")
+        worker_startup = await state_service.get_named_snapshot("worker_startup")
         digest_window = parse_digest_window(None)
         digest_window_counts = await self.message_repository.count_messages_by_digest_chat(
             window_start=digest_window.start,
@@ -262,6 +285,30 @@ class SystemReadinessService:
             provider_status=provider_status,
             fullaccess_status=fullaccess_status,
             worker_jobs=list_registered_jobs(),
+            backup_tool_available=effective_settings.sqlite_database_path is not None,
+            export_tool_available=True,
+            last_backup_at=last_backup.timestamp if last_backup is not None else None,
+            last_backup_path=_read_string(last_backup, "path"),
+            last_export_at=last_export.timestamp if last_export is not None else None,
+            last_export_path=_read_string(last_export, "path"),
+            last_fullaccess_sync_at=(
+                last_fullaccess_sync.timestamp if last_fullaccess_sync is not None else None
+            ),
+            recent_worker_error=last_worker_error.message if last_worker_error is not None else None,
+            recent_provider_error=(
+                last_provider_error.message if last_provider_error is not None else None
+            ),
+            recent_fullaccess_error=(
+                last_fullaccess_error.message if last_fullaccess_error is not None else None
+            ),
+            startup_warnings=tuple(
+                _dedupe(
+                    [
+                        *(_read_startup_warnings(bot_startup, prefix="bot") or []),
+                        *(_read_startup_warnings(worker_startup, prefix="worker") or []),
+                    ]
+                )
+            ),
         )
 
     def _build_checklist(self, facts: OperationalFacts) -> tuple[OperationalCheck, ...]:
@@ -494,6 +541,13 @@ class SystemReadinessService:
             warnings.append(f"Provider layer включён, но не готов: {facts.provider_status.reason}")
         if facts.fullaccess_status is not None and facts.fullaccess_status.enabled and not facts.fullaccess_status.ready_for_manual_sync:
             warnings.append(f"Full-access experimental ещё не готов: {facts.fullaccess_status.reason}")
+        if facts.recent_worker_error:
+            warnings.append(f"Недавняя ошибка worker: {facts.recent_worker_error}")
+        if facts.recent_provider_error:
+            warnings.append(f"Недавняя ошибка provider: {facts.recent_provider_error}")
+        if facts.recent_fullaccess_error:
+            warnings.append(f"Недавняя ошибка full-access: {facts.recent_fullaccess_error}")
+        warnings.extend(f"Startup warning: {warning}" for warning in facts.startup_warnings)
         for item in checklist:
             if not item.ready and item.key in {"reply_layer", "reminders_layer"}:
                 warnings.append(item.detail)
@@ -571,4 +625,26 @@ def _dedupe(values: list[str | None]) -> list[str]:
             continue
         seen.add(normalized)
         result.append(normalized)
+    return result
+
+
+def _read_string(snapshot, key: str) -> str | None:
+    if snapshot is None:
+        return None
+    value = snapshot.payload.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _read_startup_warnings(snapshot, *, prefix: str) -> list[str]:
+    if snapshot is None:
+        return []
+    warnings = snapshot.payload.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    result: list[str] = []
+    for item in warnings:
+        if isinstance(item, str) and item.strip():
+            result.append(f"{prefix}: {item.strip()}")
     return result

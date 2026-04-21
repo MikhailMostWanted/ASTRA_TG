@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from config.settings import Settings
 from services.reminder_delivery import ReminderDeliveryService
@@ -38,6 +39,19 @@ class FakeBot:
         )
         self.sent_messages.append(sent)
         return type("FakeTelegramMessage", (), {"message_id": sent.message_id})()
+
+
+class FlakyBot:
+    def __init__(self, *, failing_ids: set[int]) -> None:
+        self.failing_ids = failing_ids
+        self.sent_ids: list[int] = []
+
+    async def send_message(self, chat_id: int, text: str):
+        reminder_id = int(text.split()[-1])
+        if reminder_id in self.failing_ids:
+            raise RuntimeError(f"reminder {reminder_id} failed")
+        self.sent_ids.append(reminder_id)
+        return type("FakeTelegramMessage", (), {"message_id": 7000 + reminder_id})()
 
 
 def test_worker_delivers_due_reminder_once(monkeypatch, tmp_path: Path) -> None:
@@ -132,5 +146,53 @@ def test_worker_delivers_due_reminder_once(monkeypatch, tmp_path: Path) -> None:
             assert len(fake_bot.sent_messages) == 1
 
         await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_worker_continues_when_one_reminder_fails_and_skips_duplicates() -> None:
+    async def run_assertions() -> None:
+        class FakeSettingRepository:
+            async def get_value(self, key: str):
+                if key == "bot.owner_chat_id":
+                    return "555001"
+                return None
+
+        class FakeReminderRepository:
+            def __init__(self, reminders) -> None:
+                self.reminders = reminders
+                self.delivered_ids: list[int] = []
+
+            async def get_due_reminders(self, now: datetime):
+                return list(self.reminders)
+
+            async def mark_delivered(self, reminder_id: int, delivered_at: datetime):
+                self.delivered_ids.append(reminder_id)
+                return None
+
+        class FakeFormatter:
+            def format_delivery_packet(self, reminder) -> str:
+                return f"reminder {reminder.id}"
+
+        duplicate = SimpleNamespace(id=1, task=None, payload_json={}, remind_at=datetime(2026, 4, 20, 10, 45, tzinfo=timezone.utc))
+        successful = SimpleNamespace(id=2, task=None, payload_json={}, remind_at=datetime(2026, 4, 20, 10, 46, tzinfo=timezone.utc))
+        repository = FakeReminderRepository([duplicate, duplicate, successful])
+        bot = FlakyBot(failing_ids={1})
+
+        result = await ReminderDeliveryService(
+            setting_repository=FakeSettingRepository(),
+            reminder_repository=repository,
+            formatter=FakeFormatter(),
+        ).deliver_due_reminders(
+            sender=bot,
+            now=datetime(2026, 4, 20, 10, 50, tzinfo=timezone.utc),
+        )
+
+        assert result.due_count == 3
+        assert result.sent_count == 1
+        assert result.failed_count == 1
+        assert result.skipped_count == 1
+        assert repository.delivered_ids == [2]
+        assert bot.sent_ids == [2]
 
     asyncio.run(run_assertions())

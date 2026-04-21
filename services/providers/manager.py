@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from config.settings import Settings
+from core.logging import get_logger, log_event
+from services.operational_state import OperationalStateService
 from services.providers.base import BaseProvider
 from services.providers.errors import ProviderError
 from services.providers.factory import create_provider, is_supported_provider
@@ -12,16 +14,30 @@ from services.providers.models import (
     ProviderStatus,
     RewriteReplyRequest,
 )
+from storage.repositories import SettingRepository
+
+
+LOGGER = get_logger(__name__)
 
 
 @dataclass(slots=True)
 class ProviderManager:
     settings: Settings
     provider: BaseProvider | None = None
+    setting_repository: SettingRepository | None = None
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> "ProviderManager":
-        return cls(settings=settings, provider=create_provider(settings))
+    def from_settings(
+        cls,
+        settings: Settings,
+        *,
+        setting_repository: SettingRepository | None = None,
+    ) -> "ProviderManager":
+        return cls(
+            settings=settings,
+            provider=create_provider(settings),
+            setting_repository=setting_repository,
+        )
 
     async def get_status(self, *, check_api: bool = False) -> ProviderStatus:
         enabled = bool(self.settings.llm_enabled)
@@ -39,9 +55,11 @@ class ProviderManager:
                 except ProviderError as error:
                     available = False
                     reason = str(error)
+                    await self._record_provider_error(reason, stage="healthcheck")
                 except Exception as error:  # pragma: no cover - страховка на непредвиденный transport error
                     available = False
                     reason = f"API-проверка завершилась ошибкой: {error}"
+                    await self._record_provider_error(reason, stage="healthcheck")
             else:
                 available = True
                 reason = "Провайдер сконфигурирован, deterministic fallback остаётся активным."
@@ -85,8 +103,18 @@ class ProviderManager:
         try:
             candidate = await self.provider.rewrite_reply(request)
         except Exception as error:
+            reason = _format_runtime_error(error)
+            await self._record_provider_error(reason, stage="rewrite_reply")
+            log_event(
+                LOGGER,
+                30,
+                "provider.reply.failure",
+                "Provider rewrite_reply завершился с fallback.",
+                provider_name=status.provider_name,
+                reason=reason,
+            )
             return ProviderExecutionResult.failure(
-                _format_runtime_error(error),
+                reason,
                 provider_name=status.provider_name,
             )
         return ProviderExecutionResult.success(
@@ -112,8 +140,18 @@ class ProviderManager:
         try:
             candidate = await self.provider.improve_digest(request)
         except Exception as error:
+            reason = _format_runtime_error(error)
+            await self._record_provider_error(reason, stage="improve_digest")
+            log_event(
+                LOGGER,
+                30,
+                "provider.digest.failure",
+                "Provider improve_digest завершился с fallback.",
+                provider_name=status.provider_name,
+                reason=reason,
+            )
             return ProviderExecutionResult.failure(
-                _format_runtime_error(error),
+                reason,
                 provider_name=status.provider_name,
             )
         return ProviderExecutionResult.success(
@@ -140,6 +178,15 @@ class ProviderManager:
         if self.provider is None:
             return False, "Provider factory не смог собрать runtime-клиент."
         return True, "Провайдер сконфигурирован."
+
+    async def _record_provider_error(self, message: str, *, stage: str) -> None:
+        if self.setting_repository is None:
+            return
+        await OperationalStateService(self.setting_repository).record_error(
+            "provider",
+            message=message,
+            details={"stage": stage},
+        )
 
 
 def _normalize(value: str | None) -> str | None:

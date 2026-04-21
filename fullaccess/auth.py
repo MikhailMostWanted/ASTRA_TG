@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from config.settings import Settings
+from core.logging import get_logger, log_event
 from fullaccess.client import (
     FullAccessClientFactory,
     FullAccessPasswordRequiredError,
@@ -19,10 +20,12 @@ from fullaccess.models import (
     FullAccessStatusReport,
     PendingAuthState,
 )
+from services.operational_state import OperationalStateService
 from storage.repositories import MessageRepository, SettingRepository
 
 
 PENDING_AUTH_KEY = "fullaccess.auth.pending"
+LOGGER = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -102,7 +105,7 @@ class FullAccessAuthService:
         )
 
     async def begin_login(self) -> FullAccessLoginResult:
-        config = self._require_login_prerequisites()
+        config = await self._require_login_prerequisites()
         client = self.client_factory(config)
         if await client.is_authorized():
             return FullAccessLoginResult(
@@ -139,7 +142,7 @@ class FullAccessAuthService:
         if not normalized_code:
             raise ValueError("Код Telegram пустой. Сначала запроси код, затем пришли его командой.")
 
-        config = self._require_login_prerequisites()
+        config = await self._require_login_prerequisites()
         pending_state = await self._load_pending_auth()
         if pending_state is None:
             raise ValueError(
@@ -197,19 +200,27 @@ class FullAccessAuthService:
             pending_auth_cleared=pending_auth_cleared,
         )
 
-    def _require_login_prerequisites(self) -> FullAccessConfig:
+    async def _require_login_prerequisites(self) -> FullAccessConfig:
         config = FullAccessConfig.from_settings(self.settings)
         if not config.enabled:
+            await self._record_fullaccess_error(
+                "Experimental full-access слой выключен. Включи FULLACCESS_ENABLED=true."
+            )
             raise ValueError("Experimental full-access слой выключен. Включи FULLACCESS_ENABLED=true.")
         if not config.api_credentials_configured:
+            await self._record_fullaccess_error("Сначала задай FULLACCESS_API_ID и FULLACCESS_API_HASH.")
             raise ValueError(
                 "Сначала задай FULLACCESS_API_ID и FULLACCESS_API_HASH."
             )
         if not self._transport_available():
+            await self._record_fullaccess_error(
+                "Telethon не установлен. Установи optional dependency: pip install -e '.[fullaccess]'."
+            )
             raise ValueError(
                 "Telethon не установлен. Установи optional dependency: pip install -e '.[fullaccess]'."
             )
         if not config.phone_configured:
+            await self._record_fullaccess_error("Сначала задай FULLACCESS_PHONE для запроса кода.")
             raise ValueError("Сначала задай FULLACCESS_PHONE для запроса кода.")
         return config
 
@@ -246,6 +257,19 @@ class FullAccessAuthService:
         if self.client_factory is not build_fullaccess_client:
             return True
         return telethon_is_available()
+
+    async def _record_fullaccess_error(self, message: str) -> None:
+        await OperationalStateService(self.setting_repository).record_error(
+            "fullaccess",
+            message=message,
+        )
+        log_event(
+            LOGGER,
+            30,
+            "fullaccess.auth.warning",
+            "Full-access auth требует ручного вмешательства.",
+            reason=message,
+        )
 
 
 def _parse_timestamp(value: object) -> datetime:

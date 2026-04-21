@@ -42,6 +42,7 @@ class BotStatusService:
     reply_example_repository: ReplyExampleRepository | None = None
     provider_manager: ProviderManager | None = None
     fullaccess_auth_service: FullAccessAuthService | None = None
+    settings: Settings | None = None
 
     async def build_status_message(self) -> str:
         report = await self._build_operational_report()
@@ -79,6 +80,7 @@ class BotStatusService:
             ),
             f"Provider: {provider_status.detail}",
             f"Full-access: {fullaccess_status.detail}",
+            f"Ops: {_build_ops_status_line(facts)}",
             f"Следующий шаг: {next_step}",
             "Подробно: /onboarding, /checklist, /doctor",
         ]
@@ -101,10 +103,42 @@ class BotStatusService:
     async def build_doctor_message(self) -> str:
         report = await self._build_operational_report()
         doctor = SystemHealthService().build_report(report)
+        facts = report.facts
         lines = ["Doctor Astra AFT", "", "ОК"]
         lines.extend(f"• {item}" for item in doctor.ok_items)
         lines.extend(["", "Предупреждения"])
         lines.extend(f"• {item}" for item in doctor.warnings)
+        lines.extend(["", "Операционный слой"])
+        lines.append(
+            f"• Backup tool: {'доступен' if facts.backup_tool_available else 'недоступен'}"
+        )
+        lines.append(
+            f"• Export tool: {'доступен' if facts.export_tool_available else 'недоступен'}"
+        )
+        lines.append(
+            f"• Последний backup: {_format_timestamp(facts.last_backup_at)}"
+            + (f" ({facts.last_backup_path})" if facts.last_backup_path else "")
+        )
+        lines.append(
+            f"• Последний export: {_format_timestamp(facts.last_export_at)}"
+            + (f" ({facts.last_export_path})" if facts.last_export_path else "")
+        )
+        lines.append(
+            f"• Последний full-access sync: {_format_timestamp(facts.last_fullaccess_sync_at)}"
+        )
+        lines.append(
+            f"• Последняя ошибка worker: {facts.recent_worker_error or 'нет'}"
+        )
+        lines.append(
+            f"• Последняя ошибка provider: {facts.recent_provider_error or 'нет'}"
+        )
+        lines.append(
+            f"• Последняя ошибка full-access: {facts.recent_fullaccess_error or 'нет'}"
+        )
+        if facts.startup_warnings:
+            lines.extend(f"• Startup warning: {item}" for item in facts.startup_warnings)
+        else:
+            lines.append("• Startup warnings: нет")
         lines.extend(["", "Что исправить дальше"])
         for index, step in enumerate(doctor.next_steps, start=1):
             lines.append(f"{index}. {step}")
@@ -211,6 +245,7 @@ class BotStatusService:
             reply_example_repository=self.reply_example_repository,
             provider_manager=self.provider_manager,
             fullaccess_auth_service=self.fullaccess_auth_service,
+            settings=self.settings,
         ).build_report()
 
     async def _get_provider_status(self, *, check_api: bool):
@@ -271,3 +306,29 @@ def _format_timestamp(value: datetime | str | None) -> str:
         value = value.astimezone(timezone.utc)
 
     return value.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _build_ops_status_line(facts) -> str:
+    notes: list[str] = []
+    if facts.backup_tool_available:
+        notes.append("backup готов")
+    else:
+        notes.append("backup недоступен")
+    if facts.export_tool_available:
+        notes.append("export готов")
+    recent_errors = [
+        label
+        for label, message in (
+            ("worker", facts.recent_worker_error),
+            ("provider", facts.recent_provider_error),
+            ("full-access", facts.recent_fullaccess_error),
+        )
+        if message
+    ]
+    if recent_errors:
+        notes.append(f"недавние ошибки: {', '.join(recent_errors)}")
+    else:
+        notes.append("ошибок недавно нет")
+    if facts.startup_warnings:
+        notes.append(f"startup warnings: {len(facts.startup_warnings)}")
+    return "; ".join(notes)

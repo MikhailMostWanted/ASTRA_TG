@@ -3,12 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from core.logging import get_logger, log_event
 from services.digest_builder import DigestBuildResult, DigestBuilder
 from services.digest_formatter import DigestFormatter
 from services.digest_target import DigestTargetService, DigestTargetSnapshot
 from services.digest_window import DigestWindow, parse_digest_window
 from services.providers.digest_refiner import DigestLLMRefiner
 from storage.repositories import DigestRepository, MessageRepository, SettingRepository
+
+
+LOGGER = get_logger(__name__)
 
 
 class MessageSenderProtocol(Protocol):
@@ -59,6 +63,15 @@ class DigestEngineService:
     ) -> DigestExecutionPlan:
         window = parse_digest_window(window_argument, now=now)
         target = await DigestTargetService(self.setting_repository).get_target()
+        log_event(
+            LOGGER,
+            20,
+            "digest.build.started",
+            "Начата ручная сборка digest.",
+            window=window.label,
+            target_configured=target.is_configured,
+            llm_requested=use_provider_improvement,
+        )
         message_counts = await self.message_repository.count_messages_by_digest_chat(
             window_start=window.start,
             window_end=window.end,
@@ -68,6 +81,13 @@ class DigestEngineService:
             window_end=window.end,
         )
         if not records:
+            log_event(
+                LOGGER,
+                20,
+                "digest.build.empty",
+                "Для digest не найдено сообщений.",
+                window=window.label,
+            )
             return DigestExecutionPlan(
                 window=window,
                 target=target,
@@ -98,6 +118,14 @@ class DigestEngineService:
             llm_flags = refinement.flags
             llm_provider_name = refinement.provider_name
             build_result = refinement.build_result
+            if llm_requested and not llm_applied:
+                log_event(
+                    LOGGER,
+                    30,
+                    "digest.provider.fallback",
+                    "Digest provider improve не применён, оставлен deterministic digest.",
+                    provider_name=llm_provider_name,
+                )
         rendered = self.formatter.format(build_result)
         digest = await self.digest_repository.create_digest(
             chat_id=None,
@@ -106,6 +134,15 @@ class DigestEngineService:
             summary_short=build_result.summary_short,
             summary_long=rendered.full_text,
             items=build_result.to_digest_items(),
+        )
+        log_event(
+            LOGGER,
+            20,
+            "digest.build.completed",
+            "Digest собран и сохранён.",
+            digest_id=digest.id,
+            message_count=build_result.total_messages,
+            source_count=build_result.source_count,
         )
         return DigestExecutionPlan(
             window=window,
@@ -134,6 +171,15 @@ class DigestPublisherService:
         preview_chat_id: int,
         sender: MessageSenderProtocol,
     ) -> DigestPublishResult:
+        log_event(
+            LOGGER,
+            20,
+            "digest.publish.started",
+            "Начата публикация digest.",
+            digest_id=plan.digest_id,
+            preview_chat_id=preview_chat_id,
+            target_chat_id=plan.target.chat_id,
+        )
         preview_messages = await _send_chunks(
             sender=sender,
             chat_id=preview_chat_id,
@@ -169,6 +215,14 @@ class DigestPublisherService:
                 delivered_message_id=delivered_messages[0].message_id,
             )
         target_label = plan.target.label or str(plan.target.chat_id)
+        log_event(
+            LOGGER,
+            20,
+            "digest.publish.completed",
+            "Digest опубликован.",
+            digest_id=plan.digest_id,
+            target_label=target_label,
+        )
         return DigestPublishResult(notice=f"Digest также отправлен в {target_label}.")
 
 

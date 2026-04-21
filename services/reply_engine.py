@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from core.logging import get_logger, log_event
 from services.persona_adapter import PersonaAdapter
 from services.persona_core import PersonaCoreService
 from services.persona_guardrails import PersonaGuardrails
@@ -14,7 +15,16 @@ from services.reply_models import ReplyResult, ReplySuggestion
 from services.reply_strategy import ReplyStrategyResolver
 from services.style_adapter import StyleAdapter
 from services.style_selector import StyleSelectorService
-from storage.repositories import ChatMemoryRepository, ChatRepository, MessageRepository, PersonMemoryRepository
+from storage.repositories import (
+    ChatMemoryRepository,
+    ChatRepository,
+    MessageRepository,
+    PersonMemoryRepository,
+    SettingRepository,
+)
+
+
+LOGGER = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -33,6 +43,7 @@ class ReplyEngineService:
     persona_guardrails: PersonaGuardrails
     reply_examples_retriever: ReplyExamplesRetriever | None = None
     reply_refiner: ReplyLLMRefiner | None = None
+    setting_repository: SettingRepository | None = None
 
     async def build_reply(
         self,
@@ -40,8 +51,23 @@ class ReplyEngineService:
         *,
         use_provider_refinement: bool = False,
     ) -> ReplyResult:
+        log_event(
+            LOGGER,
+            20,
+            "reply.build.started",
+            "Начата сборка reply.",
+            reference=reference,
+            llm_requested=use_provider_refinement,
+        )
         chat = await self.chat_repository.find_chat_by_handle_or_telegram_id(reference)
         if chat is None:
+            log_event(
+                LOGGER,
+                30,
+                "reply.build.not_found",
+                "Источник для reply не найден.",
+                reference=reference,
+            )
             return ReplyResult(
                 kind="not_found",
                 chat_id=None,
@@ -146,7 +172,25 @@ class ReplyEngineService:
             llm_flags = refinement.flags
             llm_provider_name = refinement.provider_name
             final_messages = refinement.messages
+            if llm_requested and not llm_applied:
+                log_event(
+                    LOGGER,
+                    30,
+                    "reply.provider.fallback",
+                    "Reply provider refine не применён, оставлен deterministic fallback.",
+                    reference=reference,
+                    provider_name=llm_provider_name,
+                )
 
+        log_event(
+            LOGGER,
+            20,
+            "reply.build.completed",
+            "Reply собран.",
+            reference=reference,
+            applied_provider=llm_applied,
+            style_profile=style_selection.profile.key,
+        )
         return ReplyResult(
             kind="suggestion",
             chat_id=chat.id,

@@ -5,6 +5,7 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from config.settings import Settings
+from core.logging import get_logger, log_event
 from services.persona_rules import (
     DEFAULT_OWNER_PERSONA_CORE,
     DEFAULT_PERSONA_ENABLED,
@@ -13,6 +14,9 @@ from services.persona_rules import (
 )
 from storage.migrations import upgrade_database_async
 from storage.repositories import SettingRepository
+
+
+LOGGER = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -33,6 +37,14 @@ def build_database_runtime(settings: Settings) -> DatabaseRuntime:
     engine = create_async_engine(settings.database_url, future=True)
     _configure_sqlite_engine(engine=engine, sqlite_database_path=sqlite_database_path)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    log_event(
+        LOGGER,
+        20,
+        "storage.runtime.created",
+        "Создан database runtime.",
+        database_url=settings.database_url,
+        sqlite_path=sqlite_database_path,
+    )
     return DatabaseRuntime(
         engine=engine,
         session_factory=session_factory,
@@ -41,8 +53,21 @@ def build_database_runtime(settings: Settings) -> DatabaseRuntime:
 
 
 async def bootstrap_database(runtime: DatabaseRuntime) -> None:
+    log_event(
+        LOGGER,
+        20,
+        "storage.bootstrap.started",
+        "Начат bootstrap базы данных.",
+        database_url=runtime.database_url,
+    )
     await upgrade_database_async(runtime.database_url)
     await _seed_default_settings(runtime.session_factory)
+    log_event(
+        LOGGER,
+        20,
+        "storage.bootstrap.completed",
+        "Bootstrap базы данных завершён.",
+    )
 
 
 def _configure_sqlite_engine(
@@ -88,6 +113,12 @@ async def _seed_default_settings(
         )
         if changed:
             await session.commit()
+            log_event(
+                LOGGER,
+                20,
+                "storage.seed.defaults",
+                "Базовые persona settings созданы.",
+            )
 
 
 async def _ensure_json_setting(

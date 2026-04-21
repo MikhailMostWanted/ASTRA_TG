@@ -6,10 +6,13 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 
+from core.logging import get_logger, log_event
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ALEMBIC_INI_PATH = REPOSITORY_ROOT / "alembic.ini"
 MIGRATIONS_PATH = REPOSITORY_ROOT / "migrations"
+LOGGER = get_logger(__name__)
 
 
 def build_alembic_config(database_url: str) -> Config:
@@ -21,6 +24,13 @@ def build_alembic_config(database_url: str) -> Config:
 
 
 def upgrade_database(database_url: str, revision: str = "head") -> None:
+    log_event(
+        LOGGER,
+        20,
+        "storage.migrations.upgrade",
+        "Запущен Alembic upgrade.",
+        revision=revision,
+    )
     command.upgrade(build_alembic_config(database_url), revision)
 
 

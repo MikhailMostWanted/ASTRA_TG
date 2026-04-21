@@ -31,6 +31,7 @@ from services.reply_engine import ReplyEngineService
 from services.reply_examples_builder import ReplyExamplesBuilder
 from services.reply_examples_formatter import ReplyExamplesFormatter
 from services.reply_examples_retriever import ReplyExamplesRetriever
+from services.error_handling import user_safe_handler
 from services.reply_formatter import ReplyFormatter
 from services.reply_strategy import ReplyStrategyResolver
 from services.style_adapter import StyleAdapter
@@ -61,6 +62,7 @@ PARSER = BotCommandParser()
 
 
 @router.message(Command("status"))
+@user_safe_handler("bot.status")
 async def handle_status_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -72,6 +74,7 @@ async def handle_status_command(
 
 
 @router.message(Command("checklist"))
+@user_safe_handler("bot.checklist")
 async def handle_checklist_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -83,6 +86,7 @@ async def handle_checklist_command(
 
 
 @router.message(Command("doctor"))
+@user_safe_handler("bot.doctor")
 async def handle_doctor_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -94,6 +98,7 @@ async def handle_doctor_command(
 
 
 @router.message(Command("provider_status"))
+@user_safe_handler("bot.provider_status")
 async def handle_provider_status_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -105,6 +110,7 @@ async def handle_provider_status_command(
 
 
 @router.message(Command("fullaccess_status"))
+@user_safe_handler("bot.fullaccess_status")
 async def handle_fullaccess_status_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -117,6 +123,7 @@ async def handle_fullaccess_status_command(
 
 
 @router.message(Command("fullaccess_login"))
+@user_safe_handler("bot.fullaccess_login")
 async def handle_fullaccess_login_command(
     message: Message,
     command: CommandObject,
@@ -149,6 +156,7 @@ async def handle_fullaccess_login_command(
 
 
 @router.message(Command("fullaccess_logout"))
+@user_safe_handler("bot.fullaccess_logout")
 async def handle_fullaccess_logout_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -164,6 +172,7 @@ async def handle_fullaccess_logout_command(
 
 
 @router.message(Command("fullaccess_chats"))
+@user_safe_handler("bot.fullaccess_chats")
 async def handle_fullaccess_chats_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -182,6 +191,7 @@ async def handle_fullaccess_chats_command(
 
 
 @router.message(Command("fullaccess_sync"))
+@user_safe_handler("bot.fullaccess_sync")
 async def handle_fullaccess_sync_command(
     message: Message,
     command: CommandObject,
@@ -208,6 +218,7 @@ async def handle_fullaccess_sync_command(
 
 
 @router.message(Command("sources"))
+@user_safe_handler("bot.sources")
 async def handle_sources_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -220,6 +231,7 @@ async def handle_sources_command(
 
 
 @router.message(Command("source_add"))
+@user_safe_handler("bot.source_add")
 async def handle_source_add_command(
     message: Message,
     command: CommandObject,
@@ -247,6 +259,7 @@ async def handle_source_add_command(
 
 
 @router.message(Command("source_disable"))
+@user_safe_handler("bot.source_disable")
 async def handle_source_disable_command(
     message: Message,
     command: CommandObject,
@@ -262,6 +275,7 @@ async def handle_source_disable_command(
 
 
 @router.message(Command("source_enable"))
+@user_safe_handler("bot.source_enable")
 async def handle_source_enable_command(
     message: Message,
     command: CommandObject,
@@ -277,6 +291,7 @@ async def handle_source_enable_command(
 
 
 @router.message(Command("digest_target"))
+@user_safe_handler("bot.digest_target")
 async def handle_digest_target_command(
     message: Message,
     command: CommandObject,
@@ -304,6 +319,7 @@ async def handle_digest_target_command(
 
 
 @router.message(Command("settings"))
+@user_safe_handler("bot.settings")
 async def handle_settings_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -315,6 +331,7 @@ async def handle_settings_command(
 
 
 @router.message(Command("persona_status"))
+@user_safe_handler("bot.persona_status")
 async def handle_persona_status_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -329,6 +346,7 @@ async def handle_persona_status_command(
 
 
 @router.message(Command("reply"))
+@user_safe_handler("bot.reply")
 async def handle_reply_command(
     message: Message,
     command: CommandObject,
@@ -350,6 +368,7 @@ async def handle_reply_command(
 
 
 @router.message(Command("reply_llm"))
+@user_safe_handler("bot.reply_llm")
 async def handle_reply_llm_command(
     message: Message,
     command: CommandObject,
@@ -374,6 +393,7 @@ async def handle_reply_llm_command(
 
 
 @router.message(Command("examples_rebuild"))
+@user_safe_handler("bot.examples_rebuild")
 async def handle_examples_rebuild_command(
     message: Message,
     command: CommandObject,
@@ -405,6 +425,7 @@ async def handle_examples_rebuild_command(
 
 
 @router.message(Command("reply_examples"))
+@user_safe_handler("bot.reply_examples")
 async def handle_reply_examples_command(
     message: Message,
     command: CommandObject,
@@ -445,6 +466,7 @@ async def handle_reply_examples_command(
 
 
 @router.message(Command("style_profiles"))
+@user_safe_handler("bot.style_profiles")
 async def handle_style_profiles_command(
     message: Message,
     session_factory: async_sessionmaker[AsyncSession],
@@ -457,6 +479,7 @@ async def handle_style_profiles_command(
 
 
 @router.message(Command("style_set"))
+@user_safe_handler("bot.style_set")
 async def handle_style_set_command(
     message: Message,
     command: CommandObject,
@@ -482,6 +505,7 @@ async def handle_style_set_command(
 
 
 @router.message(Command("style_unset"))
+@user_safe_handler("bot.style_unset")
 async def handle_style_unset_command(
     message: Message,
     command: CommandObject,
@@ -509,6 +533,7 @@ async def handle_style_unset_command(
 
 
 @router.message(Command("style_status"))
+@user_safe_handler("bot.style_status")
 async def handle_style_status_command(
     message: Message,
     command: CommandObject,
@@ -534,6 +559,7 @@ async def handle_style_status_command(
 
 
 @router.message(Command("digest_now"))
+@user_safe_handler("bot.digest_now")
 async def handle_digest_now_command(
     message: Message,
     command: CommandObject,
@@ -561,6 +587,7 @@ async def handle_digest_now_command(
 
 
 @router.message(Command("digest_llm"))
+@user_safe_handler("bot.digest_llm")
 async def handle_digest_llm_command(
     message: Message,
     command: CommandObject,
@@ -594,6 +621,7 @@ async def handle_digest_llm_command(
 
 
 @router.message(Command("memory_rebuild"))
+@user_safe_handler("bot.memory_rebuild")
 async def handle_memory_rebuild_command(
     message: Message,
     command: CommandObject,
@@ -621,6 +649,7 @@ async def handle_memory_rebuild_command(
 
 
 @router.message(Command("chat_memory"))
+@user_safe_handler("bot.chat_memory")
 async def handle_chat_memory_command(
     message: Message,
     command: CommandObject,
@@ -640,6 +669,7 @@ async def handle_chat_memory_command(
 
 
 @router.message(Command("person_memory"))
+@user_safe_handler("bot.person_memory")
 async def handle_person_memory_command(
     message: Message,
     command: CommandObject,
@@ -685,6 +715,7 @@ async def _handle_source_toggle(
 
 def _build_status_service(session: AsyncSession) -> BotStatusService:
     return BotStatusService(
+        settings=Settings(),
         chat_repository=ChatRepository(session),
         setting_repository=SettingRepository(session),
         system_repository=SystemRepository(session),
@@ -716,6 +747,7 @@ def _build_fullaccess_sync_service(session: AsyncSession) -> FullAccessSyncServi
         settings=Settings(),
         chat_repository=ChatRepository(session),
         message_repository=MessageRepository(session),
+        setting_repository=SettingRepository(session),
     )
 
 
@@ -739,6 +771,8 @@ def _build_reply_service(session: AsyncSession) -> ReplyEngineService:
     person_memory_repository = PersonMemoryRepository(session)
     setting_repository = SettingRepository(session)
     provider_manager = _build_provider_manager()
+    if isinstance(provider_manager, ProviderManager):
+        provider_manager.setting_repository = setting_repository
     return ReplyEngineService(
         chat_repository=ChatRepository(session),
         message_repository=message_repository,
@@ -763,17 +797,23 @@ def _build_reply_service(session: AsyncSession) -> ReplyEngineService:
         persona_guardrails=PersonaGuardrails(),
         reply_examples_retriever=_build_reply_examples_retriever(session),
         reply_refiner=ReplyLLMRefiner(provider_manager=provider_manager),
+        setting_repository=setting_repository,
     )
 
 
 def _build_digest_service(session: AsyncSession) -> DigestEngineService:
+    provider_manager = _build_provider_manager()
+    if isinstance(provider_manager, ProviderManager):
+        provider_manager.setting_repository = SettingRepository(session)
     return DigestEngineService(
         message_repository=MessageRepository(session),
         digest_repository=DigestRepository(session),
         setting_repository=SettingRepository(session),
         builder=DigestBuilder(),
         formatter=DigestFormatter(),
-        digest_refiner=DigestLLMRefiner(provider_manager=_build_provider_manager()),
+        digest_refiner=DigestLLMRefiner(
+            provider_manager=provider_manager,
+        ),
     )
 
 
