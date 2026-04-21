@@ -26,7 +26,9 @@ def test_provider_manager_reports_disabled_mode(monkeypatch) -> None:
     assert "выключ" in status.reason.lower()
 
 
-def test_provider_manager_does_not_crash_without_api_key(monkeypatch) -> None:
+def test_provider_manager_accepts_optional_api_key_for_openai_compatible_provider(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("LLM_ENABLED", "true")
     monkeypatch.setenv("LLM_PROVIDER", "openai_compatible")
     monkeypatch.setenv("LLM_BASE_URL", "https://example.invalid/v1")
@@ -40,11 +42,11 @@ def test_provider_manager_does_not_crash_without_api_key(monkeypatch) -> None:
     status = asyncio.run(manager.get_status())
 
     assert status.enabled is True
-    assert status.configured is False
-    assert status.available is False
-    assert status.reply_refine_available is False
-    assert status.digest_refine_available is False
-    assert "api_key" in status.reason.lower()
+    assert status.configured is True
+    assert status.available is True
+    assert status.reply_refine_available is True
+    assert status.digest_refine_available is True
+    assert "сконфигурирован" in status.reason.lower()
 
 
 def test_reply_refinement_guardrails_accept_good_candidate() -> None:

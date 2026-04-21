@@ -18,7 +18,7 @@ def create_provider(settings: Settings) -> BaseProvider | None:
         return None
     if provider_name not in SUPPORTED_PROVIDER_NAMES:
         return None
-    if not settings.llm_base_url or not settings.llm_api_key:
+    if not settings.llm_base_url:
         return None
     if not settings.llm_model_fast or not settings.llm_model_deep:
         return None

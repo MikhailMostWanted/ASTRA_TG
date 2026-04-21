@@ -169,8 +169,6 @@ class ProviderManager:
             return False, f"Провайдер {provider_name} пока не поддержан."
         if not _normalize(self.settings.llm_base_url):
             return False, "LLM_BASE_URL не задан."
-        if not _normalize(self.settings.llm_api_key):
-            return False, "LLM_API_KEY не задан."
         if not _normalize(self.settings.llm_model_fast):
             return False, "LLM_MODEL_FAST не задан."
         if not _normalize(self.settings.llm_model_deep):

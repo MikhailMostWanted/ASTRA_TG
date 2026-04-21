@@ -12,6 +12,7 @@ from services.providers.models import (
     DigestImproveRequest,
     DigestImprovementCandidate,
     ProviderPrompt,
+    ProviderTask,
     ReplyRefinementCandidate,
     RewriteReplyRequest,
 )
@@ -20,7 +21,7 @@ from services.providers.models import (
 @dataclass(slots=True)
 class OpenAICompatibleProvider(BaseProvider):
     base_url: str
-    api_key: str
+    api_key: str | None
     model_fast: str
     model_deep: str
     timeout_seconds: float = 15.0
@@ -88,7 +89,11 @@ class OpenAICompatibleProvider(BaseProvider):
                 {"role": "system", "content": prompt.system_instructions},
                 {"role": "user", "content": prompt.user_input},
             ],
-            "temperature": 0.2,
+            "temperature": 0.0,
+            "stream": False,
+            "think": False,
+            "reasoning_effort": "none",
+            "max_tokens": _max_tokens_for_task(prompt.task),
         }
         response_payload = await asyncio.to_thread(
             self._request_json,
@@ -105,9 +110,11 @@ class OpenAICompatibleProvider(BaseProvider):
         payload: dict[str, object] | None = None,
     ) -> dict[str, object]:
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
             "Accept": "application/json",
         }
+        api_key = _normalize_text(self.api_key)
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         body: bytes | None = None
         if payload is not None:
             headers["Content-Type"] = "application/json"
@@ -172,6 +179,14 @@ def _extract_completion_text(payload: dict[str, object]) -> str:
         if parts:
             return "\n".join(parts)
     raise ProviderResponseError("Provider вернул пустой completion content.")
+
+
+def _max_tokens_for_task(task: ProviderTask) -> int:
+    if task == ProviderTask.REWRITE_REPLY:
+        return 96
+    if task == ProviderTask.IMPROVE_DIGEST:
+        return 384
+    return 256
 
 
 def _extract_reply_messages(raw_text: str) -> tuple[str, ...]:
