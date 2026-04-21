@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from aiogram import Bot
+
 from config.settings import Settings
 from core.logging import configure_logging
 from services.startup import WorkerStartupService
@@ -8,6 +10,7 @@ from storage.database import DatabaseRuntime, bootstrap_database, build_database
 
 @dataclass(slots=True)
 class WorkerRuntime:
+    bot: Bot | None
     database: DatabaseRuntime
     service: WorkerStartupService
     settings: Settings
@@ -15,6 +18,7 @@ class WorkerRuntime:
 
 def build_worker_runtime(settings: Settings) -> WorkerRuntime:
     return WorkerRuntime(
+        bot=Bot(token=settings.telegram_bot_token) if settings.telegram_bot_token else None,
         database=build_database_runtime(settings),
         service=WorkerStartupService(),
         settings=settings,
@@ -27,9 +31,14 @@ async def run_worker_once(settings: Settings | None = None) -> None:
 
     try:
         await bootstrap_database(runtime.database)
-        await runtime.service.run_once()
+        await runtime.service.run_once(
+            session_factory=runtime.database.session_factory,
+            bot=runtime.bot,
+        )
     finally:
         await runtime.database.dispose()
+        if runtime.bot is not None:
+            await runtime.bot.session.close()
 
 
 async def main() -> None:

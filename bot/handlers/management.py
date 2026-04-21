@@ -4,6 +4,7 @@ from aiogram.filters.command import CommandObject
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from bot.handlers.common import remember_owner_chat_if_private
 from services.chat_memory_builder import ChatMemoryBuilder
 from services.command_parser import BotCommandParser
 from services.digest_builder import DigestBuilder
@@ -36,9 +37,11 @@ from storage.repositories import (
     DigestRepository,
     MessageRepository,
     PersonMemoryRepository,
+    ReminderRepository,
     SettingRepository,
     StyleProfileRepository,
     SystemRepository,
+    TaskRepository,
 )
 
 
@@ -52,6 +55,7 @@ async def handle_status_command(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_status_service(session)
         await message.answer(await service.build_status_message())
 
@@ -62,6 +66,7 @@ async def handle_sources_command(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_status_service(session)
         for response_text in await service.build_sources_messages():
             await message.answer(response_text)
@@ -75,6 +80,7 @@ async def handle_source_add_command(
 ) -> None:
     fallback_source = PARSER.extract_source_candidate(message)
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = SourceRegistryService(
             repository=ChatRepository(session),
             resolver=TelegramChatResolver(message.bot),
@@ -131,6 +137,7 @@ async def handle_digest_target_command(
 ) -> None:
     fallback_source = PARSER.extract_source_candidate(message)
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = DigestTargetService(
             repository=SettingRepository(session),
             resolver=TelegramChatResolver(message.bot),
@@ -155,6 +162,7 @@ async def handle_settings_command(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_status_service(session)
         await message.answer(await service.build_settings_message())
 
@@ -165,6 +173,7 @@ async def handle_persona_status_command(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_persona_service(session)
         formatter = PersonaFormatter()
         report = await service.build_status_report()
@@ -185,6 +194,7 @@ async def handle_reply_command(
         return
 
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_reply_service(session)
         formatter = ReplyFormatter()
         result = await service.build_reply(reference)
@@ -198,6 +208,7 @@ async def handle_style_profiles_command(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_style_service(session)
         formatter = StyleFormatter()
         await message.answer(formatter.format_profiles(await service.list_profiles()))
@@ -210,6 +221,7 @@ async def handle_style_set_command(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_style_service(session)
         formatter = StyleFormatter()
         try:
@@ -240,6 +252,7 @@ async def handle_style_unset_command(
         return
 
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_style_service(session)
         formatter = StyleFormatter()
         try:
@@ -266,6 +279,7 @@ async def handle_style_status_command(
         return
 
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_style_service(session)
         formatter = StyleFormatter()
         try:
@@ -284,6 +298,7 @@ async def handle_digest_now_command(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         digest_repository = DigestRepository(session)
         engine = DigestEngineService(
             message_repository=MessageRepository(session),
@@ -323,6 +338,7 @@ async def handle_memory_rebuild_command(
         )
 
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_memory_service(session)
         try:
             result = await service.rebuild(reference)
@@ -349,6 +365,7 @@ async def handle_chat_memory_command(
         )
 
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_memory_service(session)
         await message.answer(await service.build_chat_memory_card(reference))
 
@@ -362,6 +379,7 @@ async def handle_person_memory_command(
     query = command.args.strip() if command.args and command.args.strip() else None
 
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = _build_memory_service(session)
         await message.answer(await service.build_person_memory_card(query))
 
@@ -381,6 +399,7 @@ async def _handle_source_toggle(
         return
 
     async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
         service = SourceRegistryService(
             repository=ChatRepository(session),
             resolver=TelegramChatResolver(message.bot),
@@ -406,6 +425,8 @@ def _build_status_service(session: AsyncSession) -> BotStatusService:
         person_memory_repository=PersonMemoryRepository(session),
         style_profile_repository=StyleProfileRepository(session),
         chat_style_override_repository=ChatStyleOverrideRepository(session),
+        task_repository=TaskRepository(session),
+        reminder_repository=ReminderRepository(session),
     )
 
 

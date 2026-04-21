@@ -1,4 +1,4 @@
 def list_registered_jobs() -> tuple[str, ...]:
-    """TODO: register digest/memory/reply/reminder jobs here."""
+    """Список реально подключённых worker-задач."""
 
-    return ()
+    return ("reminder_delivery",)

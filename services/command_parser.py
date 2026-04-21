@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass
 
@@ -34,6 +35,12 @@ class ParsedDigestTargetCommand:
 class ParsedStyleSetCommand:
     reference: str
     profile_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class ParsedReminderScanCommand:
+    window_argument: str | None
+    reference: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +118,32 @@ class BotCommandParser:
         return ParsedStyleSetCommand(
             reference=tokens[0],
             profile_key=tokens[1].strip().lower(),
+        )
+
+    def parse_reminder_scan_arguments(self, args: str | None) -> ParsedReminderScanCommand:
+        tokens = _split_command_arguments(args)
+        if len(tokens) > 2:
+            raise ValueError(
+                "Для /reminders_scan поддержаны окно вида 24h/3d и необязательный chat_id или @username. "
+                "Примеры: /reminders_scan, /reminders_scan 24h, /reminders_scan 3d @mychat"
+            )
+
+        window_argument = None
+        reference = None
+        for token in tokens:
+            if _looks_like_window(token):
+                if window_argument is not None:
+                    raise ValueError("Окно reminders_scan можно указать только один раз.")
+                window_argument = token.strip().lower()
+                continue
+
+            if reference is not None:
+                raise ValueError("Источник reminders_scan можно указать только один раз.")
+            reference = token
+
+        return ParsedReminderScanCommand(
+            window_argument=window_argument,
+            reference=reference,
         )
 
     def parse_required_reference(self, args: str | None, *, command_name: str) -> str:
@@ -205,3 +238,7 @@ def _resolve_chat_title(chat: object) -> str:
 
     chat_id = getattr(chat, "id", None)
     return f"Источник {chat_id}"
+
+
+def _looks_like_window(value: str) -> bool:
+    return re.fullmatch(r"\d+[hd]", value.strip().lower()) is not None

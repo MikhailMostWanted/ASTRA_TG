@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from services.bot_owner import BotOwnerService
 from services.digest_target import DigestTargetService
 from services.digest_window import parse_digest_window
 from services.persona_core import PersonaCoreService
@@ -13,9 +14,11 @@ from storage.repositories import (
     DigestRepository,
     MessageRepository,
     PersonMemoryRepository,
+    ReminderRepository,
     SettingRepository,
     StyleProfileRepository,
     SystemRepository,
+    TaskRepository,
 )
 
 
@@ -30,6 +33,8 @@ class BotStatusService:
     person_memory_repository: PersonMemoryRepository
     style_profile_repository: StyleProfileRepository
     chat_style_override_repository: ChatStyleOverrideRepository
+    task_repository: TaskRepository | None = None
+    reminder_repository: ReminderRepository | None = None
 
     async def build_status_message(self) -> str:
         total_sources = await self.chat_repository.count_chats()
@@ -45,6 +50,26 @@ class BotStatusService:
         total_people_memory = await self.person_memory_repository.count_people_memory()
         total_style_profiles = await self.style_profile_repository.count_profiles()
         total_style_overrides = await self.chat_style_override_repository.count_overrides()
+        candidate_tasks = (
+            await self.task_repository.count_candidates()
+            if self.task_repository is not None
+            else 0
+        )
+        confirmed_tasks = (
+            await self.task_repository.count_confirmed()
+            if self.task_repository is not None
+            else 0
+        )
+        active_reminders = (
+            await self.reminder_repository.count_active_reminders()
+            if self.reminder_repository is not None
+            else 0
+        )
+        last_reminder_notification = (
+            await self.reminder_repository.get_last_notification_at()
+            if self.reminder_repository is not None
+            else None
+        )
         persona_state = await PersonaCoreService(self.setting_repository).load_state()
         last_memory_rebuild = await self.setting_repository.get_value("memory.last_rebuild_at")
         if last_memory_rebuild is None:
@@ -53,6 +78,7 @@ class BotStatusService:
                 or await self.person_memory_repository.get_last_updated_at()
             )
         digest_target = await DigestTargetService(self.setting_repository).get_target()
+        owner_chat_id = await BotOwnerService(self.setting_repository).get_owner_chat_id()
         schema_revision = await self.system_repository.get_schema_revision()
         digest_window = parse_digest_window(None)
         digest_window_counts = await self.message_repository.count_messages_by_digest_chat(
@@ -85,6 +111,12 @@ class BotStatusService:
             f"Memory-карт чатов: {total_chat_memory}",
             f"Memory-карт людей: {total_people_memory}",
             "Reply layer: готов",
+            "Reminder layer: готов" if owner_chat_id is not None else "Reminder layer: не готов",
+            f"Кандидатных задач: {candidate_tasks}",
+            f"Подтверждено задач: {confirmed_tasks}",
+            f"Активных reminders: {active_reminders}",
+            f"Последнее reminder-уведомление: {_format_timestamp(last_reminder_notification)}",
+            f"bot.owner_chat_id: {owner_chat_id if owner_chat_id is not None else 'не задан'}",
             "Style-слой: готов" if total_style_profiles >= 6 else "Style-слой: не готов",
             "Persona-слой: готов" if persona_state.core_loaded else "Persona-слой: не готов",
             (
@@ -134,12 +166,14 @@ class BotStatusService:
 
     async def build_settings_message(self) -> str:
         digest_target = await DigestTargetService(self.setting_repository).get_target()
+        owner_chat_id = await BotOwnerService(self.setting_repository).get_owner_chat_id()
         lines = [
             "Базовые настройки Astra AFT",
             "",
             f"digest_target_chat_id: {digest_target.chat_id if digest_target.chat_id is not None else 'не задан'}",
             f"digest_target_label: {digest_target.label or 'не задан'}",
             f"digest_target_type: {digest_target.chat_type or 'не задан'}",
+            f"bot.owner_chat_id: {owner_chat_id if owner_chat_id is not None else 'не задан'}",
         ]
         return "\n".join(lines)
 

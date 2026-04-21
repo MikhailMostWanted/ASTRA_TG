@@ -9,6 +9,7 @@ Astra AFT — локальный MVP Telegram-ассистента. Репози
 - первый локальный digest MVP без LLM поверх уже сохранённых сообщений.
 - первый локальный memory MVP по чатам и людям поверх уже сохранённых сообщений.
 - первый локальный reply coach MVP по уже сохранённым сообщениям и memory-картам.
+- первый локальный reminders MVP с подтверждением кандидатов и доставкой из worker.
 
 ## Стек
 
@@ -56,6 +57,9 @@ python -m apps.bot
 - `/start` — короткий онбординг и порядок первого запуска.
 - `/help` — список доступных команд.
 - `/status` — техническая сводка по состоянию проекта и ingest-метрикам.
+- `/reminders_scan [24h|3d] [chat_id|@username]` — просканировать локальные сообщения на задачи и reminders-кандидаты.
+- `/tasks` — показать активные задачи.
+- `/reminders` — показать активные reminders.
 - `/sources` — все зарегистрированные источники из allowlist со статистикой сообщений.
 - `/source_add <chat_id|@username>` — добавить источник в allowlist.
 - `/source_disable <chat_id|@username>` — выключить источник.
@@ -171,6 +175,35 @@ python -m apps.bot
 - показывать `persona_notes`, guardrail-флаги и финальную persona-aware серию в preview;
 - честно говорить, если чата нет, данных пока мало или последнее сохранённое сообщение уже от пользователя.
 
+## Reminder MVP
+
+Теперь поверх локальной БД подключён первый реальный reminder/task flow без LLM:
+
+- `/reminders_scan` читает только уже сохранённые `messages` из активных источников;
+- источники с `exclude_from_memory = true` в scan не участвуют;
+- extractor работает детерминированно и ищет прозрачные сигналы вроде `напомни`, `не забудь`, `созвонимся`, `скину`, `надо`, `дедлайн`, `HH:MM`, `завтра`, `через час`, `вечером`;
+- scan не создаёт активные reminders молча: бот показывает candidate-card с inline-кнопками `Одобрить`, `Отменить`, `Позже`;
+- после подтверждения сущности сохраняются в `tasks` и `reminders`, а worker доставляет due reminders в `bot.owner_chat_id`.
+
+Поддержанные сценарии:
+
+- `/reminders_scan`
+- `/reminders_scan 24h`
+- `/reminders_scan 3d`
+- `/reminders_scan @mychannel`
+- `/tasks`
+- `/reminders`
+
+### Как получить первое рабочее напоминание
+
+1. Запусти бота и напиши ему в личку хотя бы `/start` или `/status`, чтобы сохранился `bot.owner_chat_id`.
+2. Добавь нужный источник через `/source_add <chat_id|@username>`.
+3. Накопи в разрешённом источнике сообщения с явными reminder-сигналами.
+4. Вызови `/reminders_scan` или `/reminders_scan 24h`.
+5. Подтверди найденную карточку кнопкой `Одобрить` или `Позже`.
+6. Запусти worker через `python -m apps.worker`, когда reminder станет due.
+7. Проверь `/tasks`, `/reminders` и `/status`.
+
 ### Style layer MVP
 
 Встроенные style-профили:
@@ -218,6 +251,7 @@ alembic revision -m "описание изменения"
 - Сервисный ingest находится в `services/message_ingest.py`, а нормализация входящих сообщений — в `services/message_normalizer.py`.
 - Memory-сервисы лежат в `services/memory_builder.py`, `services/chat_memory_builder.py`, `services/people_memory_builder.py` и `services/memory_formatter.py`.
 - Reply-сервисы лежат в `services/reply_context_builder.py`, `services/reply_classifier.py`, `services/reply_strategy.py`, `services/reply_engine.py` и `services/reply_formatter.py`.
+- Reminder-сервисы лежат в `services/reminder_extractor.py`, `services/reminder_service.py`, `services/reminder_formatter.py` и `services/reminder_delivery.py`.
 - Persona-сервисы лежат в `services/persona_rules.py`, `services/persona_core.py`, `services/persona_adapter.py`, `services/persona_guardrails.py` и `services/persona_formatter.py`.
 
 ## Текущее покрытие
@@ -235,6 +269,7 @@ alembic revision -m "описание изменения"
 - локальный reply coach MVP по чатам из локальной БД и memory-карт,
 - первый детерминированный style layer с профилями и chat-specific override,
 - первый owner persona core поверх style layer с guardrails и `/persona_status`,
+- первый детерминированный reminder extraction layer с candidate-card и worker delivery,
 - тонкая обвязка bot/worker,
 - первая реальная миграция локальной схемы хранения.
 
@@ -243,7 +278,7 @@ alembic revision -m "описание изменения"
 - внешний provider layer для reply,
 - style cloning личности,
 - автоответ или one-tap send,
-- извлечение reminder/task из сообщений,
+- закрытие задач, повторяющиеся reminders и календарная интеграция,
 - полноценная синхронизация источников Telegram,
 - бизнес-логика для `business/` и `fullaccess/`.
 
@@ -287,7 +322,7 @@ python -m apps.bot
 
 Если данных пока мало, бот честно скажет об этом и не будет придумывать reply из воздуха.
 
-## Как проверить ingest, memory, reply и digest вручную
+## Как проверить ingest, memory, reply, reminders и digest вручную
 
 1. Примени миграции и запусти бота:
 
@@ -326,6 +361,13 @@ python -m apps.bot
 - если локального контекста уже хватает, бот вернёт короткий draft, объяснение, риск и уверенность;
 - если последнее сообщение уже твоё или контекста мало, бот честно сообщит об этом.
 
+9. Проверь reminders:
+
+- вызови `/reminders_scan` или `/reminders_scan 24h`;
+- подтверди candidate-card через inline-кнопку;
+- проверь `/tasks` и `/reminders`;
+- затем запусти `python -m apps.worker` и дождись due reminder packet в личке бота.
+
 Пример быстрой проверки базы:
 
 ```bash
@@ -349,4 +391,11 @@ sqlite3 var/astra.db "SELECT person_key, display_name, importance_score, updated
 ```bash
 sqlite3 var/astra.db "SELECT id, window_start, window_end, summary_short, delivered_to_chat_id, delivered_message_id FROM digests ORDER BY id DESC LIMIT 5;"
 sqlite3 var/astra.db "SELECT digest_id, source_chat_id, title, summary FROM digest_items ORDER BY digest_id DESC, sort_order ASC LIMIT 20;"
+```
+
+Проверка задач и reminders:
+
+```bash
+sqlite3 var/astra.db "SELECT id, source_chat_id, source_message_id, title, status, due_at, suggested_remind_at, needs_user_confirmation FROM tasks ORDER BY id DESC LIMIT 10;"
+sqlite3 var/astra.db "SELECT id, task_id, remind_at, status, last_notification_at FROM reminders ORDER BY id DESC LIMIT 10;"
 ```

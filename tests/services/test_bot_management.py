@@ -20,9 +20,11 @@ from storage.repositories import (
     DigestRepository,
     MessageRepository,
     PersonMemoryRepository,
+    ReminderRepository,
     SettingRepository,
     StyleProfileRepository,
     SystemRepository,
+    TaskRepository,
 )
 
 
@@ -146,6 +148,8 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
                 people_memory,
                 StyleProfileRepository(session),
                 ChatStyleOverrideRepository(session),
+                TaskRepository(session),
+                ReminderRepository(session),
             )
 
             add_result = await source_service.register_source(
@@ -229,6 +233,12 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             assert "Memory-карт чатов: 0" in status_text
             assert "Memory-карт людей: 0" in status_text
             assert "Reply layer: готов" in status_text
+            assert "Reminder layer: не готов" in status_text
+            assert "Кандидатных задач: 0" in status_text
+            assert "Подтверждено задач: 0" in status_text
+            assert "Активных reminders: 0" in status_text
+            assert "Последнее reminder-уведомление: ещё нет" in status_text
+            assert "bot.owner_chat_id: не задан" in status_text
             assert "Style-слой: готов" in status_text
             assert "Persona-слой: готов" in status_text
             assert "Persona-guardrails: активны" in status_text

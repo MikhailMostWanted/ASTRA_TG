@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты и reply coach по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис: сначала safe draft, потом style layer, а теперь ещё и детерминированный owner persona layer с guardrails. Provider layer, deeper few-shot persona и reminders остаются следующими шагами.
+Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты, reply coach и reminders по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис: сначала safe draft, потом style layer, а теперь ещё и детерминированный owner persona layer с guardrails. Reminder слой тоже уже подключён как локальный детерминированный pipeline: scan по сохранённым сообщениям, подтверждение кандидатов и доставка due reminders через worker.
 
 ## Зоны ответственности модулей
 
@@ -10,7 +10,7 @@
 - `bot/` содержит aiogram routing и тонкие Telegram-handlers.
 - `bot/` теперь также даёт Telegram-интерфейс для управления allowlist источников, базовыми настройками digest и приёма входящих updates для ingest.
 - `worker/` содержит точки входа для фонового bootstrap/run-once сценария.
-- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine, style layer, persona layer и статусные сводки.
+- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine, style layer, persona layer, reminder extraction/delivery и статусные сводки.
 - `config/` содержит общие настройки из окружения.
 - `storage/` содержит SQLAlchemy runtime, bootstrap через Alembic и репозитории доступа к данным.
 - `models/` содержит ORM-схему SQLite для MVP-сущностей.
@@ -52,13 +52,27 @@
 
 Ключевой принцип этого слоя: digest вызывается только по локальной SQLite-БД. В момент `/digest_now` бот не читает Telegram напрямую, а работает по уже накопленным данным из `messages`.
 
+## Reminder pipeline
+
+Первый рабочий reminder MVP теперь устроен так:
+
+- `bot/handlers/reminders.py` подключает `/reminders_scan`, `/tasks`, `/reminders` и callback flow для inline-кнопок;
+- `services/reminder_window.py` разбирает scan-окна вида `24h` и `3d`;
+- `services/reminder_extractor.py` детерминированно ищет сигналы задач и reminders только по локальным сообщениям, без LLM;
+- `services/reminder_service.py` оркестрирует scan, сохранение candidate task/reminder, approve/reject/postpone и выдачу списков;
+- `services/reminder_formatter.py` отвечает за candidate-card, списки, callback payload и reminder packet;
+- `services/reminder_delivery.py` используется worker’ом, чтобы взять due reminders, отправить packet в `bot.owner_chat_id` и перевести reminder в доставленное состояние;
+- `storage/repositories.py` теперь даёт отдельные репозитории для `tasks` и `reminders`, а также выборки сообщений под reminder scan.
+
+Ключевой принцип этого слоя: напоминания строятся только по локальной SQLite-БД и никогда не создаются как боевые silently. Сначала пользователь видит candidate-card и явно подтверждает её через inline-кнопку.
+
 ## Ближайшее развитие
 
-- Продолжать использовать bot layer для управления allowlist, digest target и ручным запуском digest, пока нет scheduler-слоя.
+- Продолжать использовать bot layer для управления allowlist, digest target и reminders, пока нет scheduler-слоя.
 - Memory слой строить только поверх уже сохранённых `messages` и `chats`, без прямого чтения Telegram в момент rebuild.
-- Расширять миграции и репозитории постепенно, когда станут реальными workflows для digest/memory/reminders.
+- Расширять reminder-эвристики и сценарии закрытия задач постепенно, без попытки делать “идеальный planner”.
 - Переиспользовать `messages` и `messages_fts` для будущего поиска, retrieval и digest-selection сценариев.
-- Добавлять reminder, memory и reply-модули как отдельные сервисы, а не как код внутри handlers.
+- Добавлять новые workflows как отдельные сервисы, а не как код внутри handlers.
 
 ## Memory pipeline
 

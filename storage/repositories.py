@@ -18,8 +18,10 @@ from models import (
     DigestItem,
     Message,
     PersonMemory,
+    Reminder,
     Setting,
     StyleProfile,
+    Task,
 )
 
 
@@ -472,6 +474,33 @@ class MessageRepository:
         )
         return int(result.scalar_one())
 
+    async def get_messages_for_reminder_scan(
+        self,
+        *,
+        window_start: datetime,
+        window_end: datetime,
+        chat_id: int | None = None,
+    ) -> list[ChatMessageRecord]:
+        statement = (
+            select(Message, Chat)
+            .join(Chat, Message.chat_id == Chat.id)
+            .where(
+                Chat.is_enabled.is_(True),
+                Chat.exclude_from_memory.is_(False),
+                Message.sent_at >= window_start,
+                Message.sent_at <= window_end,
+            )
+            .order_by(desc(Message.sent_at), desc(Message.id))
+        )
+        if chat_id is not None:
+            statement = statement.where(Chat.id == chat_id)
+
+        result = await self.session.execute(statement)
+        return [
+            ChatMessageRecord(chat=chat, message=message)
+            for message, chat in result.all()
+        ]
+
 
 @dataclass(slots=True)
 class DigestRepository:
@@ -551,6 +580,307 @@ class DigestRepository:
         digest.delivered_message_id = delivered_message_id
         await self.session.flush()
         return digest
+
+
+@dataclass(slots=True)
+class TaskRepository:
+    session: AsyncSession
+
+    async def create_task(
+        self,
+        *,
+        source_chat_id: int | None,
+        source_message_id: int | None,
+        title: str,
+        summary: str,
+        due_at: datetime | None,
+        suggested_remind_at: datetime | None,
+        status: str,
+        confidence: float,
+        needs_user_confirmation: bool,
+    ) -> Task:
+        task = Task(
+            source_chat_id=source_chat_id,
+            source_message_id=source_message_id,
+            title=title,
+            summary=summary,
+            due_at=due_at,
+            suggested_remind_at=suggested_remind_at,
+            status=status,
+            confidence=confidence,
+            needs_user_confirmation=needs_user_confirmation,
+        )
+        self.session.add(task)
+        await self.session.flush()
+        return task
+
+    async def get_task(self, task_id: int) -> Task | None:
+        result = await self.session.execute(
+            select(Task)
+            .options(
+                selectinload(Task.source_chat),
+                selectinload(Task.source_message),
+                selectinload(Task.reminders),
+            )
+            .where(Task.id == task_id)
+        )
+        return _normalize_task_instance(result.scalar_one_or_none())
+
+    async def get_by_source_message_id(self, source_message_id: int) -> Task | None:
+        result = await self.session.execute(
+            select(Task)
+            .options(
+                selectinload(Task.source_chat),
+                selectinload(Task.source_message),
+                selectinload(Task.reminders),
+            )
+            .where(Task.source_message_id == source_message_id)
+            .order_by(desc(Task.updated_at), desc(Task.id))
+            .limit(1)
+        )
+        return _normalize_task_instance(result.scalar_one_or_none())
+
+    async def upsert_candidate(
+        self,
+        *,
+        source_chat_id: int,
+        source_message_id: int,
+        title: str,
+        summary: str,
+        due_at: datetime | None,
+        suggested_remind_at: datetime | None,
+        confidence: float,
+    ) -> tuple[Task, bool]:
+        existing = await self.get_by_source_message_id(source_message_id)
+        if existing is None:
+            task = await self.create_task(
+                source_chat_id=source_chat_id,
+                source_message_id=source_message_id,
+                title=title,
+                summary=summary,
+                due_at=due_at,
+                suggested_remind_at=suggested_remind_at,
+                status="candidate",
+                confidence=confidence,
+                needs_user_confirmation=True,
+            )
+            return task, True
+
+        existing.source_chat_id = source_chat_id
+        existing.title = title
+        existing.summary = summary
+        existing.due_at = due_at
+        existing.suggested_remind_at = suggested_remind_at
+        existing.confidence = confidence
+        existing.status = "candidate"
+        existing.needs_user_confirmation = True
+        await self.session.flush()
+        return existing, False
+
+    async def set_status(
+        self,
+        task_id: int,
+        *,
+        status: str,
+        needs_user_confirmation: bool,
+    ) -> Task | None:
+        task = await self.get_task(task_id)
+        if task is None:
+            return None
+        task.status = status
+        task.needs_user_confirmation = needs_user_confirmation
+        await self.session.flush()
+        return task
+
+    async def list_candidates(self) -> list[Task]:
+        result = await self.session.execute(
+            select(Task)
+            .options(
+                selectinload(Task.source_chat),
+                selectinload(Task.source_message),
+                selectinload(Task.reminders),
+            )
+            .where(Task.status == "candidate")
+            .order_by(Task.id)
+        )
+        return [_normalize_task_instance(task) for task in result.scalars().all()]
+
+    async def list_active_tasks(self) -> list[Task]:
+        result = await self.session.execute(
+            select(Task)
+            .options(
+                selectinload(Task.source_chat),
+                selectinload(Task.source_message),
+                selectinload(Task.reminders),
+            )
+            .where(Task.status == "active")
+            .order_by(Task.due_at.is_(None), Task.due_at, Task.id)
+        )
+        return [_normalize_task_instance(task) for task in result.scalars().all()]
+
+    async def count_candidates(self) -> int:
+        result = await self.session.execute(
+            select(func.count()).select_from(Task).where(Task.status == "candidate")
+        )
+        return int(result.scalar_one())
+
+    async def count_confirmed(self) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(Task)
+            .where(Task.needs_user_confirmation.is_(False))
+        )
+        return int(result.scalar_one())
+
+
+@dataclass(slots=True)
+class ReminderRepository:
+    session: AsyncSession
+
+    async def create_reminder(
+        self,
+        *,
+        task_id: int | None,
+        remind_at: datetime,
+        status: str,
+        payload_json: dict[str, Any] | list[Any] | None = None,
+    ) -> Reminder:
+        reminder = Reminder(
+            task_id=task_id,
+            remind_at=remind_at,
+            status=status,
+            payload_json=payload_json,
+        )
+        self.session.add(reminder)
+        await self.session.flush()
+        return reminder
+
+    async def get_reminder(self, reminder_id: int) -> Reminder | None:
+        result = await self.session.execute(
+            select(Reminder)
+            .options(
+                selectinload(Reminder.task).selectinload(Task.source_chat),
+                selectinload(Reminder.task).selectinload(Task.source_message),
+            )
+            .where(Reminder.id == reminder_id)
+        )
+        return _normalize_reminder_instance(result.scalar_one_or_none())
+
+    async def get_by_task_id(self, task_id: int) -> Reminder | None:
+        result = await self.session.execute(
+            select(Reminder)
+            .options(
+                selectinload(Reminder.task).selectinload(Task.source_chat),
+                selectinload(Reminder.task).selectinload(Task.source_message),
+            )
+            .where(Reminder.task_id == task_id)
+            .order_by(desc(Reminder.updated_at), desc(Reminder.id))
+            .limit(1)
+        )
+        return _normalize_reminder_instance(result.scalar_one_or_none())
+
+    async def upsert_candidate_for_task(
+        self,
+        *,
+        task_id: int,
+        remind_at: datetime,
+        payload_json: dict[str, Any] | list[Any] | None,
+    ) -> Reminder:
+        reminder = await self.get_by_task_id(task_id)
+        if reminder is None:
+            return await self.create_reminder(
+                task_id=task_id,
+                remind_at=remind_at,
+                status="candidate",
+                payload_json=payload_json,
+            )
+
+        reminder.remind_at = remind_at
+        reminder.status = "candidate"
+        reminder.payload_json = payload_json
+        reminder.last_notification_at = None
+        await self.session.flush()
+        return reminder
+
+    async def set_status(
+        self,
+        reminder_id: int,
+        *,
+        status: str,
+        remind_at: datetime | _Unset = UNSET,
+    ) -> Reminder | None:
+        reminder = await self.get_reminder(reminder_id)
+        if reminder is None:
+            return None
+
+        reminder.status = status
+        if remind_at is not UNSET:
+            reminder.remind_at = remind_at
+        await self.session.flush()
+        return reminder
+
+    async def list_active_reminders(self) -> list[Reminder]:
+        result = await self.session.execute(
+            select(Reminder)
+            .options(
+                selectinload(Reminder.task).selectinload(Task.source_chat),
+                selectinload(Reminder.task).selectinload(Task.source_message),
+            )
+            .where(Reminder.status == "active")
+            .order_by(Reminder.remind_at, Reminder.id)
+        )
+        return [_normalize_reminder_instance(reminder) for reminder in result.scalars().all()]
+
+    async def get_due_reminders(self, now: datetime) -> list[Reminder]:
+        result = await self.session.execute(
+            select(Reminder)
+            .options(
+                selectinload(Reminder.task).selectinload(Task.source_chat),
+                selectinload(Reminder.task).selectinload(Task.source_message),
+            )
+            .where(
+                Reminder.status == "active",
+                Reminder.remind_at <= now,
+            )
+            .order_by(Reminder.remind_at, Reminder.id)
+        )
+        return [_normalize_reminder_instance(reminder) for reminder in result.scalars().all()]
+
+    async def mark_delivered(
+        self,
+        reminder_id: int,
+        *,
+        delivered_at: datetime,
+    ) -> Reminder | None:
+        reminder = await self.get_reminder(reminder_id)
+        if reminder is None:
+            return None
+
+        reminder.status = "delivered"
+        reminder.last_notification_at = delivered_at
+        await self.session.flush()
+        return reminder
+
+    async def list_all(self) -> list[Reminder]:
+        result = await self.session.execute(
+            select(Reminder)
+            .options(
+                selectinload(Reminder.task).selectinload(Task.source_chat),
+                selectinload(Reminder.task).selectinload(Task.source_message),
+            )
+            .order_by(Reminder.id)
+        )
+        return [_normalize_reminder_instance(reminder) for reminder in result.scalars().all()]
+
+    async def count_active_reminders(self) -> int:
+        result = await self.session.execute(
+            select(func.count()).select_from(Reminder).where(Reminder.status == "active")
+        )
+        return int(result.scalar_one())
+
+    async def get_last_notification_at(self) -> datetime | None:
+        result = await self.session.execute(select(func.max(Reminder.last_notification_at)))
+        return result.scalar_one_or_none()
 
 
 @dataclass(slots=True)
@@ -929,3 +1259,36 @@ def _person_matches_query(person: PersonMemory, lowered_query: str, lowered_hand
         or lowered_display_name.startswith(lowered_query)
         or lowered_display_name.startswith(f"@{lowered_handle}")
     )
+
+
+def _normalize_task_instance(task: Task | None) -> Task | None:
+    if task is None:
+        return None
+
+    task.due_at = _normalize_datetime(task.due_at)
+    task.suggested_remind_at = _normalize_datetime(task.suggested_remind_at)
+    task.created_at = _normalize_datetime(task.created_at) or task.created_at
+    task.updated_at = _normalize_datetime(task.updated_at) or task.updated_at
+    if "source_message" in task.__dict__ and task.source_message is not None:
+        task.source_message.sent_at = _normalize_datetime(task.source_message.sent_at) or task.source_message.sent_at
+        task.source_message.created_at = _normalize_datetime(task.source_message.created_at) or task.source_message.created_at
+    return task
+
+
+def _normalize_reminder_instance(reminder: Reminder | None) -> Reminder | None:
+    if reminder is None:
+        return None
+
+    reminder.remind_at = _normalize_datetime(reminder.remind_at) or reminder.remind_at
+    reminder.last_notification_at = _normalize_datetime(reminder.last_notification_at)
+    reminder.created_at = _normalize_datetime(reminder.created_at) or reminder.created_at
+    reminder.updated_at = _normalize_datetime(reminder.updated_at) or reminder.updated_at
+    return reminder
+
+
+def _normalize_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
