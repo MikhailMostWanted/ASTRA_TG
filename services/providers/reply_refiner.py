@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from services.providers.guardrails import ReplyRefinementDecision, ReplyRefinementGuardrails
+from services.providers.guardrails import ReplyRefinementGuardrails
 from services.providers.manager import ProviderManager
 from services.providers.models import ReplyRefinementCandidate
 from services.providers.prompts import build_reply_refine_request

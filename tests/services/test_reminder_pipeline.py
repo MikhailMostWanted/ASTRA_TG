@@ -174,6 +174,7 @@ def test_reminder_scan_and_candidate_decisions(monkeypatch, tmp_path: Path) -> N
             assert reject_result.reminder.status == "dismissed"
             assert postpone_result.task.status == "active"
             assert postpone_result.reminder.status == "active"
+            assert postpone_result.original_remind_at is not None
             assert postpone_result.reminder.remind_at > postpone_result.original_remind_at
 
         await runtime.dispose()

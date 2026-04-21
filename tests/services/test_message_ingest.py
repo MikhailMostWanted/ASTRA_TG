@@ -146,6 +146,7 @@ def test_ingest_saves_message_from_allowed_source(monkeypatch, tmp_path: Path) -
             await session.commit()
 
             assert root_result.action == "created"
+            assert root_result.message is not None
             assert result.action == "created"
             assert result.message is not None
             assert result.message.chat_id == chat.id
@@ -283,10 +284,10 @@ def test_ingest_updates_duplicate_message_without_creating_duplicate(
             )
             await session.commit()
 
-            recent_messages = await messages.get_recent_messages(chat_id=first_result.message.chat_id)
-
             assert first_result.action == "created"
+            assert first_result.message is not None
             assert second_result.action == "updated"
+            recent_messages = await messages.get_recent_messages(chat_id=first_result.message.chat_id)
             assert await messages.count_messages() == 1
             assert len(recent_messages) == 1
             assert recent_messages[0].raw_text == "  Вторая   версия  "

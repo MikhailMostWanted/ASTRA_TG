@@ -1,6 +1,8 @@
 from dataclasses import dataclass
+from typing import Protocol
 
 from aiogram import Bot, Dispatcher
+from aiogram.types import BotCommand
 
 from bot.router import build_dispatcher
 from config.settings import Settings
@@ -11,6 +13,10 @@ from storage.database import DatabaseRuntime, bootstrap_database, build_database
 
 
 LOGGER = get_logger(__name__)
+
+
+class BotCommandsConfiguratorProtocol(Protocol):
+    async def set_my_commands(self, commands: list[BotCommand]) -> object: ...
 
 
 @dataclass(slots=True)
@@ -101,5 +107,5 @@ async def main() -> None:
     await run_bot()
 
 
-async def configure_bot_commands(bot: Bot) -> None:
+async def configure_bot_commands(bot: BotCommandsConfiguratorProtocol) -> None:
     await bot.set_my_commands(build_bot_commands())

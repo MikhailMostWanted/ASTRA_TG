@@ -1,4 +1,6 @@
-from aiogram import Router
+from typing import cast
+
+from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.filters.command import CommandObject
 from aiogram.types import Message
@@ -12,7 +14,7 @@ from fullaccess.sync import FullAccessSyncService
 from services.chat_memory_builder import ChatMemoryBuilder
 from services.command_parser import BotCommandParser
 from services.digest_builder import DigestBuilder
-from services.digest_engine import DigestEngineService, DigestPublisherService
+from services.digest_engine import DigestEngineService, DigestPublisherService, MessageSenderProtocol
 from services.digest_formatter import DigestFormatter
 from services.digest_target import DigestTargetService
 from services.memory_builder import MemoryService
@@ -33,6 +35,7 @@ from services.reply_examples_formatter import ReplyExamplesFormatter
 from services.reply_examples_retriever import ReplyExamplesRetriever
 from services.error_handling import user_safe_handler
 from services.reply_formatter import ReplyFormatter
+from services.reply_models import ReplyContextIssue
 from services.reply_strategy import ReplyStrategyResolver
 from services.style_adapter import StyleAdapter
 from services.style_formatter import StyleFormatter
@@ -242,7 +245,7 @@ async def handle_source_add_command(
         await remember_owner_chat_if_private(message, session)
         service = SourceRegistryService(
             repository=ChatRepository(session),
-            resolver=TelegramChatResolver(message.bot),
+            resolver=TelegramChatResolver(_require_aiogram_bot(message.bot)),
         )
         try:
             result = await service.register_source(
@@ -302,7 +305,7 @@ async def handle_digest_target_command(
         await remember_owner_chat_if_private(message, session)
         service = DigestTargetService(
             repository=SettingRepository(session),
-            resolver=TelegramChatResolver(message.bot),
+            resolver=TelegramChatResolver(_require_aiogram_bot(message.bot)),
         )
         try:
             result = await service.set_target(
@@ -448,7 +451,7 @@ async def handle_reply_examples_command(
 
         context_or_issue = _build_reply_context_builder(session).build(chat)
         context_or_issue = await context_or_issue
-        if hasattr(context_or_issue, "code"):
+        if isinstance(context_or_issue, ReplyContextIssue):
             await message.answer(context_or_issue.message)
             return
 
@@ -578,7 +581,7 @@ async def handle_digest_now_command(
         publish_result = await DigestPublisherService(digest_repository).publish(
             plan=plan,
             preview_chat_id=message.chat.id,
-            sender=message.bot,
+            sender=_require_message_sender(message.bot),
         )
         await session.commit()
 
@@ -609,7 +612,7 @@ async def handle_digest_llm_command(
         publish_result = await DigestPublisherService(digest_repository).publish(
             plan=plan,
             preview_chat_id=message.chat.id,
-            sender=message.bot,
+            sender=_require_message_sender(message.bot),
         )
         await session.commit()
 
@@ -701,7 +704,7 @@ async def _handle_source_toggle(
         await remember_owner_chat_if_private(message, session)
         service = SourceRegistryService(
             repository=ChatRepository(session),
-            resolver=TelegramChatResolver(message.bot),
+            resolver=TelegramChatResolver(_require_aiogram_bot(message.bot)),
         )
         result = await service.set_source_enabled(reference, is_enabled=is_enabled)
         if result is None:
@@ -731,6 +734,18 @@ def _build_status_service(session: AsyncSession) -> BotStatusService:
         provider_manager=_build_provider_manager(),
         fullaccess_auth_service=_build_fullaccess_auth_service(session),
     )
+
+
+def _require_aiogram_bot(bot: Bot | None) -> Bot:
+    if bot is None:
+        raise RuntimeError("Aiogram bot недоступен в текущем апдейте.")
+    return bot
+
+
+def _require_message_sender(bot: Bot | None) -> MessageSenderProtocol:
+    if bot is None:
+        raise RuntimeError("Aiogram bot недоступен в текущем апдейте.")
+    return cast(MessageSenderProtocol, bot)
 
 
 def _build_fullaccess_auth_service(session: AsyncSession) -> FullAccessAuthService:

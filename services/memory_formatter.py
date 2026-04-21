@@ -37,7 +37,7 @@ class MemoryFormatter:
                 [str(item) for item in (memory.pending_tasks_json or [])],
                 empty_text="явных хвостов пока нет",
             ),
-            _format_people_section(memory.linked_people_json or []),
+            _format_people_section(_coerce_people_items(memory.linked_people_json)),
             _format_string_section(
                 "Напряжённые сигналы",
                 [str(item) for item in (memory.recent_conflicts_json or [])],
@@ -148,6 +148,12 @@ def _format_people_section(items: Sequence[dict[str, Any]]) -> str:
             continue
         lines.append(f"• {display_name} — {message_count} сообщ.")
     return "\n".join(lines)
+
+
+def _coerce_people_items(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _human_chat_type(chat_type: str) -> str:

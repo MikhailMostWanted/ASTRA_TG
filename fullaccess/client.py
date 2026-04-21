@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from fullaccess.models import FullAccessChatSummary, FullAccessConfig, FullAccessRemoteMessage
 from services.message_normalizer import normalize_text
@@ -53,6 +53,47 @@ class FullAccessClientProtocol(Protocol):
 
 
 FullAccessClientFactory = Callable[[FullAccessConfig], FullAccessClientProtocol]
+
+
+class _TelethonSentCodeProtocol(Protocol):
+    phone_code_hash: object
+
+
+class _TelethonDialogProtocol(Protocol):
+    entity: object
+
+
+class _TelethonClientProtocol(Protocol):
+    async def is_user_authorized(self) -> bool: ...
+
+    async def send_code_request(self, phone: str) -> _TelethonSentCodeProtocol: ...
+
+    async def sign_in(
+        self,
+        *,
+        phone: str | None = None,
+        code: str | None = None,
+        phone_code_hash: str | None = None,
+        password: str | None = None,
+    ) -> object: ...
+
+    async def log_out(self) -> bool: ...
+
+    def iter_dialogs(self, *, limit: int) -> AsyncIterator[_TelethonDialogProtocol]: ...
+
+    def iter_messages(
+        self,
+        entity: object,
+        *,
+        limit: int,
+        reverse: bool = False,
+    ) -> AsyncIterator[object]: ...
+
+    async def get_entity(self, target: int | str) -> object: ...
+
+    async def connect(self) -> object: ...
+
+    async def disconnect(self) -> object: ...
 
 
 def build_fullaccess_client(config: FullAccessConfig) -> FullAccessClientProtocol:
@@ -150,7 +191,7 @@ class TelethonFullAccessClient:
             return chat, messages
 
     @asynccontextmanager
-    async def _open_client(self) -> AsyncIterator[object]:
+    async def _open_client(self) -> AsyncIterator[_TelethonClientProtocol]:
         if not telethon_is_available():
             raise RuntimeError(
                 "Telethon не установлен. Установи optional dependency: pip install -e '.[fullaccess]'"
@@ -158,11 +199,19 @@ class TelethonFullAccessClient:
 
         from telethon import TelegramClient
 
+        api_id = self.config.api_id
+        api_hash = self.config.api_hash
+        if api_id is None or api_hash is None:
+            raise RuntimeError("FULLACCESS_API_ID/FULLACCESS_API_HASH не настроены.")
+
         self.config.session_path.parent.mkdir(parents=True, exist_ok=True)
-        client = TelegramClient(
-            str(self.config.session_path),
-            self.config.api_id,
-            self.config.api_hash,
+        client = cast(
+            _TelethonClientProtocol,
+            TelegramClient(
+                str(self.config.session_path),
+                api_id,
+                api_hash,
+            ),
         )
         await client.connect()
         try:
@@ -171,7 +220,7 @@ class TelethonFullAccessClient:
             await client.disconnect()
 
 
-async def _resolve_entity(client: object, reference: str):
+async def _resolve_entity(client: _TelethonClientProtocol, reference: str) -> object:
     candidate = reference.strip()
     if not candidate:
         raise ValueError("Укажи chat_id или @username для full-access операции.")
@@ -194,8 +243,9 @@ async def _resolve_entity(client: object, reference: str):
 def _build_chat_summary(entity: object) -> FullAccessChatSummary:
     from telethon import utils
 
+    peer_id = _coerce_optional_int(utils.get_peer_id(entity))
     return FullAccessChatSummary(
-        telegram_chat_id=int(utils.get_peer_id(entity)),
+        telegram_chat_id=peer_id or 0,
         title=_resolve_entity_title(entity),
         chat_type=_resolve_entity_type(entity),
         username=_resolve_entity_username(entity),
@@ -292,8 +342,19 @@ def _normalize_datetime(value: object) -> datetime:
 def _coerce_optional_int(value: object) -> int | None:
     if value is None:
         return None
-    try:
+    if isinstance(value, bool):
         return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    try:
+        return int(str(value))
     except (TypeError, ValueError):
         return None
 

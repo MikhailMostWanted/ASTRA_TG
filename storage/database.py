@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -79,7 +81,7 @@ def _configure_sqlite_engine(
         return
 
     @event.listens_for(engine.sync_engine, "connect")
-    def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+    def _set_sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) -> None:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys = ON")
         cursor.close()
@@ -125,11 +127,11 @@ async def _ensure_json_setting(
     repository: SettingRepository,
     *,
     key: str,
-    value: dict[str, object],
+    value: Mapping[str, object],
 ) -> bool:
     if await repository.get_by_key(key) is not None:
         return False
-    await repository.set_value(key=key, value_json=value)
+    await repository.set_value(key=key, value_json=dict(value))
     return True
 
 

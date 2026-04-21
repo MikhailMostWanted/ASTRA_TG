@@ -80,6 +80,8 @@ class ReminderService:
             )
             loaded_task = await self.task_repository.get_task(task.id)
             loaded_reminder = await self.reminder_repository.get_reminder(reminder.id)
+            if loaded_task is None or loaded_reminder is None:
+                raise RuntimeError("Не удалось перечитать сохранённый reminder candidate.")
             cards.append(self.formatter.format_candidate_card(task=loaded_task, reminder=loaded_reminder))
             if created:
                 created_count += 1
@@ -193,11 +195,18 @@ class ReminderService:
                 status="active",
                 needs_user_confirmation=False,
             )
+            if task is None:
+                raise RuntimeError("Не удалось обновить статус задачи reminder.")
             reminder = await self.reminder_repository.set_status(
                 reminder.id,
                 status="active",
                 remind_at=remind_at or reminder.remind_at or task.suggested_remind_at or (now + timedelta(hours=1)),
             )
+            if reminder is None:
+                raise RuntimeError("Не удалось обновить статус reminder.")
+
+        if task is None or reminder is None:
+            raise RuntimeError("Не удалось сохранить итоговое состояние reminder.")
 
         result = ReminderActionResult(
             action=action,

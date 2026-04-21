@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 from config.settings import Settings
 from services.reminder_delivery import ReminderDeliveryService
@@ -153,7 +154,7 @@ def test_worker_delivers_due_reminder_once(monkeypatch, tmp_path: Path) -> None:
 def test_worker_continues_when_one_reminder_fails_and_skips_duplicates() -> None:
     async def run_assertions() -> None:
         class FakeSettingRepository:
-            async def get_value(self, key: str):
+            async def get_value(self, key: str) -> object:
                 if key == "bot.owner_chat_id":
                     return "555001"
                 return None
@@ -163,16 +164,15 @@ def test_worker_continues_when_one_reminder_fails_and_skips_duplicates() -> None
                 self.reminders = reminders
                 self.delivered_ids: list[int] = []
 
-            async def get_due_reminders(self, now: datetime):
+            async def get_due_reminders(self, now: datetime) -> list[object]:
                 return list(self.reminders)
 
-            async def mark_delivered(self, reminder_id: int, delivered_at: datetime):
+            async def mark_delivered(self, reminder_id: int, *, delivered_at: datetime) -> None:
                 self.delivered_ids.append(reminder_id)
-                return None
 
         class FakeFormatter:
-            def format_delivery_packet(self, reminder) -> str:
-                return f"reminder {reminder.id}"
+            def format_delivery_packet(self, reminder: object) -> str:
+                return f"reminder {getattr(reminder, 'id')}"
 
         duplicate = SimpleNamespace(id=1, task=None, payload_json={}, remind_at=datetime(2026, 4, 20, 10, 45, tzinfo=timezone.utc))
         successful = SimpleNamespace(id=2, task=None, payload_json={}, remind_at=datetime(2026, 4, 20, 10, 46, tzinfo=timezone.utc))
@@ -180,9 +180,9 @@ def test_worker_continues_when_one_reminder_fails_and_skips_duplicates() -> None
         bot = FlakyBot(failing_ids={1})
 
         result = await ReminderDeliveryService(
-            setting_repository=FakeSettingRepository(),
-            reminder_repository=repository,
-            formatter=FakeFormatter(),
+            setting_repository=cast(SettingRepository, FakeSettingRepository()),
+            reminder_repository=cast(ReminderRepository, repository),
+            formatter=cast(ReminderFormatter, FakeFormatter()),
         ).deliver_due_reminders(
             sender=bot,
             now=datetime(2026, 4, 20, 10, 50, tzinfo=timezone.utc),

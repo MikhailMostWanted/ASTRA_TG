@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import desc, func, or_, select, text
 from sqlalchemy.exc import OperationalError
@@ -817,7 +817,10 @@ class TaskRepository:
             )
             .where(Task.id == task_id)
         )
-        return _normalize_task_instance(result.scalar_one_or_none())
+        task = result.scalar_one_or_none()
+        if task is None:
+            return None
+        return _normalize_task_instance(task)
 
     async def get_by_source_message_id(self, source_message_id: int) -> Task | None:
         result = await self.session.execute(
@@ -831,7 +834,10 @@ class TaskRepository:
             .order_by(desc(Task.updated_at), desc(Task.id))
             .limit(1)
         )
-        return _normalize_task_instance(result.scalar_one_or_none())
+        task = result.scalar_one_or_none()
+        if task is None:
+            return None
+        return _normalize_task_instance(task)
 
     async def upsert_candidate(
         self,
@@ -896,7 +902,7 @@ class TaskRepository:
             .where(Task.status == "candidate")
             .order_by(Task.id)
         )
-        return [_normalize_task_instance(task) for task in result.scalars().all()]
+        return [_normalize_task_instance(task) for task in result.scalars().all() if task is not None]
 
     async def list_active_tasks(self) -> list[Task]:
         result = await self.session.execute(
@@ -909,7 +915,7 @@ class TaskRepository:
             .where(Task.status == "active")
             .order_by(Task.due_at.is_(None), Task.due_at, Task.id)
         )
-        return [_normalize_task_instance(task) for task in result.scalars().all()]
+        return [_normalize_task_instance(task) for task in result.scalars().all() if task is not None]
 
     async def count_candidates(self) -> int:
         result = await self.session.execute(
@@ -957,7 +963,10 @@ class ReminderRepository:
             )
             .where(Reminder.id == reminder_id)
         )
-        return _normalize_reminder_instance(result.scalar_one_or_none())
+        reminder = result.scalar_one_or_none()
+        if reminder is None:
+            return None
+        return _normalize_reminder_instance(reminder)
 
     async def get_by_task_id(self, task_id: int) -> Reminder | None:
         result = await self.session.execute(
@@ -970,7 +979,10 @@ class ReminderRepository:
             .order_by(desc(Reminder.updated_at), desc(Reminder.id))
             .limit(1)
         )
-        return _normalize_reminder_instance(result.scalar_one_or_none())
+        reminder = result.scalar_one_or_none()
+        if reminder is None:
+            return None
+        return _normalize_reminder_instance(reminder)
 
     async def upsert_candidate_for_task(
         self,
@@ -1008,7 +1020,7 @@ class ReminderRepository:
 
         reminder.status = status
         if remind_at is not UNSET:
-            reminder.remind_at = remind_at
+            reminder.remind_at = cast(datetime, remind_at)
         await self.session.flush()
         return reminder
 
@@ -1022,7 +1034,11 @@ class ReminderRepository:
             .where(Reminder.status == "active")
             .order_by(Reminder.remind_at, Reminder.id)
         )
-        return [_normalize_reminder_instance(reminder) for reminder in result.scalars().all()]
+        return [
+            _normalize_reminder_instance(reminder)
+            for reminder in result.scalars().all()
+            if reminder is not None
+        ]
 
     async def get_due_reminders(self, now: datetime) -> list[Reminder]:
         result = await self.session.execute(
@@ -1037,7 +1053,11 @@ class ReminderRepository:
             )
             .order_by(Reminder.remind_at, Reminder.id)
         )
-        return [_normalize_reminder_instance(reminder) for reminder in result.scalars().all()]
+        return [
+            _normalize_reminder_instance(reminder)
+            for reminder in result.scalars().all()
+            if reminder is not None
+        ]
 
     async def mark_delivered(
         self,
@@ -1063,7 +1083,11 @@ class ReminderRepository:
             )
             .order_by(Reminder.id)
         )
-        return [_normalize_reminder_instance(reminder) for reminder in result.scalars().all()]
+        return [
+            _normalize_reminder_instance(reminder)
+            for reminder in result.scalars().all()
+            if reminder is not None
+        ]
 
     async def count_active_reminders(self) -> int:
         result = await self.session.execute(
@@ -1268,9 +1292,9 @@ class SettingRepository:
             self.session.add(setting)
 
         if value_json is not UNSET:
-            setting.value_json = value_json
+            setting.value_json = cast(dict[str, Any] | list[Any] | None, value_json)
         if value_text is not UNSET:
-            setting.value_text = value_text
+            setting.value_text = cast(str | None, value_text)
 
         await self.session.flush()
         return setting
@@ -1412,12 +1436,31 @@ def _build_person_message_filter(person_key: str):
             return None
         return func.lower(Message.sender_name) == f"@{handle}"
 
+    if normalized.startswith("name:"):
+        name = normalized.split(":", 1)[1].strip().casefold()
+        if not name:
+            return None
+        return func.lower(Message.sender_name) == name
+
+    return func.lower(Message.sender_name) == normalized.casefold()
+
 
 def _coerce_optional_int(value: object) -> int | None:
     if value is None:
         return None
-    try:
+    if isinstance(value, bool):
         return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    try:
+        return int(str(value))
     except (TypeError, ValueError):
         return None
 
@@ -1436,14 +1479,6 @@ def _coerce_datetime(value: object) -> datetime:
             return parsed.replace(tzinfo=timezone.utc)
         return parsed
     return datetime.now(timezone.utc)
-
-    if normalized.startswith("name:"):
-        name = normalized.split(":", 1)[1].strip().casefold()
-        if not name:
-            return None
-        return func.lower(Message.sender_name) == name
-
-    return func.lower(Message.sender_name) == normalized.casefold()
 
 
 def _person_match_rank(person: PersonMemory, lowered_query: str, lowered_handle: str) -> tuple[int, float, str]:
@@ -1479,10 +1514,7 @@ def _person_matches_query(person: PersonMemory, lowered_query: str, lowered_hand
     )
 
 
-def _normalize_task_instance(task: Task | None) -> Task | None:
-    if task is None:
-        return None
-
+def _normalize_task_instance(task: Task) -> Task:
     task.due_at = _normalize_datetime(task.due_at)
     task.suggested_remind_at = _normalize_datetime(task.suggested_remind_at)
     task.created_at = _normalize_datetime(task.created_at) or task.created_at
@@ -1493,10 +1525,7 @@ def _normalize_task_instance(task: Task | None) -> Task | None:
     return task
 
 
-def _normalize_reminder_instance(reminder: Reminder | None) -> Reminder | None:
-    if reminder is None:
-        return None
-
+def _normalize_reminder_instance(reminder: Reminder) -> Reminder:
     reminder.remind_at = _normalize_datetime(reminder.remind_at) or reminder.remind_at
     reminder.last_notification_at = _normalize_datetime(reminder.last_notification_at)
     reminder.created_at = _normalize_datetime(reminder.created_at) or reminder.created_at

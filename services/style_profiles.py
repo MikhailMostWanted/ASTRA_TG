@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from models import Chat, StyleProfile
 from storage.repositories import ChatRepository, ChatStyleOverrideRepository, StyleProfileRepository
@@ -71,12 +71,16 @@ class StyleStatusReport:
     note: str | None = None
 
 
+class StyleSelectorProtocol(Protocol):
+    async def select_for_chat(self, chat: Chat) -> StyleSelection: ...
+
+
 @dataclass(slots=True)
 class StyleProfileService:
     chat_repository: ChatRepository
     style_profile_repository: StyleProfileRepository
     chat_style_override_repository: ChatStyleOverrideRepository
-    selector: object
+    selector: StyleSelectorProtocol
 
     async def list_profiles(self) -> tuple[StyleProfileSnapshot, ...]:
         profiles = await self.style_profile_repository.list_profiles()

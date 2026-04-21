@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config.settings import Settings
-from services.command_parser import BotCommandParser
+from services.command_parser import BotCommandParser, ResolvedChatCandidate
 from services.digest_engine import DigestEngineService
 from services.digest_builder import DigestBuilder
 from services.digest_formatter import DigestFormatter
@@ -50,18 +50,10 @@ class FakeMessage:
 
 
 @dataclass(slots=True)
-class FakeResolvedChat:
-    telegram_chat_id: int
-    title: str
-    handle: str | None
-    chat_type: str
-
-
-@dataclass(slots=True)
 class FakeChatResolver:
-    resolved: dict[str, FakeResolvedChat]
+    resolved: dict[str, ResolvedChatCandidate]
 
-    async def resolve_chat(self, reference: str) -> FakeResolvedChat | None:
+    async def resolve_chat(self, reference: str) -> ResolvedChatCandidate | None:
         return self.resolved.get(reference)
 
 
@@ -112,13 +104,13 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
         parser = BotCommandParser()
         resolver = FakeChatResolver(
             resolved={
-                "@news": FakeResolvedChat(
+                "@news": ResolvedChatCandidate(
                     telegram_chat_id=-100200,
                     title="Новости дня",
                     handle="news",
                     chat_type="channel",
                 ),
-                "@digest": FakeResolvedChat(
+                "@digest": ResolvedChatCandidate(
                     telegram_chat_id=-100900,
                     title="Digest канал",
                     handle="digest",

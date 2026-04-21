@@ -147,9 +147,20 @@ class DigestTargetService:
 def _parse_optional_int(value: object) -> int | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
 
     try:
-        return int(value)
+        return int(str(value))
     except (TypeError, ValueError):
         return None
 

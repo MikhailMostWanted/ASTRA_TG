@@ -1,6 +1,6 @@
 import asyncio
 import importlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -29,14 +29,13 @@ from storage.repositories import (
 @dataclass(slots=True)
 class FakeIncomingMessage:
     chat_id: int
-    answers: list[str] | None = None
-    bot: object | None = None
-    chat: object | None = None
+    answers: list[str] = field(default_factory=list)
+    bot: object = field(init=False)
+    chat: object = field(init=False)
 
     def __post_init__(self) -> None:
         self.bot = SimpleNamespace()
         self.chat = SimpleNamespace(id=self.chat_id, type="private")
-        self.answers = []
 
     async def answer(self, text: str):
         self.answers.append(text)

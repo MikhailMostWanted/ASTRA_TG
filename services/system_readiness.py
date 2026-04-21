@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -614,7 +615,7 @@ def _fullaccess_check(facts: OperationalFacts) -> tuple[bool, str]:
     )
 
 
-def _dedupe(values: list[str | None]) -> list[str]:
+def _dedupe(values: Sequence[str | None]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
     for value in values:

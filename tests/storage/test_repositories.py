@@ -174,7 +174,9 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
             assert digest.items[0].title == "Покупки"
             assert digest.items[0].source_message_id == second_message.id
             assert await digests.count_digests() == 1
-            assert (await digests.get_last_digest()).id == digest.id
+            last_digest = await digests.get_last_digest()
+            assert last_digest is not None
+            assert last_digest.id == digest.id
 
             digest_messages = await messages.get_messages_for_digest(
                 window_start=datetime(2026, 4, 20, 8, 0, tzinfo=timezone.utc),

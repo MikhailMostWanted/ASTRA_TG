@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from models import Chat
 from core.logging import get_logger, log_event
 from services.persona_adapter import PersonaAdapter
 from services.persona_core import PersonaCoreService
@@ -11,7 +12,7 @@ from services.reply_context_builder import ReplyContextBuilder
 from services.reply_examples_models import ReplyExamplesRetrievalResult
 from services.reply_examples_retriever import ReplyExamplesRetriever
 from services.reply_classifier import ReplyClassifier
-from services.reply_models import ReplyResult, ReplySuggestion
+from services.reply_models import ReplyContextIssue, ReplyResult, ReplySuggestion
 from services.reply_strategy import ReplyStrategyResolver
 from services.style_adapter import StyleAdapter
 from services.style_selector import StyleSelectorService
@@ -77,7 +78,7 @@ class ReplyEngineService:
             )
 
         context_or_issue = await self.context_builder.build(chat)
-        if hasattr(context_or_issue, "code"):
+        if isinstance(context_or_issue, ReplyContextIssue):
             return ReplyResult(
                 kind=context_or_issue.code,
                 chat_id=chat.id,
@@ -229,7 +230,7 @@ class ReplyEngineService:
         )
 
 
-def _build_chat_reference(chat) -> str:
+def _build_chat_reference(chat: Chat) -> str:
     if getattr(chat, "handle", None):
         return f"@{chat.handle}"
     return str(chat.telegram_chat_id)

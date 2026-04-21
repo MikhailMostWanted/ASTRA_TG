@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from services.system_readiness import OperationalCheck, OperationalReport
+from services.system_readiness import OperationalReport
 
 
 @dataclass(frozen=True, slots=True)

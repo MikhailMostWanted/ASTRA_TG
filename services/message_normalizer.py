@@ -200,9 +200,20 @@ def _normalize_datetime(value: object) -> datetime:
 def _coerce_int(value: object) -> int | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
 
     try:
-        return int(value)
+        return int(str(value))
     except (TypeError, ValueError):
         return None
 
@@ -226,10 +237,11 @@ def _to_json_compatible(value: object) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_to_json_compatible(item) for item in value]
 
-    if hasattr(value, "model_dump"):
-        return _to_json_compatible(value.model_dump(exclude_none=True))
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _to_json_compatible(model_dump(exclude_none=True))
 
-    if is_dataclass(value):
+    if is_dataclass(value) and not isinstance(value, type):
         return _to_json_compatible(asdict(value))
 
     if hasattr(value, "__dict__"):

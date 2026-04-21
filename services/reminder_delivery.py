@@ -16,7 +16,7 @@ LOGGER = get_logger(__name__)
 
 
 class ReminderSenderProtocol(Protocol):
-    async def send_message(self, chat_id: int, text: str):
+    async def send_message(self, chat_id: int, text: str) -> object:
         """Отправляет reminder packet в Telegram."""
 
 

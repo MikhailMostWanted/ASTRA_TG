@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
+from typing import TypedDict
 
 from models import Chat, Message
 from services.memory_common import build_person_reference, normalize_display_name, tokenize_text
@@ -35,6 +36,20 @@ FOLLOW_UP_MARKERS = (
     "посмотрю",
     "апдейт",
 )
+
+
+class ReplyExamplePayload(TypedDict):
+    chat_id: int
+    inbound_message_id: int | None
+    outbound_message_id: int | None
+    inbound_text: str
+    outbound_text: str
+    inbound_normalized: str
+    outbound_normalized: str
+    context_before_json: list[dict[str, str]]
+    example_type: str
+    source_person_key: str | None
+    quality_score: float
 
 
 @dataclass(slots=True)
@@ -87,8 +102,8 @@ class ReplyExamplesBuilder:
         *,
         chat: Chat,
         messages: list[Message],
-    ) -> list[dict[str, object]]:
-        examples: list[dict[str, object]] = []
+    ) -> list[ReplyExamplePayload]:
+        examples: list[ReplyExamplePayload] = []
         pending_inbound: tuple[int, Message, str, list[dict[str, str]]] | None = None
 
         for index, message in enumerate(messages):

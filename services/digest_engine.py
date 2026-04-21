@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from core.logging import get_logger, log_event
-from services.digest_builder import DigestBuildResult, DigestBuilder
+from services.digest_builder import DigestBuilder
 from services.digest_formatter import DigestFormatter
 from services.digest_target import DigestTargetService, DigestTargetSnapshot
 from services.digest_window import DigestWindow, parse_digest_window
@@ -16,8 +16,11 @@ LOGGER = get_logger(__name__)
 
 
 class MessageSenderProtocol(Protocol):
-    async def send_message(self, chat_id: int, text: str):
-        """Отправляет сообщение в Telegram и возвращает объект с message_id."""
+    async def send_message(self, chat_id: int, text: str) -> "MessageSendResultProtocol": ...
+
+
+class MessageSendResultProtocol(Protocol):
+    message_id: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,17 +188,19 @@ class DigestPublisherService:
             chat_id=preview_chat_id,
             chunks=plan.preview_chunks,
         )
-        if not plan.has_digest:
+        digest_id = plan.digest_id
+        if digest_id is None:
             return DigestPublishResult(notice=None)
-        if not plan.target.is_configured:
+        target_chat_id = plan.target.chat_id
+        if target_chat_id is None:
             return DigestPublishResult(
                 notice="Digest target не задан, сводка показана только в текущем чате."
             )
 
-        if plan.target.chat_id == preview_chat_id:
+        if target_chat_id == preview_chat_id:
             if preview_messages:
                 await self.digest_repository.mark_delivered(
-                    plan.digest_id,
+                    digest_id,
                     delivered_to_chat_id=preview_chat_id,
                     delivered_message_id=preview_messages[0].message_id,
                 )
@@ -205,22 +210,22 @@ class DigestPublisherService:
 
         delivered_messages = await _send_chunks(
             sender=sender,
-            chat_id=plan.target.chat_id,
+            chat_id=target_chat_id,
             chunks=plan.target_chunks,
         )
         if delivered_messages:
             await self.digest_repository.mark_delivered(
-                plan.digest_id,
-                delivered_to_chat_id=plan.target.chat_id,
+                digest_id,
+                delivered_to_chat_id=target_chat_id,
                 delivered_message_id=delivered_messages[0].message_id,
             )
-        target_label = plan.target.label or str(plan.target.chat_id)
+        target_label = plan.target.label or str(target_chat_id)
         log_event(
             LOGGER,
             20,
             "digest.publish.completed",
             "Digest опубликован.",
-            digest_id=plan.digest_id,
+            digest_id=digest_id,
             target_label=target_label,
         )
         return DigestPublishResult(notice=f"Digest также отправлен в {target_label}.")
@@ -231,8 +236,8 @@ async def _send_chunks(
     sender: MessageSenderProtocol,
     chat_id: int,
     chunks: list[str],
-) -> list[object]:
-    sent_messages: list[object] = []
+) -> list[MessageSendResultProtocol]:
+    sent_messages: list[MessageSendResultProtocol] = []
     for chunk in chunks:
         sent_messages.append(await sender.send_message(chat_id, chunk))
     return sent_messages

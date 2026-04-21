@@ -1,0 +1,14 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.12",
+  "include": [
+    "."
+  ],
+  "exclude": [
+    ".venv",
+    ".pytest_cache",
+    ".ruff_cache",
+    "var"
+  ]
+}

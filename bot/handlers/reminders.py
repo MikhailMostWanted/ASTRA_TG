@@ -91,8 +91,9 @@ async def handle_reminder_callback(
         return
 
     async with session_factory() as session:
-        if callback.message is not None:
-            await remember_owner_chat_if_private(callback.message, session)
+        callback_message = callback.message
+        if isinstance(callback_message, Message):
+            await remember_owner_chat_if_private(callback_message, session)
         service = _build_reminder_service(session)
         try:
             if parsed.action == "approve":
@@ -113,8 +114,8 @@ async def handle_reminder_callback(
 
         await session.commit()
 
-    if callback.message is not None:
-        await callback.message.edit_text(result.text)
+    if isinstance(callback_message, Message):
+        await callback_message.edit_text(result.text)
     await callback.answer(notice)
 
 

@@ -2,9 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Protocol
 
-from storage.repositories import SettingRepository
+
+class OperationalStateRepositoryProtocol(Protocol):
+    async def get_value(self, key: str) -> object: ...
+
+    async def set_value(
+        self,
+        *,
+        key: str,
+        value_json: dict[str, Any] | list[Any] | None = None,
+        value_text: str | None = None,
+    ) -> object: ...
 
 
 ERROR_KEY_MAP = {
@@ -32,7 +42,7 @@ class OperationalEvent:
 
 @dataclass(slots=True)
 class OperationalStateService:
-    repository: SettingRepository
+    repository: OperationalStateRepositoryProtocol
 
     async def record_error(
         self,

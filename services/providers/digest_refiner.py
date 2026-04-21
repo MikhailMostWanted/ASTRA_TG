@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
+from services.digest_builder import DigestBuildResult
 from services.providers.guardrails import DigestImprovementGuardrails
 from services.providers.manager import ProviderManager
 from services.providers.models import DigestImprovementCandidate
@@ -12,7 +13,7 @@ from services.providers.prompts import build_digest_improve_request
 class DigestRefinementOutcome:
     requested: bool
     applied: bool
-    build_result: object
+    build_result: DigestBuildResult
     notes: tuple[str, ...]
     flags: tuple[str, ...]
     provider_name: str | None = None

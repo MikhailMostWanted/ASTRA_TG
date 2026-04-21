@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from services.memory_common import looks_like_conflict, looks_like_open_loop, normalize_display_name
+from services.memory_common import looks_like_conflict, normalize_display_name
 from services.reply_models import ReplyClassification, ReplyContext
 
 

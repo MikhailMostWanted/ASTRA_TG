@@ -3,8 +3,6 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Iterable
-
 from services.digest_window import DigestWindow
 from storage.repositories import DigestMessageRecord
 
