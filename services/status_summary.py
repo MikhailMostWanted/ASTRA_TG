@@ -7,12 +7,12 @@ from config.settings import Settings
 from fullaccess.auth import FullAccessAuthService
 from services.bot_owner import BotOwnerService
 from services.digest_target import DigestTargetService
-from services.digest_window import parse_digest_window
-from services.persona_core import PersonaCoreService
 from services.providers.manager import ProviderManager
+from services.system_health import SystemHealthService
+from services.system_readiness import OperationalCheck, OperationalReport, SystemReadinessService
 from storage.repositories import (
-    ChatRepository,
     ChatMemoryRepository,
+    ChatRepository,
     ChatStyleOverrideRepository,
     DigestRepository,
     MessageRepository,
@@ -44,192 +44,70 @@ class BotStatusService:
     fullaccess_auth_service: FullAccessAuthService | None = None
 
     async def build_status_message(self) -> str:
-        total_sources = await self.chat_repository.count_chats()
-        enabled_sources = await self.chat_repository.count_enabled_chats()
-        digest_sources = await self.chat_repository.count_digest_enabled_chats()
-        total_messages = await self.message_repository.count_messages()
-        reply_ready_chats = await self.message_repository.count_chats_ready_for_reply()
-        message_counts = await self.message_repository.count_messages_by_chat()
-        last_message_at = await self.message_repository.get_last_message_timestamp()
-        total_digests = await self.digest_repository.count_digests()
-        last_digest = await self.digest_repository.get_last_digest()
-        total_chat_memory = await self.chat_memory_repository.count_chat_memory()
-        total_people_memory = await self.person_memory_repository.count_people_memory()
-        total_style_profiles = await self.style_profile_repository.count_profiles()
-        total_style_overrides = await self.chat_style_override_repository.count_overrides()
-        total_reply_examples = (
-            await self.reply_example_repository.count_examples()
-            if self.reply_example_repository is not None
-            else 0
+        report = await self._build_operational_report()
+        facts = report.facts
+        digest_status = _find_check(report.layers, "digest")
+        memory_status = _find_check(report.layers, "memory")
+        reply_status = _find_check(report.layers, "reply")
+        reminders_status = _find_check(report.layers, "reminders")
+        provider_status = _find_check(report.layers, "provider")
+        fullaccess_status = _find_check(report.layers, "fullaccess")
+        next_step = report.next_steps[0] if report.next_steps else (
+            "Критичных блокеров нет. Можно использовать /digest_now, /reply и /reminders_scan."
         )
-        reply_example_chats = (
-            await self.reply_example_repository.count_chats_with_examples()
-            if self.reply_example_repository is not None
-            else 0
-        )
-        candidate_tasks = (
-            await self.task_repository.count_candidates()
-            if self.task_repository is not None
-            else 0
-        )
-        confirmed_tasks = (
-            await self.task_repository.count_confirmed()
-            if self.task_repository is not None
-            else 0
-        )
-        active_reminders = (
-            await self.reminder_repository.count_active_reminders()
-            if self.reminder_repository is not None
-            else 0
-        )
-        last_reminder_notification = (
-            await self.reminder_repository.get_last_notification_at()
-            if self.reminder_repository is not None
-            else None
-        )
-        persona_state = await PersonaCoreService(self.setting_repository).load_state()
-        last_memory_rebuild = await self.setting_repository.get_value("memory.last_rebuild_at")
-        if last_memory_rebuild is None:
-            last_memory_rebuild = (
-                await self.chat_memory_repository.get_last_updated_at()
-                or await self.person_memory_repository.get_last_updated_at()
-            )
-        digest_target = await DigestTargetService(self.setting_repository).get_target()
-        owner_chat_id = await BotOwnerService(self.setting_repository).get_owner_chat_id()
-        schema_revision = await self.system_repository.get_schema_revision()
-        provider_status = await self._get_provider_status(check_api=False)
-        fullaccess_status = (
-            await self.fullaccess_auth_service.build_status_report()
-            if self.fullaccess_auth_service is not None
-            else None
-        )
-        digest_window = parse_digest_window(None)
-        digest_window_counts = await self.message_repository.count_messages_by_digest_chat(
-            window_start=digest_window.start,
-            window_end=digest_window.end,
-        )
-        digest_window_messages = sum(digest_window_counts.values())
-        has_memory_input = total_messages > 0 and bool(message_counts)
 
         lines = [
             "Статус Astra AFT",
             "",
-            "Бот: жив",
-            "Хранилище: SQLite",
-            "Ingest: активен",
-            "Deterministic mode: активен",
-            f"Всего источников: {total_sources}",
-            f"Активных источников: {enabled_sources}",
-            f"Digest-источников: {digest_sources}",
-            f"Сохранено сообщений: {total_messages}",
-            f"Источников с данными: {len(message_counts)}",
-            f"Последнее сообщение: {_format_timestamp(last_message_at)}",
-            f"Создано digest: {total_digests}",
-            f"Последний digest: {_format_timestamp(last_digest.created_at if last_digest else None)}",
+            f"Готово: {report.ready_check_count}/{report.total_check_count}",
             (
-                f"Данных для digest ({digest_window.label}): да "
-                f"({digest_window_messages} сообщений из {len(digest_window_counts)} источников)"
-                if digest_window_messages
-                else f"Данных для digest ({digest_window.label}): нет"
-            ),
-            f"Memory-карт чатов: {total_chat_memory}",
-            f"Memory-карт людей: {total_people_memory}",
-            "Reply layer: готов",
-            "Provider layer: готов" if provider_status.configured else "Provider layer: не готов",
-            (
-                "Full-access experimental layer: включён"
-                if fullaccess_status is not None and fullaccess_status.enabled
-                else "Full-access experimental layer: выключен"
+                f"Источники: {facts.active_sources} активных, "
+                f"сообщений {facts.total_messages}, источников с данными {facts.chats_with_data}"
             ),
             (
-                "Full-access авторизация: да"
-                if fullaccess_status is not None and fullaccess_status.authorized
-                else "Full-access авторизация: нет"
+                f"Digest: {'готов' if digest_status.ready else 'не готов'}; "
+                f"target: {facts.digest_target_label or 'не задан'}"
             ),
             (
-                "Full-access read-only: активен"
-                if fullaccess_status is None or fullaccess_status.effective_readonly
-                else "Full-access read-only: не активен"
+                f"Memory: {'готов' if memory_status.ready else 'не готов'}; "
+                f"карт чатов {facts.chat_memory_cards}, людей {facts.person_memory_cards}"
             ),
+            f"Reply: {'готов' if reply_status.ready else 'не готов'}",
             (
-                f"Full-access чатов синхронизировано: {fullaccess_status.synced_chat_count}"
-                if fullaccess_status is not None
-                else "Full-access чатов синхронизировано: 0"
+                f"Reminders: {'готов' if reminders_status.ready else 'не готов'}; "
+                f"owner chat: {facts.owner_chat_id if facts.owner_chat_id is not None else 'не задан'}"
             ),
-            (
-                "Full-access как дополнительный источник: готов"
-                if fullaccess_status is not None and fullaccess_status.ready_for_manual_sync
-                else "Full-access как дополнительный источник: не готов"
-            ),
-            (
-                "LLM refine для reply: доступен"
-                if provider_status.reply_refine_available
-                else "LLM refine для reply: недоступен"
-            ),
-            (
-                "LLM refine для digest: доступен"
-                if provider_status.digest_refine_available
-                else "LLM refine для digest: недоступен"
-            ),
-            "Reminder layer: готов" if owner_chat_id is not None else "Reminder layer: не готов",
-            f"Кандидатных задач: {candidate_tasks}",
-            f"Подтверждено задач: {confirmed_tasks}",
-            f"Активных reminders: {active_reminders}",
-            f"Последнее reminder-уведомление: {_format_timestamp(last_reminder_notification)}",
-            f"bot.owner_chat_id: {owner_chat_id if owner_chat_id is not None else 'не задан'}",
-            "Style-слой: готов" if total_style_profiles >= 6 else "Style-слой: не готов",
-            "Persona-слой: готов" if persona_state.core_loaded else "Persona-слой: не готов",
-            (
-                "Persona-guardrails: активны"
-                if persona_state.guardrails_active
-                else "Persona-guardrails: не активны"
-            ),
-            f"Доступно style-профилей: {total_style_profiles}",
-            f"Настроено ручных style-override: {total_style_overrides}",
-            (
-                "/reply в style-режиме: готов"
-                if total_style_profiles >= 6
-                else "/reply в style-режиме: не готов"
-            ),
-            (
-                "/reply в persona-aware режиме: готов"
-                if total_style_profiles >= 6
-                and persona_state.enabled
-                and persona_state.core_loaded
-                and persona_state.guardrails_active
-                else "/reply в persona-aware режиме: не готов"
-            ),
-            "Few-shot layer: готов" if total_reply_examples > 0 else "Few-shot layer: не готов",
-            f"Reply examples: {total_reply_examples}",
-            f"Чатов с reply examples: {reply_example_chats}",
-            (
-                "/reply с few-shot support: готов"
-                if total_reply_examples > 0
-                else "/reply с few-shot support: не готов"
-            ),
-            f"Чатов с данными для reply: {reply_ready_chats}",
-            (
-                "Опора reply на memory: да"
-                if total_chat_memory > 0 or total_people_memory > 0
-                else "Опора reply на memory: нет"
-            ),
-            (
-                f"Последний rebuild memory: {_format_timestamp(last_memory_rebuild)}"
-                if last_memory_rebuild is not None
-                else "Последний rebuild memory: ещё не выполнялся"
-            ),
-            (
-                f"Данных для memory: да ({total_messages} сообщений из {len(message_counts)} источников)"
-                if has_memory_input
-                else "Данных для memory: нет"
-            ),
-            (
-                f"Канал доставки digest: настроен ({digest_target.label or digest_target.chat_id})"
-                if digest_target.is_configured
-                else "Канал доставки digest: не настроен"
-            ),
-            f"Схема БД: {schema_revision or 'не применена'}",
+            f"Provider: {provider_status.detail}",
+            f"Full-access: {fullaccess_status.detail}",
+            f"Следующий шаг: {next_step}",
+            "Подробно: /onboarding, /checklist, /doctor",
         ]
+        return "\n".join(lines)
+
+    async def build_checklist_message(self) -> str:
+        report = await self._build_operational_report()
+        lines = ["Checklist Astra AFT", ""]
+        for item in report.checklist:
+            lines.append(_format_check(item))
+        lines.extend(
+            [
+                "",
+                "Подробная сводка: /status",
+                "Диагностика и предупреждения: /doctor",
+            ]
+        )
+        return "\n".join(lines)
+
+    async def build_doctor_message(self) -> str:
+        report = await self._build_operational_report()
+        doctor = SystemHealthService().build_report(report)
+        lines = ["Doctor Astra AFT", "", "ОК"]
+        lines.extend(f"• {item}" for item in doctor.ok_items)
+        lines.extend(["", "Предупреждения"])
+        lines.extend(f"• {item}" for item in doctor.warnings)
+        lines.extend(["", "Что исправить дальше"])
+        for index, step in enumerate(doctor.next_steps, start=1):
+            lines.append(f"{index}. {step}")
         return "\n".join(lines)
 
     async def build_provider_status_message(self) -> str:
@@ -317,9 +195,40 @@ class BotStatusService:
             max_message_length=max_message_length,
         )
 
+    async def _build_operational_report(self) -> OperationalReport:
+        return await SystemReadinessService(
+            chat_repository=self.chat_repository,
+            setting_repository=self.setting_repository,
+            system_repository=self.system_repository,
+            message_repository=self.message_repository,
+            digest_repository=self.digest_repository,
+            chat_memory_repository=self.chat_memory_repository,
+            person_memory_repository=self.person_memory_repository,
+            style_profile_repository=self.style_profile_repository,
+            chat_style_override_repository=self.chat_style_override_repository,
+            task_repository=self.task_repository,
+            reminder_repository=self.reminder_repository,
+            reply_example_repository=self.reply_example_repository,
+            provider_manager=self.provider_manager,
+            fullaccess_auth_service=self.fullaccess_auth_service,
+        ).build_report()
+
     async def _get_provider_status(self, *, check_api: bool):
         manager = self.provider_manager or ProviderManager.from_settings(Settings())
         return await manager.get_status(check_api=check_api)
+
+
+def _format_check(item: OperationalCheck) -> str:
+    prefix = "[готово]" if item.ready else "[не готово]"
+    tail = f" Следующая команда: {item.next_command}" if not item.ready and item.next_command else ""
+    return f"{prefix} {item.title} — {item.detail}{tail}"
+
+
+def _find_check(report: tuple[OperationalCheck, ...], key: str) -> OperationalCheck:
+    for item in report:
+        if item.key == key:
+            return item
+    raise KeyError(key)
 
 
 def _chunk_sections(

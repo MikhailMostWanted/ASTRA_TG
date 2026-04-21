@@ -352,11 +352,9 @@ def test_status_message_reports_fullaccess_readiness(monkeypatch, tmp_path: Path
                 fullaccess_auth_service=fullaccess_service,
             ).build_status_message()
 
-        assert "Full-access experimental layer: включён" in status_text
-        assert "Full-access авторизация: да" in status_text
-        assert "Full-access read-only: активен" in status_text
-        assert "Full-access чатов синхронизировано: 1" in status_text
-        assert "Full-access как дополнительный источник: готов" in status_text
+        assert "Full-access:" in status_text
+        assert "Experimental full-access готов" in status_text
+        assert "синхронизировано чатов 1" in status_text
 
         await runtime.dispose()
 

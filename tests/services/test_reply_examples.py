@@ -267,10 +267,9 @@ def test_reply_examples_rebuild_filters_noise_and_retrieval_prefers_good_local_e
                 ReminderRepository(session),
                 reply_examples,
             ).build_status_message()
-            assert "Few-shot layer: готов" in status_text
-            assert "Reply examples: 3" in status_text
-            assert "Чатов с reply examples: 2" in status_text
-            assert "/reply с few-shot support: готов" in status_text
+            assert "Статус Astra AFT" in status_text
+            assert "Источники: 2 активных, сообщений 9, источников с данными 2" in status_text
+            assert "Следующий шаг:" in status_text
 
         await runtime.dispose()
 

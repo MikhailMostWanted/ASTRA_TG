@@ -221,44 +221,15 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             settings_text = await status_service.build_settings_message()
             sources_messages = await status_service.build_sources_messages()
 
-            assert "Всего источников: 2" in status_text
-            assert "Активных источников: 1" in status_text
-            assert "Ingest: активен" in status_text
-            assert "Сохранено сообщений: 1" in status_text
-            assert "Источников с данными: 1" in status_text
-            assert "Последнее сообщение: 2026-04-20 12:30 UTC" in status_text
-            assert "Создано digest: 1" in status_text
-            assert "Последний digest:" in status_text
-            assert "Данных для digest (24h): да" in status_text
-            assert "Memory-карт чатов: 0" in status_text
-            assert "Memory-карт людей: 0" in status_text
-            assert "Reply layer: готов" in status_text
-            assert "Deterministic mode: активен" in status_text
-            assert "Provider layer: не готов" in status_text
-            assert "LLM refine для reply: недоступен" in status_text
-            assert "LLM refine для digest: недоступен" in status_text
-            assert "Reminder layer: не готов" in status_text
-            assert "Кандидатных задач: 0" in status_text
-            assert "Подтверждено задач: 0" in status_text
-            assert "Активных reminders: 0" in status_text
-            assert "Последнее reminder-уведомление: ещё нет" in status_text
-            assert "bot.owner_chat_id: не задан" in status_text
-            assert "Style-слой: готов" in status_text
-            assert "Persona-слой: готов" in status_text
-            assert "Persona-guardrails: активны" in status_text
-            assert "Доступно style-профилей: 6" in status_text
-            assert "Настроено ручных style-override: 0" in status_text
-            assert "/reply в style-режиме: готов" in status_text
-            assert "/reply в persona-aware режиме: готов" in status_text
-            assert "Few-shot layer: не готов" in status_text
-            assert "Reply examples: 0" in status_text
-            assert "Чатов с reply examples: 0" in status_text
-            assert "/reply с few-shot support: не готов" in status_text
-            assert "Чатов с данными для reply: 0" in status_text
-            assert "Опора reply на memory: нет" in status_text
-            assert "Последний rebuild memory: ещё не выполнялся" in status_text
-            assert "Данных для memory: да" in status_text
-            assert "Схема БД: 20260421_01" in status_text
+            assert "Статус Astra AFT" in status_text
+            assert "Готово: 5/9" in status_text
+            assert "Источники: 1 активных, сообщений 1, источников с данными 1" in status_text
+            assert "Digest: готов; target: @digest" in status_text
+            assert "Memory: не готов; карт чатов 0, людей 0" in status_text
+            assert "Reply: не готов" in status_text
+            assert "Reminders: не готов; owner chat: не задан" in status_text
+            assert "Provider: Provider layer выключен, deterministic fallback активен." in status_text
+            assert "Следующий шаг:" in status_text
             assert "digest_target_chat_id: -100900" in settings_text
             assert "digest_target_label: @digest" in settings_text
             assert any("Новости дня" in message and "Сообщений: 0" in message for message in sources_messages)
@@ -273,6 +244,6 @@ def test_start_message_explains_onboarding() -> None:
     message = BotStartupService().build_start_message()
 
     assert "Astra AFT" in message
-    assert "digest" in message.lower()
-    assert "добавить источники" in message.lower()
-    assert "канал доставки" in message.lower()
+    assert "/onboarding" in message
+    assert "/checklist" in message
+    assert "/doctor" in message

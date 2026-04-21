@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты, reply coach и reminders по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис: сначала safe draft, потом style layer, затем детерминированный owner persona layer с guardrails, а теперь ещё и локальный few-shot retrieval layer поверх реальных прошлых ответов владельца. Reminder слой тоже уже подключён как локальный детерминированный pipeline: scan по сохранённым сообщениям, подтверждение кандидатов и доставка due reminders через worker. Поверх этих deterministic пайплайнов теперь добавлен optional provider layer: он не меняет source of truth и не обязателен для работы проекта.
+Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты, reply coach и reminders по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис: сначала safe draft, потом style layer, затем детерминированный owner persona layer с guardrails, а теперь ещё и локальный few-shot retrieval layer поверх реальных прошлых ответов владельца. Reminder слой тоже уже подключён как локальный детерминированный pipeline: scan по сохранённым сообщениям, подтверждение кандидатов и доставка due reminders через worker. Поверх этих deterministic пайплайнов теперь добавлен optional provider layer: он не меняет source of truth и не обязателен для работы проекта. Сверху над существующими слоями теперь есть отдельный operational UX контур: onboarding, checklist, doctor и короткий status для первого запуска и повседневной самопроверки.
 
 ## Зоны ответственности модулей
 
@@ -10,7 +10,7 @@
 - `bot/` содержит aiogram routing и тонкие Telegram-handlers.
 - `bot/` теперь также даёт Telegram-интерфейс для управления allowlist источников, базовыми настройками digest и приёма входящих updates для ingest.
 - `worker/` содержит точки входа для фонового bootstrap/run-once сценария.
-- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine, style layer, persona layer, local few-shot retrieval layer, reminder extraction/delivery, provider layer и статусные сводки.
+- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine, style layer, persona layer, local few-shot retrieval layer, reminder extraction/delivery, provider layer, operational readiness/health и статусные сводки.
 - `config/` содержит общие настройки из окружения.
 - `storage/` содержит SQLAlchemy runtime, bootstrap через Alembic и репозитории доступа к данным.
 - `models/` содержит ORM-схему SQLite для MVP-сущностей.
@@ -30,6 +30,19 @@
 - Использовать bot layer как bridge между `storage/` и будущим digest engine, а не как место для самой digest-логики.
 - Provider layer держать отдельным и опциональным: никаких прямых вызовов конкретного вендора из reply/digest бизнес-логики.
 - Full-access слой держать отдельным от bot-first ingest: только ручные команды, только read-only операции, никаких send/edit/delete/reaction hooks.
+- Operational UX слой тоже держать отдельным: handlers остаются тонкими, readiness вычисляется отдельно, диагностика отдельно, форматирование onboarding/help отдельно.
+
+## Operational UX layer
+
+Новый operational UX слой не добавляет новой продуктовой магии. Его задача — сделать уже существующие слои наблюдаемыми и управляемыми:
+
+- `services/onboarding.py` даёт короткий first-run guide без giant wizard;
+- `services/help_formatter.py` группирует команды по рабочим разделам;
+- `services/system_readiness.py` собирает общее состояние системы и считает explainable readiness rules для ingest, digest, memory, reply, reminders, provider и experimental full-access;
+- `services/system_health.py` превращает readiness report в doctor-диагностику с блоками `ОК`, `Предупреждения` и `Что исправить дальше`;
+- `services/status_summary.py` остаётся фасадом для `/status`, `/checklist`, `/doctor`, `/settings` и `/sources`.
+
+Ключевой принцип этого слоя: никакой новой hidden logic. Только явные правила готовности, короткие рекомендации и честные warning-сообщения вроде «нет активных источников», «в БД ещё нет сообщений», «memory cards ещё не строились» или «provider выключен, deterministic fallback активен».
 
 ## Provider layer
 

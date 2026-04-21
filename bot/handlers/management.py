@@ -71,6 +71,28 @@ async def handle_status_command(
         await message.answer(await service.build_status_message())
 
 
+@router.message(Command("checklist"))
+async def handle_checklist_command(
+    message: Message,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        service = _build_status_service(session)
+        await message.answer(await service.build_checklist_message())
+
+
+@router.message(Command("doctor"))
+async def handle_doctor_command(
+    message: Message,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        service = _build_status_service(session)
+        await message.answer(await service.build_doctor_message())
+
+
 @router.message(Command("provider_status"))
 async def handle_provider_status_command(
     message: Message,

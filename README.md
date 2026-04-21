@@ -128,51 +128,40 @@ python -m apps.worker
 python -m apps.bot
 ```
 
-Команды Telegram-бота:
+### Быстрый first-run
 
-- `/start` — короткий онбординг и порядок первого запуска.
-- `/help` — список доступных команд.
-- `/status` — техническая сводка по состоянию проекта и ingest-метрикам.
-- `/provider_status` — состояние optional provider layer, моделей и runtime-доступности API.
-- `/fullaccess_status` — состояние experimental full-access слоя, session и read-only барьера.
-- `/fullaccess_login [код]` — запросить код входа или завершить авторизацию user-session.
-- `/fullaccess_logout` — локально удалить session/pending auth full-access слоя.
-- `/fullaccess_chats` — показать доступные пользовательские чаты без массового импорта.
-- `/fullaccess_sync <chat_id|@username>` — вручную синкать историю одного user-чата в общий `message_store`.
-- `/reminders_scan [24h|3d] [chat_id|@username]` — просканировать локальные сообщения на задачи и reminders-кандидаты.
-- `/tasks` — показать активные задачи.
-- `/reminders` — показать активные reminders.
-- `/sources` — все зарегистрированные источники из allowlist со статистикой сообщений.
-- `/source_add <chat_id|@username>` — добавить источник в allowlist.
-- `/source_disable <chat_id|@username>` — выключить источник.
-- `/source_enable <chat_id|@username>` — включить источник обратно.
-- `/memory_rebuild [chat_id|@username]` — пересобрать memory по локальной БД.
-- `/chat_memory <chat_id|@username>` — показать memory-card по чату.
-- `/person_memory <person_key|имя|@username>` — показать memory-card по человеку.
-- `/digest_target <chat_id|@username>` — сохранить чат или канал доставки digest.
-- `/digest_now [12h|24h|3d]` — вручную собрать digest по сохранённым сообщениям.
-- `/digest_llm [12h|24h|3d]` — собрать digest и, если provider доступен, мягко улучшить wording поверх deterministic baseline.
-- `/reply <chat_id|@username>` — получить persona-aware подсказку ответа по конкретному чату.
-- `/reply_llm <chat_id|@username>` — получить ту же подсказку с optional LLM-refine поверх baseline reply.
-- `/examples_rebuild [chat_id|@username]` — пересобрать локальную базу reply examples по сохранённым сообщениям.
-- `/reply_examples <chat_id|@username>` — показать похожие прошлые реальные ответы для текущей reply-ситуации.
-- `/style_profiles` — показать доступные встроенные style-профили.
-- `/style_set <chat_id|@username> <profile_key>` — вручную назначить style-профиль для уже известного чата.
-- `/style_unset <chat_id|@username>` — снять ручной style-override.
-- `/style_status <chat_id|@username>` — показать effective style-профиль чата и источник выбора.
-- `/persona_status` — показать состояние owner persona core и guardrails.
-- `/settings` — показать базовые настройки Astra AFT.
+После этого шага у бота есть отдельный operational UX слой:
 
-`/status` теперь отдельно показывает:
+- `/onboarding` — коротко объясняет, что такое Astra AFT и в каком порядке её поднимать.
+- `/status` — короткая живая сводка: что уже готово и какой следующий шаг.
+- `/checklist` — пошаговая setup-checklist с `[готово]` и `[не готово]`.
+- `/doctor` — диагностика: что в порядке, какие есть предупреждения и что чинить дальше.
+- `/help` — команды по разделам, а не просто длинный общий список.
 
-- что deterministic mode активен;
-- готов ли provider layer;
-- доступны ли LLM refine режимы для reply и digest.
-- включён ли experimental full-access слой;
-- авторизована ли user-session;
-- активен ли read-only барьер;
-- сколько чатов уже синхронизировано через full-access;
-- готов ли проект использовать full-access как дополнительный источник данных.
+Быстрый порядок запуска теперь такой:
+
+1. Открой личный чат с ботом и отправь `/start` или `/onboarding`.
+2. Проверь текущее состояние через `/checklist`.
+3. Добавь хотя бы один источник через `/source_add <chat_id|@username>` или посмотри `/sources`.
+4. Накопи сообщения или подтяни историю через `/fullaccess_sync <chat_id|@username>`, если используешь experimental слой.
+5. При необходимости задай канал доставки через `/digest_target <chat_id|@username>`.
+6. Построй память через `/memory_rebuild`.
+7. Проверь рабочий контур командами `/digest_now`, `/reply <chat_id|@username>` и `/reminders_scan`.
+8. Если что-то не сходится, смотри `/doctor`.
+
+Команды Telegram-бота по разделам:
+
+- Настройка: `/start`, `/onboarding`, `/help`
+- Диагностика: `/status`, `/checklist`, `/doctor`, `/settings`
+- Источники: `/sources`, `/source_add`, `/source_disable`, `/source_enable`
+- Digest: `/digest_target`, `/digest_now`, `/digest_llm`
+- Память: `/memory_rebuild`, `/chat_memory`, `/person_memory`
+- Ответы: `/reply`, `/reply_llm`, `/examples_rebuild`, `/reply_examples`, `/style_profiles`, `/style_set`, `/style_unset`, `/style_status`, `/persona_status`
+- Напоминания: `/reminders_scan`, `/tasks`, `/reminders`
+- Provider: `/provider_status`
+- Full-access experimental: `/fullaccess_status`, `/fullaccess_login [код]`, `/fullaccess_logout`, `/fullaccess_chats`, `/fullaccess_sync <chat_id|@username>`
+
+`/status` теперь не пытается быть giant log. Он показывает короткую operational сводку: готовность, состояние ключевых слоёв и следующую рекомендуемую команду. Подробности и причины вынесены в `/checklist` и `/doctor`.
 
 Для `/source_add` и `/digest_target` поддержан best-effort сценарий через форвард или reply:
 

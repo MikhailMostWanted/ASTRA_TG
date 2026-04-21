@@ -21,6 +21,17 @@ async def handle_start_command(
         await message.answer(service.build_start_message())
 
 
+@router.message(Command("onboarding"))
+async def handle_onboarding_command(
+    message: Message,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        service = BotStartupService()
+        await message.answer(service.build_onboarding_message())
+
+
 @router.message(Command("help"))
 async def handle_help_command(
     message: Message,

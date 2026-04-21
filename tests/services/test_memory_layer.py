@@ -241,13 +241,9 @@ def test_memory_rebuild_builds_chat_and_people_memory_from_local_messages(
                 chat_style_override_repository=ChatStyleOverrideRepository(session),
             )
             status_text = await status_service.build_status_message()
-            assert "Memory-карт чатов: 2" in status_text
-            assert "Memory-карт людей: 3" in status_text
-            assert "Reply layer: готов" in status_text
-            assert "Чатов с данными для reply: 1" in status_text
-            assert "Опора reply на memory: да" in status_text
-            assert "Последний rebuild memory:" in status_text
-            assert "Данных для memory: да" in status_text
+            assert "Статус Astra AFT" in status_text
+            assert "Memory: готов; карт чатов 2, людей 3" in status_text
+            assert "Reply: готов" in status_text
 
         await runtime.dispose()
 
