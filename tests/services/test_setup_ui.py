@@ -95,7 +95,7 @@ def test_setup_command_renders_home_screen_and_saves_owner_chat(monkeypatch, tmp
 
         assert len(message.answers) == 1
         answer = message.answers[0]
-        assert "Astra AFT / Центр управления" in answer.text
+        assert "Astra AFT / Setup" in answer.text
         assert "Следующий шаг" in answer.text
         assert answer.reply_markup is not None
         assert {"Статус", "Чеклист", "Диагностика", "Источники", "Дайджест", "Память", "Ответы", "Напоминания", "Обновить"}.issubset(
@@ -198,7 +198,7 @@ def test_setup_callback_navigation_renders_section_and_utility_row(monkeypatch, 
 
         assert len(message.edits) == 1
         edit = message.edits[0]
-        assert "Astra AFT / Источники" in edit.text
+        assert "Astra AFT / Sources" in edit.text
         assert edit.reply_markup is not None
         assert {"Назад", "Домой", "Обновить", "Как добавить"}.issubset(
             set(_keyboard_texts(edit.reply_markup))
@@ -255,7 +255,7 @@ def test_memory_rebuild_callback_runs_existing_service(monkeypatch, tmp_path: Pa
 
         assert any("Пересборка памяти завершена." in answer.text for answer in message.answers)
         assert len(message.edits) == 1
-        assert "Astra AFT / Память" in message.edits[0].text
+        assert "Astra AFT / Memory" in message.edits[0].text
 
         async with runtime.session_factory() as session:
             assert await ChatMemoryRepository(session).count_chat_memory() > 0
@@ -382,11 +382,11 @@ def test_setup_ui_overview_reflects_ready_state(monkeypatch, tmp_path: Path) -> 
             card = await SetupUIService.from_session(session).build_screen("reply")
             reminders_card = await SetupUIService.from_session(session).build_screen("reminders")
 
-            assert "Astra AFT / Ответы" in card.text
+            assert "Astra AFT / Reply" in card.text
             assert "Готовых чатов: 1" in card.text
             assert "Похожие ответы: да" in card.text
             assert "Готовые чаты: 1" in card.text
-            assert "Astra AFT / Напоминания" in reminders_card.text
+            assert "Astra AFT / Reminders" in reminders_card.text
             assert "Активные напоминания: 1" in reminders_card.text
 
         await runtime.dispose()
@@ -430,14 +430,14 @@ def test_stage2_optional_overview_screens_render_provider_fullaccess_and_ops(
             fullaccess_card = await service.build_screen("fullaccess")
             ops_card = await service.build_screen("ops")
 
-            assert "Astra AFT / Provider [OPT]" in provider_card.text
+            assert "Astra AFT / Provider" in provider_card.text
             assert "Конфиг: не настроен" in provider_card.text
             assert "Reply refine: недоступен" in provider_card.text
             assert {"Статус", "Домой", "Обновить"}.issubset(
                 set(_keyboard_texts(provider_card.reply_markup))
             )
 
-            assert "Astra AFT / Full-access [EXP]" in fullaccess_card.text
+            assert "Astra AFT / Full-access" in fullaccess_card.text
             assert "Read-only барьер: активен" in fullaccess_card.text
             assert "Session: есть" in fullaccess_card.text
             assert {"Статус", "Чаты", "Sync", "Домой", "Обновить"}.issubset(
@@ -577,7 +577,7 @@ def test_stage2_reply_and_memory_pickers_and_result_cards_work(monkeypatch, tmp_
         )
         assert any("Astra AFT / Reply / Команда клиента" in answer.text for answer in reply_message.answers)
         assert any("Итоговая серия" in answer.text for answer in reply_message.answers)
-        assert any("Риск / уверенность" in answer.text for answer in reply_message.answers)
+        assert any("[OK] Риск:" in answer.text for answer in reply_message.answers)
         assert {"Похожие", "Style", "Назад", "Домой"}.issubset(
             set(_keyboard_texts(reply_message.answers[0].reply_markup))
         )
@@ -649,10 +649,10 @@ def test_stage2_sources_toggle_callback_updates_screen_and_state(monkeypatch, tm
         callback = FakeCallback(data="ux:sources:toggle:news_room", message=message, bot=message.bot)
         await setup_module.handle_setup_callback(callback, runtime.session_factory)
 
-        assert any("Astra AFT / Источники / Обновление" in answer.text for answer in message.answers)
+        assert any("Astra AFT / Sources / Обновление" in answer.text for answer in message.answers)
         assert any("Источник выключен." in answer.text for answer in message.answers)
         assert len(message.edits) == 1
-        assert "Astra AFT / Источники" in message.edits[0].text
+        assert "Astra AFT / Sources" in message.edits[0].text
 
         async with runtime.session_factory() as session:
             chat = await ChatRepository(session).find_chat_by_handle_or_telegram_id("@news_room")
@@ -734,9 +734,9 @@ def test_stage2_digest_and_reminders_inline_actions_return_polished_cards(
         )
         assert any("Astra AFT / Digest / Результат" in answer.text for answer in digest_message.answers)
         assert any("Окно:" in answer.text for answer in digest_message.answers)
-        assert any("Цель:" in answer.text for answer in digest_message.answers)
-        assert any("Что произошло:" in answer.text for answer in digest_message.answers)
-        assert {"12h", "24h", "Домой", "Digest"}.issubset(
+        assert any("Получатель:" in answer.text for answer in digest_message.answers)
+        assert any("Ключевые параметры" in answer.text for answer in digest_message.answers)
+        assert {"Собрать 12h", "Собрать 24h", "Назад", "Домой", "Обновить"}.issubset(
             set(_keyboard_texts(digest_message.answers[0].reply_markup))
         )
         assert digest_message.bot.sent_messages
@@ -747,9 +747,9 @@ def test_stage2_digest_and_reminders_inline_actions_return_polished_cards(
             runtime.session_factory,
         )
         assert any("Astra AFT / Reminders / Скан" in answer.text for answer in reminders_message.answers)
-        assert any("Новых candidate-карточек" in answer.text for answer in reminders_message.answers)
-        assert any("Owner chat готов" in answer.text for answer in reminders_message.answers)
-        assert {"12h", "24h", "Напоминания", "Домой"}.issubset(
+        assert any("Новых карточек" in answer.text for answer in reminders_message.answers)
+        assert any("Owner chat:" in answer.text for answer in reminders_message.answers)
+        assert {"Скан 12h", "Скан 24h", "Напоминания", "Назад", "Домой", "Обновить"}.issubset(
             set(_keyboard_texts(reminders_message.answers[0].reply_markup))
         )
 
@@ -777,8 +777,8 @@ def test_stage2_callback_navigation_renders_new_screens(monkeypatch, tmp_path: P
 
         setup_module = importlib.import_module("bot.handlers.setup")
         expectations = {
-            "ux:provider": "Astra AFT / Provider [OPT]",
-            "ux:fullaccess": "Astra AFT / Full-access [EXP]",
+            "ux:provider": "Astra AFT / Provider",
+            "ux:fullaccess": "Astra AFT / Full-access",
             "ux:ops": "Astra AFT / Ops",
             "ux:reply:pick": "Astra AFT / Reply / Выбор чата",
             "ux:memory:pick": "Astra AFT / Memory / Выбор чата",

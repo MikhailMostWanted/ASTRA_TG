@@ -8,6 +8,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from models import Reminder, Task
 from services.memory_common import format_utc, truncate_text
 from services.reminder_models import ReminderActionResult, RenderedReminderCard
+from services.render_cards import (
+    MARKER_OFF,
+    MARKER_OK,
+    MARKER_WARN,
+    format_status_line,
+    state_shell_lines,
+)
 
 
 REMINDER_CALLBACK_PREFIX = "reminder"
@@ -31,23 +38,29 @@ class ReminderFormatter:
         reasons = payload.get("reasons") or []
         text = "\n".join(
             [
-                "Кандидат на задачу / reminder",
+                "Astra AFT / Reminders / Candidate",
                 "",
-                f"Чат: {chat_title}",
-                f"С кем связано: {source_sender}",
-                f"Формулировка: {task.title}",
-                f"Контекст: {truncate_text(task.summary or payload.get('source_message_preview'), limit=180)}",
+                "Сводка",
+                format_status_line(MARKER_WARN, "Статус", "требует подтверждения"),
+                format_status_line(MARKER_OK, "Задача", task.title),
+                format_status_line(MARKER_OK, "Напомнить", format_utc(reminder.remind_at)),
+                "",
+                "Контекст",
+                format_status_line(MARKER_OK, "Чат", chat_title),
+                format_status_line(MARKER_OK, "Связано с", source_sender),
+                truncate_text(task.summary or payload.get("source_message_preview"), limit=180),
+                "",
+                "Детали",
                 (
-                    f"Срок: {format_utc(task.due_at)}"
+                    format_status_line(MARKER_OK, "Срок", format_utc(task.due_at))
                     if task.due_at is not None
-                    else "Срок: не определён"
+                    else format_status_line(MARKER_OFF, "Срок", "не определён")
                 ),
-                f"Предлагаю напомнить: {format_utc(reminder.remind_at)}",
-                f"Уверенность: {round(task.confidence * 100)}%",
-                (
-                    "Почему замечено: " + ", ".join(str(item) for item in reasons[:4])
-                    if reasons
-                    else "Почему замечено: детальная причина не сохранена"
+                format_status_line(MARKER_OK, "Уверенность", f"{round(task.confidence * 100)}%"),
+                format_status_line(
+                    MARKER_OK if reasons else MARKER_OFF,
+                    "Почему замечено",
+                    ", ".join(str(item) for item in reasons[:3]) if reasons else "детальная причина не сохранена",
                 ),
             ]
         )
@@ -65,12 +78,12 @@ class ReminderFormatter:
                 callback_data=build_reminder_callback_data("approve", task_id),
             ),
             InlineKeyboardButton(
-                text="Отменить",
-                callback_data=build_reminder_callback_data("reject", task_id),
-            ),
-            InlineKeyboardButton(
                 text="Позже",
                 callback_data=build_reminder_callback_data("postpone", task_id),
+            ),
+            InlineKeyboardButton(
+                text="Отклонить",
+                callback_data=build_reminder_callback_data("reject", task_id),
             ),
         )
         return builder.as_markup()
@@ -85,40 +98,65 @@ class ReminderFormatter:
     ) -> str:
         scope = f"по источнику {source_label}" if source_label else "по активным источникам"
         if candidate_count == 0:
-            return f"За {window_label} {scope} кандидатов на задачи и reminders не найдено."
+            return "\n".join(
+                [
+                    "Astra AFT / Reminders / Скан",
+                    "",
+                    *state_shell_lines(
+                        marker=MARKER_OFF,
+                        status="Кандидаты не найдены",
+                        meaning=f"За {window_label} {scope} новых задач не видно.",
+                        next_step="Попробуй другое окно или дождись новых сообщений.",
+                    ),
+                ]
+            )
 
         lines = [
-            f"Найдено кандидатов: {candidate_count}",
-            f"Окно: {window_label}",
-            f"Область сканирования: {scope}",
+            "Astra AFT / Reminders / Скан",
+            "",
+            "Сводка",
+            format_status_line(MARKER_OK, "Найдено кандидатов", str(candidate_count)),
+            format_status_line(MARKER_OK, "Окно", window_label),
+            format_status_line(MARKER_OK, "Область", scope),
         ]
         if skipped_existing_count:
-            lines.append(f"Пропущено уже обработанных сообщений: {skipped_existing_count}")
-        lines.append("Ниже карточки для подтверждения.")
+            lines.append(format_status_line(MARKER_OFF, "Уже обработано", str(skipped_existing_count)))
+        lines.extend(["", "Следующий шаг", "Подтверди нужные карточки ниже."])
         return "\n".join(lines)
 
     def format_tasks(self, tasks: list[Task]) -> str:
         if not tasks:
-            return "Активных задач пока нет."
+            return "\n".join(
+                [
+                    "Astra AFT / Reminders / Tasks",
+                    "",
+                    *state_shell_lines(
+                        marker=MARKER_OFF,
+                        status="Активных задач нет",
+                        meaning="Подтверждённые задачи пока не сохранены.",
+                        next_step="/reminders_scan 24h",
+                    ),
+                ]
+            )
 
-        lines = ["Активные задачи", ""]
+        lines = ["Astra AFT / Reminders / Tasks", "", "Детали"]
         for index, task in enumerate(tasks[:10], start=1):
             reminder = _pick_primary_reminder(task.reminders)
             lines.extend(
                 [
                     f"{index}. {task.title}",
-                    f"Статус: {task.status}",
+                    format_status_line(MARKER_OK, "Статус", task.status),
                     (
-                        f"Срок: {format_utc(task.due_at)}"
+                        format_status_line(MARKER_OK, "Срок", format_utc(task.due_at))
                         if task.due_at is not None
-                        else "Срок: не задан"
+                        else format_status_line(MARKER_OFF, "Срок", "не задан")
                     ),
                     (
-                        f"Reminder: {format_utc(reminder.remind_at)}"
+                        format_status_line(MARKER_OK, "Reminder", format_utc(reminder.remind_at))
                         if reminder is not None
-                        else "Reminder: не задан"
+                        else format_status_line(MARKER_OFF, "Reminder", "не задан")
                     ),
-                    f"Источник: {_resolve_chat_title(task, reminder)}",
+                    format_status_line(MARKER_OK, "Источник", _resolve_chat_title(task, reminder)),
                     f"Контекст: {truncate_text(task.summary, limit=160) or 'нет краткого контекста'}",
                     "",
                 ]
@@ -127,20 +165,29 @@ class ReminderFormatter:
 
     def format_reminders(self, reminders: list[Reminder]) -> str:
         if not reminders:
-            return "Активных напоминаний пока нет."
+            return "\n".join(
+                [
+                    "Astra AFT / Reminders",
+                    "",
+                    *state_shell_lines(
+                        marker=MARKER_OFF,
+                        status="Активных напоминаний нет",
+                        meaning="Подтверждённых будущих напоминаний пока нет.",
+                        next_step="/reminders_scan 24h",
+                    ),
+                ]
+            )
 
-        lines = ["Активные напоминания", ""]
+        lines = ["Astra AFT / Reminders", "", "Детали"]
         for index, reminder in enumerate(reminders[:10], start=1):
             task = reminder.task
             lines.extend(
                 [
                     f"{index}. {task.title if task is not None else 'Без задачи'}",
-                    f"Сработает: {format_utc(reminder.remind_at)}",
-                    f"Статус: {reminder.status}",
-                    f"Источник: {_resolve_chat_title(task, reminder)}",
-                    (
-                        f"Подтверждено: {'да' if task is not None and not task.needs_user_confirmation else 'нет'}"
-                    ),
+                    format_status_line(MARKER_OK, "Сработает", format_utc(reminder.remind_at)),
+                    format_status_line(MARKER_OK, "Статус", reminder.status),
+                    format_status_line(MARKER_OK, "Источник", _resolve_chat_title(task, reminder)),
+                    format_status_line(MARKER_OK if task is not None and not task.needs_user_confirmation else MARKER_WARN, "Подтверждено", "да" if task is not None and not task.needs_user_confirmation else "нет"),
                     "",
                 ]
             )
@@ -150,22 +197,29 @@ class ReminderFormatter:
         task = result.task
         reminder = result.reminder
         action_title = {
-            "approve": "Кандидат одобрен.",
-            "reject": "Кандидат отклонён.",
-            "postpone": "Кандидат подтверждён с переносом.",
-            "already_processed": "Кандидат уже обработан.",
+            "approve": "Кандидат одобрен",
+            "reject": "Кандидат отклонён",
+            "postpone": "Кандидат подтверждён с переносом",
+            "already_processed": "Кандидат уже обработан",
         }.get(result.action, "Состояние кандидата обновлено.")
         lines = [
-            action_title,
+            "Astra AFT / Reminders / Action",
             "",
-            f"Задача: {task.title}",
-            f"Статус задачи: {task.status}",
-            f"Reminder: {format_utc(reminder.remind_at)}",
-            f"Статус reminder: {reminder.status}",
-            f"Источник: {_resolve_chat_title(task, reminder)}",
+            *state_shell_lines(
+                marker=MARKER_OK,
+                status=action_title,
+                meaning=f"Задача: {task.title}.",
+                next_step="/reminders",
+            ),
+            "",
+            "Детали",
+            format_status_line(MARKER_OK, "Статус задачи", task.status),
+            format_status_line(MARKER_OK, "Reminder", format_utc(reminder.remind_at)),
+            format_status_line(MARKER_OK, "Статус reminder", reminder.status),
+            format_status_line(MARKER_OK, "Источник", _resolve_chat_title(task, reminder)),
         ]
         if result.action == "postpone" and result.original_remind_at is not None:
-            lines.insert(4, f"Было: {format_utc(result.original_remind_at)}")
+            lines.append(format_status_line(MARKER_OK, "Было", format_utc(result.original_remind_at)))
         return "\n".join(lines)
 
     def format_delivery_packet(self, reminder: Reminder) -> str:
@@ -180,13 +234,18 @@ class ReminderFormatter:
         )
         return "\n".join(
             [
-                "Reminder packet",
+                "Astra AFT / Reminders / Delivery",
                 "",
-                f"Задача: {title}",
-                f"Чат: {chat_title}",
-                f"С кем связано: {source_sender}",
-                f"Контекст: {context or 'краткий контекст не сохранён'}",
-                f"Что лучше сделать сейчас: {title.lower()} и закрыть этот хвост, либо сразу перенести новый срок.",
+                "Сводка",
+                format_status_line(MARKER_OK, "Задача", title),
+                format_status_line(MARKER_OK, "Чат", chat_title),
+                format_status_line(MARKER_OK, "Связано с", source_sender),
+                "",
+                "Контекст",
+                context or "Краткий контекст не сохранён.",
+                "",
+                "Следующий шаг",
+                f"{title.lower()} или перенести срок.",
             ]
         )
 

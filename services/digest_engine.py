@@ -92,12 +92,11 @@ class DigestEngineService:
                 "Для digest не найдено сообщений.",
                 window=window.label,
             )
+            rendered = self.formatter.format_empty_window(window_label=window.label)
             return DigestExecutionPlan(
                 window=window,
                 target=target,
-                preview_chunks=[
-                    f"За {window.label} по активным digest-источникам сообщений не найдено."
-                ],
+                preview_chunks=rendered.chunks,
                 target_chunks=[],
                 digest_id=None,
                 message_count=0,

@@ -213,15 +213,15 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             settings_text = await status_service.build_settings_message()
             sources_messages = await status_service.build_sources_messages()
 
-            assert "Статус Astra AFT" in status_text
+            assert "Astra AFT / Status" in status_text
             assert "Готово: 5/9" in status_text
-            assert "Источники: 1 активных, сообщений 1, источников с данными 1" in status_text
-            assert "Digest: готов; target: @digest" in status_text
-            assert "Memory: не готов; карт чатов 0, людей 0" in status_text
-            assert "Reply: не готов" in status_text
-            assert "Reminders: не готов; owner chat: не задан" in status_text
-            assert "Provider: Provider layer выключен, deterministic fallback активен." in status_text
-            assert "Следующий шаг:" in status_text
+            assert "[OK] Источники: 1 активных, сообщений 1, с данными 1" in status_text
+            assert "[OK] Digest: target: @digest" in status_text
+            assert "[WARN] Memory: карт чатов 0, людей 0" in status_text
+            assert "[WARN] Reply:" in status_text
+            assert "[WARN] Reminders: owner chat: не задан" in status_text
+            assert "[OFF] Provider: Provider layer выключен" in status_text
+            assert "Следующий шаг" in status_text
             assert "digest_target_chat_id: -100900" in settings_text
             assert "digest_target_label: @digest" in settings_text
             assert any("Новости дня" in message and "Сообщений: 0" in message for message in sources_messages)

@@ -5,6 +5,13 @@ from typing import TYPE_CHECKING
 
 from services.digest_builder import DigestBuildResult, DigestSourceSummary
 from services.digest_window import format_window_range
+from services.render_cards import (
+    MARKER_OFF,
+    MARKER_OK,
+    MARKER_WARN,
+    format_status_line,
+    state_shell_lines,
+)
 
 
 if TYPE_CHECKING:
@@ -22,25 +29,28 @@ class DigestFormatter:
     max_message_length: int = 3500
 
     def format(self, result: DigestBuildResult) -> RenderedDigest:
-        title = "Digest Astra AFT"
+        title = "Astra AFT / Digest"
         intro_sections = [
-            f"Окно: {format_window_range(result.window)}",
+            "Сводка",
+            format_status_line(MARKER_OK, "Окно", format_window_range(result.window)),
+            format_status_line(MARKER_OK, "Сообщений", str(result.total_messages)),
+            format_status_line(MARKER_OK, "Источников", str(result.source_count)),
             "",
-            "Что произошло:",
+            "Обзор",
             *result.overview_lines,
             "",
-            "Ключевые источники:",
-            *(result.key_source_lines or ["- Пока нет содержательных источников."]),
+            "Ключевые темы и источники",
+            *(result.key_source_lines or [f"{MARKER_OFF} Пока нет содержательных источников."]),
             "",
-            "Подробнее по источникам:",
+            "Источники",
         ]
         detail_sections = [self._format_source_section(source) for source in result.source_summaries]
         stats_section = "\n".join(
             [
-                "Статистика:",
-                f"- Сообщений в окне: {result.total_messages}",
-                f"- Источников с активностью: {result.source_count}",
-                f"- Окно digest: {result.window.label}",
+                "Детали",
+                format_status_line(MARKER_OK, "Сообщений в окне", str(result.total_messages)),
+                format_status_line(MARKER_OK, "Источников с активностью", str(result.source_count)),
+                format_status_line(MARKER_OK, "Окно digest", result.window.label),
             ]
         )
         chunks = _chunk_rendered_digest(
@@ -52,6 +62,20 @@ class DigestFormatter:
         )
         return RenderedDigest(full_text="\n\n".join(chunks), chunks=chunks)
 
+    def format_empty_window(self, *, window_label: str) -> RenderedDigest:
+        lines = [
+            "Astra AFT / Digest",
+            "",
+            *state_shell_lines(
+                marker=MARKER_WARN,
+                status="Данных для дайджеста нет",
+                meaning=f"За {window_label} по активным digest-источникам сообщений не найдено.",
+                next_step="Подожди новых сообщений или проверь Sources.",
+            ),
+        ]
+        text = "\n".join(lines)
+        return RenderedDigest(full_text=text, chunks=[text])
+
     def format_inline_result(
         self,
         *,
@@ -61,37 +85,48 @@ class DigestFormatter:
         target_label = plan.target.label or (
             str(plan.target.chat_id) if plan.target.chat_id is not None else "не задан"
         )
-        lines = [
-            f"Окно: {format_window_range(plan.window)}",
-            f"Цель: {target_label}",
-            f"Сводка: {plan.summary_short}",
-        ]
-        if plan.has_digest:
+        if not plan.has_digest:
+            lines = state_shell_lines(
+                marker=MARKER_WARN,
+                status="Дайджест не собран",
+                meaning="В выбранном окне не нашлось новых данных.",
+                next_step="Попробуй окно 24h или проверь Sources.",
+            )
             lines.extend(
                 [
                     "",
-                    "Что произошло:",
-                    f"• Digest сохранён: #{plan.digest_id}",
-                    f"• Сообщений в окне: {plan.message_count}",
-                    f"• Источников с активностью: {plan.source_count}",
+                    "Детали",
+                    format_status_line(MARKER_OK, "Окно", format_window_range(plan.window)),
+                    format_status_line(MARKER_OFF, "Получатель", target_label),
                 ]
             )
-        else:
-            lines.extend(["", "Что произошло:", "• Новых данных для digest в этом окне не нашлось."])
+            return "\n".join(lines)
+
+        lines = [
+            "Сводка",
+            format_status_line(MARKER_OK, "Дайджест", "собран"),
+            plan.summary_short,
+            "",
+            "Ключевые параметры",
+            format_status_line(MARKER_OK, "Окно", format_window_range(plan.window)),
+            format_status_line(MARKER_OK, "Получатель", target_label),
+            format_status_line(MARKER_OK, "Сообщений", str(plan.message_count)),
+            format_status_line(MARKER_OK, "Источников", str(plan.source_count)),
+        ]
+        lines.extend(["", "Детали", format_status_line(MARKER_OK, "Digest ID", f"#{plan.digest_id}")])
         if plan.llm_refine_requested:
             lines.append(
-                "• LLM-улучшение: применено."
+                format_status_line(MARKER_OK, "LLM-улучшение", "применено")
                 if plan.llm_refine_applied
-                else "• LLM-улучшение: fallback, показан базовый digest."
+                else format_status_line(MARKER_WARN, "LLM-улучшение", "резервный базовый digest")
             )
         if notice:
-            lines.append(f"• Публикация: {notice}")
+            lines.append(format_status_line(MARKER_OK, "Публикация", notice))
         return "\n".join(lines)
 
     def _format_source_section(self, source: DigestSourceSummary) -> str:
         lines = [
-            source.display_title,
-            f"{source.message_count} сообщений за окно.",
+            format_status_line(MARKER_OK, source.display_title, f"{source.message_count} сообщений"),
         ]
         lines.extend(f"- {point.text}" for point in source.points)
         return "\n".join(lines)
@@ -108,7 +143,7 @@ def _chunk_rendered_digest(
     if not sections:
         return [f"{title}\n\n{intro}\n\n{stats_section}"]
 
-    window_line = intro.splitlines()[0] if intro else ""
+    window_line = next((line for line in intro.splitlines() if "Окно:" in line), "")
     primary_header = f"{title}\n\n{intro}"
     continuation_header = (
         f"{title} (продолжение)\n\n{window_line}"

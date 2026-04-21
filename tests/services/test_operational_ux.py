@@ -100,14 +100,14 @@ def test_operational_messages_for_empty_database(monkeypatch, tmp_path: Path) ->
             checklist_text = await service.build_checklist_message()
             doctor_text = await service.build_doctor_message()
 
-            assert "Статус Astra AFT" in status_text
+            assert "Astra AFT / Status" in status_text
             assert "Следующий шаг" in status_text
-            assert "/onboarding" in status_text
+            assert "/setup" in status_text
             assert "/checklist" in status_text
-            assert "[не готово] owner chat" in checklist_text
-            assert "[не готово] активный источник" in checklist_text
-            assert "[не готово] сообщения в БД" in checklist_text
-            assert "[готово] provider layer" in checklist_text
+            assert "[WARN] Личный чат" in checklist_text
+            assert "[WARN] Источник" in checklist_text
+            assert "[WARN] Сообщения" in checklist_text
+            assert "[OPT] Provider" in checklist_text
             assert "ОК" in doctor_text
             assert "Предупреждения" in doctor_text
             assert "Что исправить дальше" in doctor_text
@@ -144,8 +144,8 @@ def test_checklist_distinguishes_sources_messages_and_memory(monkeypatch, tmp_pa
 
             service = _build_status_service(session)
             checklist_without_messages = await service.build_checklist_message()
-            assert "[готово] активный источник" in checklist_without_messages
-            assert "[не готово] сообщения в БД" in checklist_without_messages
+            assert "[OK] Источник" in checklist_without_messages
+            assert "[WARN] Сообщения" in checklist_without_messages
 
             await messages.create_message(
                 chat_id=source_chat.id,
@@ -165,9 +165,9 @@ def test_checklist_distinguishes_sources_messages_and_memory(monkeypatch, tmp_pa
             checklist_with_messages = await service.build_checklist_message()
             doctor_text = await service.build_doctor_message()
 
-            assert "[готово] сообщения в БД" in checklist_with_messages
-            assert "[не готово] memory layer" in checklist_with_messages
-            assert "[не готово] reply layer" in checklist_with_messages
+            assert "[OK] Сообщения" in checklist_with_messages
+            assert "[WARN] Memory" in checklist_with_messages
+            assert "[WARN] Reply" in checklist_with_messages
             assert "memory cards" in doctor_text.lower()
 
         await runtime.dispose()
@@ -290,12 +290,12 @@ def test_checklist_accepts_fully_ready_system(monkeypatch, tmp_path: Path) -> No
             doctor_text = await service.build_doctor_message()
             status_text = await service.build_status_message()
 
-            assert "[готово] owner chat" in checklist_text
-            assert "[готово] digest target" in checklist_text
-            assert "[готово] memory layer" in checklist_text
-            assert "[готово] reply layer" in checklist_text
-            assert "[готово] reminders layer" in checklist_text
-            assert "[готово] provider layer" in checklist_text
+            assert "[OK] Личный чат" in checklist_text
+            assert "[OK] Digest target" in checklist_text
+            assert "[OK] Memory" in checklist_text
+            assert "[OK] Reply" in checklist_text
+            assert "[OK] Reminders" in checklist_text
+            assert "[OPT] Provider" in checklist_text
             assert "Критичных проблем не найдено" in doctor_text
             assert "Готово: 9/9" in status_text
 

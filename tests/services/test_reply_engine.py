@@ -221,16 +221,16 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
 
             rendered = formatter.format_result(result)
             assert "Чат: Команда продукта" in rendered
-            assert "Ориентир: Анна" in rendered
-            assert "Режим / стиль: friend_explain" in rendered
-            assert "Persona: да" in rendered
+            assert "Сообщение-ориентир" in rendered
+            assert "Анна" in rendered
+            assert "[OK] Style: friend_explain" in rendered
+            assert "[OK] Persona: да" in rendered
             assert "Итоговая серия" in rendered
             assert "1." in rendered
-            assert "Что сделал style-слой:" in rendered
-            assert "Что сделал persona-слой:" in rendered
-            assert "Guardrails: ok" in rendered
+            assert "Почему этот ответ" in rendered
+            assert "[OK] Guardrails: ok" in rendered
             assert "Риск:" in rendered
-            assert "Уверенность:" in rendered
+            assert "уверенность" in rendered
 
         management_module = importlib.import_module("bot.handlers.management")
         fake_message = FakeIncomingMessage(bot=FakeBot(), chat_id=900)
@@ -240,8 +240,8 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             runtime.session_factory,
         )
         assert any("Команда продукта" in answer for answer in fake_message.answers)
-        assert any("Режим / стиль: friend_explain" in answer for answer in fake_message.answers)
-        assert any("Persona: да" in answer for answer in fake_message.answers)
+        assert any("[OK] Style: friend_explain" in answer for answer in fake_message.answers)
+        assert any("[OK] Persona: да" in answer for answer in fake_message.answers)
         assert any("Итоговая серия" in answer for answer in fake_message.answers)
         assert any("Риск:" in answer for answer in fake_message.answers)
 
@@ -423,7 +423,7 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
             assert persona_off.suggestion is not None
             assert persona_off.suggestion.persona_applied is False
             assert persona_off.suggestion.final_reply_messages == persona_off.suggestion.reply_messages
-            assert "Persona: нет" in formatter.format_result(persona_off)
+            assert "[OFF] Persona: нет" in formatter.format_result(persona_off)
 
         await runtime.dispose()
 
@@ -538,7 +538,7 @@ def test_reply_llm_handler_falls_back_to_deterministic_reply_when_provider_unava
         )
 
         assert any("Команда продукта" in answer for answer in fake_message.answers)
-        assert any("LLM-refine: fallback" in answer for answer in fake_message.answers)
+        assert any("[WARN] LLM: резервный режим" in answer for answer in fake_message.answers)
         assert any("API сейчас недоступен" in answer for answer in fake_message.answers)
 
         await runtime.dispose()

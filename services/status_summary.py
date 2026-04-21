@@ -8,6 +8,17 @@ from fullaccess.auth import FullAccessAuthService
 from services.bot_owner import BotOwnerService
 from services.digest_target import DigestTargetService
 from services.providers.manager import ProviderManager
+from services.render_cards import (
+    MARKER_EXP,
+    MARKER_OFF,
+    MARKER_OK,
+    MARKER_OPT,
+    MARKER_WARN,
+    compact_text,
+    format_status_line,
+    ready_marker,
+    state_shell_lines,
+)
 from services.system_health import SystemHealthService
 from services.system_readiness import OperationalCheck, OperationalReport, SystemReadinessService
 from storage.repositories import (
@@ -58,44 +69,67 @@ class BotStatusService:
         )
 
         lines = [
-            "Статус Astra AFT",
+            "Astra AFT / Status",
             "",
+            "Сводка",
             f"Готово: {report.ready_check_count}/{report.total_check_count}",
-            (
-                f"Источники: {facts.active_sources} активных, "
-                f"сообщений {facts.total_messages}, источников с данными {facts.chats_with_data}"
+            f"Предупреждений: {len(report.warnings)}",
+            "",
+            "Детали",
+            format_status_line(
+                ready_marker(facts.active_sources > 0 and facts.has_messages),
+                "Источники",
+                f"{facts.active_sources} активных, сообщений {facts.total_messages}, с данными {facts.chats_with_data}",
             ),
-            (
-                f"Digest: {'готов' if digest_status.ready else 'не готов'}; "
-                f"target: {facts.digest_target_label or 'не задан'}"
+            format_status_line(
+                ready_marker(digest_status.ready),
+                "Digest",
+                f"target: {facts.digest_target_label or 'не задан'}",
             ),
-            (
-                f"Memory: {'готов' if memory_status.ready else 'не готов'}; "
-                f"карт чатов {facts.chat_memory_cards}, людей {facts.person_memory_cards}"
+            format_status_line(
+                ready_marker(memory_status.ready),
+                "Memory",
+                f"карт чатов {facts.chat_memory_cards}, людей {facts.person_memory_cards}",
             ),
-            f"Reply: {'готов' if reply_status.ready else 'не готов'}",
-            (
-                f"Reminders: {'готов' if reminders_status.ready else 'не готов'}; "
-                f"owner chat: {facts.owner_chat_id if facts.owner_chat_id is not None else 'не задан'}"
+            format_status_line(ready_marker(reply_status.ready), "Reply", reply_status.detail),
+            format_status_line(
+                ready_marker(reminders_status.ready),
+                "Reminders",
+                f"owner chat: {facts.owner_chat_id if facts.owner_chat_id is not None else 'не задан'}",
             ),
-            f"Provider: {provider_status.detail}",
-            f"Full-access: {fullaccess_status.detail}",
-            f"Ops: {_build_ops_status_line(facts)}",
-            f"Следующий шаг: {next_step}",
-            "Подробно: /onboarding, /checklist, /doctor",
+            format_status_line(_optional_marker(provider_status), "Provider", provider_status.detail),
+            format_status_line(_experimental_marker(fullaccess_status), "Full-access", fullaccess_status.detail),
+            format_status_line(MARKER_OK, "Ops", _build_ops_status_line(facts)),
+            "",
+            "Следующий шаг",
+            next_step,
+            "",
+            "Подробно",
+            "/setup, /checklist, /doctor",
         ]
         return "\n".join(lines)
 
     async def build_checklist_message(self) -> str:
         report = await self._build_operational_report()
-        lines = ["Checklist Astra AFT", ""]
-        for item in report.checklist:
-            lines.append(_format_check(item))
+        lines = [
+            "Astra AFT / Checklist",
+            "",
+            "Сводка",
+            f"Готово: {report.ready_check_count}/{report.total_check_count}",
+            f"Первый незакрытый шаг: {_first_unready_title(report)}",
+            "",
+            "Детали",
+        ]
+        for index, item in enumerate(report.checklist, start=1):
+            lines.append(_format_check(index=index, item=item))
         lines.extend(
             [
                 "",
-                "Подробная сводка: /status",
-                "Диагностика и предупреждения: /doctor",
+                "Следующий шаг",
+                report.next_steps[0] if report.next_steps else "Core-путь готов.",
+                "",
+                "Подробно",
+                "/status, /doctor",
             ]
         )
         return "\n".join(lines)
@@ -104,78 +138,60 @@ class BotStatusService:
         report = await self._build_operational_report()
         doctor = SystemHealthService().build_report(report)
         facts = report.facts
-        lines = ["Doctor Astra AFT", "", "ОК"]
-        lines.extend(f"• {item}" for item in doctor.ok_items)
+        lines = [
+            "Astra AFT / Doctor",
+            "",
+            "Сводка",
+            f"ОК-пунктов: {len(doctor.ok_items)}",
+            f"Предупреждений: {len(doctor.warnings)}",
+            "",
+            "ОК",
+        ]
+        lines.extend(f"{MARKER_OK} {compact_text(item, limit=86)}" for item in doctor.ok_items[:6])
         lines.extend(["", "Предупреждения"])
-        lines.extend(f"• {item}" for item in doctor.warnings)
+        lines.extend(
+            f"{_doctor_warning_marker(item)} {compact_text(item, limit=86)}"
+            for item in doctor.warnings[:8]
+        )
+        hidden_warning_count = max(len(doctor.warnings) - 8, 0)
+        if hidden_warning_count:
+            lines.append(f"{MARKER_WARN} Ещё предупреждений: {hidden_warning_count}")
         lines.extend(["", "Операционный слой"])
-        lines.append(
-            f"• Backup tool: {'доступен' if facts.backup_tool_available else 'недоступен'}"
-        )
-        lines.append(
-            f"• Export tool: {'доступен' if facts.export_tool_available else 'недоступен'}"
-        )
-        lines.append(
-            f"• Последний backup: {_format_timestamp(facts.last_backup_at)}"
-            + (f" ({facts.last_backup_path})" if facts.last_backup_path else "")
-        )
-        lines.append(
-            f"• Последний export: {_format_timestamp(facts.last_export_at)}"
-            + (f" ({facts.last_export_path})" if facts.last_export_path else "")
-        )
-        lines.append(
-            f"• Последний full-access sync: {_format_timestamp(facts.last_fullaccess_sync_at)}"
-        )
-        lines.append(
-            f"• Последняя ошибка worker: {facts.recent_worker_error or 'нет'}"
-        )
-        lines.append(
-            f"• Последняя ошибка provider: {facts.recent_provider_error or 'нет'}"
-        )
-        lines.append(
-            f"• Последняя ошибка full-access: {facts.recent_fullaccess_error or 'нет'}"
-        )
+        lines.append(format_status_line(ready_marker(facts.backup_tool_available), "Backup", "доступен" if facts.backup_tool_available else "недоступен"))
+        lines.append(format_status_line(ready_marker(facts.export_tool_available), "Export", "доступен" if facts.export_tool_available else "недоступен"))
+        lines.append(format_status_line(MARKER_OK if facts.last_backup_at else MARKER_OFF, "Последний backup", _format_timestamp(facts.last_backup_at)))
+        lines.append(format_status_line(MARKER_OK if facts.last_export_at else MARKER_OFF, "Последний export", _format_timestamp(facts.last_export_at)))
+        lines.append(format_status_line(MARKER_OK if facts.last_fullaccess_sync_at else MARKER_OFF, "Последний full-access sync", _format_timestamp(facts.last_fullaccess_sync_at)))
+        lines.append(format_status_line(MARKER_WARN if facts.recent_worker_error else MARKER_OK, "Последняя ошибка worker", facts.recent_worker_error or "нет"))
+        lines.append(format_status_line(MARKER_WARN if facts.recent_provider_error else MARKER_OK, "Последняя ошибка provider", facts.recent_provider_error or "нет"))
+        lines.append(format_status_line(MARKER_WARN if facts.recent_fullaccess_error else MARKER_OK, "Последняя ошибка full-access", facts.recent_fullaccess_error or "нет"))
         if facts.startup_warnings:
-            lines.extend(f"• Startup warning: {item}" for item in facts.startup_warnings)
+            lines.extend(format_status_line(MARKER_WARN, "Startup", item) for item in facts.startup_warnings[:4])
         else:
-            lines.append("• Startup warnings: нет")
+            lines.append(format_status_line(MARKER_OK, "Startup warnings", "нет"))
         lines.extend(["", "Что исправить дальше"])
         for index, step in enumerate(doctor.next_steps, start=1):
-            lines.append(f"{index}. {step}")
+            lines.append(f"{index}. {compact_text(step, limit=92)}")
         return "\n".join(lines)
 
     async def build_provider_status_message(self) -> str:
         status = await self._get_provider_status(check_api=True)
         lines = [
-            "Provider layer Astra AFT",
+            "Astra AFT / Provider",
             "",
-            f"Слой: {'включён' if status.enabled else 'выключен'}",
-            f"Провайдер: {status.provider_name or 'не выбран'}",
-            f"Модель fast: {status.model_fast or 'не задана'}",
-            f"Модель deep: {status.model_deep or 'не задана'}",
-            f"Таймаут: {status.timeout_seconds:.1f}s",
-            "API: доступен" if status.available else "API: недоступен",
-            (
-                "LLM refine для reply: включён"
-                if status.reply_refine_enabled
-                else "LLM refine для reply: выключен"
-            ),
-            (
-                "LLM refine для digest: включён"
-                if status.digest_refine_enabled
-                else "LLM refine для digest: выключен"
-            ),
-            (
-                "Reply refine runtime: доступен"
-                if status.reply_refine_available
-                else "Reply refine runtime: недоступен"
-            ),
-            (
-                "Digest refine runtime: доступен"
-                if status.digest_refine_available
-                else "Digest refine runtime: недоступен"
-            ),
-            f"Причина: {status.reason}",
+            "Сводка",
+            f"{MARKER_OPT} Optional слой: {'включён' if status.enabled else 'выключен'}",
+            f"API: {'доступен' if status.available else 'недоступен'}",
+            "",
+            "Детали",
+            format_status_line(_provider_detail_marker(status.enabled, status.configured), "Конфиг", "настроен" if status.configured else "не настроен"),
+            format_status_line(MARKER_OK if status.provider_name else MARKER_OFF, "Провайдер", status.provider_name or "не выбран"),
+            format_status_line(_provider_detail_marker(status.enabled, status.reply_refine_available), "Reply refine", "доступен" if status.reply_refine_available else "недоступен"),
+            format_status_line(_provider_detail_marker(status.enabled, status.digest_refine_available), "Digest refine", "доступен" if status.digest_refine_available else "недоступен"),
+            format_status_line(MARKER_OK if status.enabled and status.available else MARKER_WARN if status.enabled else MARKER_OFF, "Причина", status.reason),
+            "",
+            "Следующий шаг",
+            "Core-путь работает и без provider." if not status.enabled else "/provider_status",
         ]
         return "\n".join(lines)
 
@@ -197,19 +213,28 @@ class BotStatusService:
         message_counts = await self.message_repository.count_messages_by_chat()
         if not chats:
             return [
-                "Разрешённые источники пока не настроены.\n\n"
-                "Используй /source_add <chat_id или @username> "
-                "или перешли сообщение из нужного канала/группы."
+                "\n".join(
+                    [
+                        "Astra AFT / Sources",
+                        "",
+                        *state_shell_lines(
+                            marker=MARKER_WARN,
+                            status="Источники не добавлены",
+                            meaning="Astra пока не получает сообщения для digest, memory и reply.",
+                            next_step="/source_add <chat_id|@username>",
+                        ),
+                    ]
+                )
             ]
 
         sections: list[str] = []
         for index, chat in enumerate(chats, start=1):
             lines = [
                 f"{index}. {chat.title}",
+                format_status_line(MARKER_OK if chat.is_enabled else MARKER_OFF, "Статус", "активен" if chat.is_enabled else "выключен"),
+                format_status_line(MARKER_OK if message_counts.get(chat.id, 0) > 0 else MARKER_WARN, "Сообщений", str(message_counts.get(chat.id, 0))),
                 f"ID Telegram: {chat.telegram_chat_id}",
                 f"Тип: {chat.type}",
-                f"статус: {'активен' if chat.is_enabled else 'выключен'}",
-                f"Сообщений: {message_counts.get(chat.id, 0)}",
             ]
             if chat.handle:
                 lines.append(f"Username: @{chat.handle}")
@@ -224,7 +249,7 @@ class BotStatusService:
             sections.append("\n".join(lines))
 
         return _chunk_sections(
-            title="Разрешённые источники",
+            title="Astra AFT / Sources",
             sections=sections,
             max_message_length=max_message_length,
         )
@@ -253,10 +278,64 @@ class BotStatusService:
         return await manager.get_status(check_api=check_api)
 
 
-def _format_check(item: OperationalCheck) -> str:
-    prefix = "[готово]" if item.ready else "[не готово]"
-    tail = f" Следующая команда: {item.next_command}" if not item.ready and item.next_command else ""
-    return f"{prefix} {item.title} — {item.detail}{tail}"
+def _format_check(*, index: int, item: OperationalCheck) -> str:
+    marker = _check_marker(item)
+    tail = f"; дальше: {item.next_command}" if not item.ready and item.next_command else ""
+    return f"{index}. {marker} {_check_title(item)}: {item.detail.rstrip('.')}{tail}"
+
+
+def _check_marker(item: OperationalCheck) -> str:
+    if item.key == "provider_layer":
+        return MARKER_OPT if item.ready else MARKER_WARN
+    if item.key == "fullaccess_layer":
+        if item.ready and "выключен" in item.detail.lower():
+            return MARKER_OFF
+        return MARKER_EXP if item.ready else MARKER_WARN
+    return MARKER_OK if item.ready else MARKER_WARN
+
+
+def _check_title(item: OperationalCheck) -> str:
+    titles = {
+        "owner_chat": "Личный чат",
+        "active_source": "Источник",
+        "messages": "Сообщения",
+        "digest_target": "Digest target",
+        "memory_layer": "Memory",
+        "reply_layer": "Reply",
+        "reminders_layer": "Reminders",
+        "provider_layer": "Provider",
+        "fullaccess_layer": "Full-access",
+    }
+    return titles.get(item.key, item.title)
+
+
+def _first_unready_title(report: OperationalReport) -> str:
+    for item in report.checklist:
+        if not item.ready:
+            return _check_title(item)
+    return "всё готово"
+
+
+def _optional_marker(item: OperationalCheck) -> str:
+    if item.ready and "выключен" in item.detail.lower():
+        return MARKER_OFF
+    return MARKER_OPT if item.ready else MARKER_WARN
+
+
+def _experimental_marker(item: OperationalCheck) -> str:
+    if item.ready and "выключен" in item.detail.lower():
+        return MARKER_OFF
+    return MARKER_EXP if item.ready else MARKER_WARN
+
+
+def _provider_detail_marker(enabled: bool, ready: bool) -> str:
+    if ready:
+        return MARKER_OK
+    return MARKER_WARN if enabled else MARKER_OFF
+
+
+def _doctor_warning_marker(value: str) -> str:
+    return MARKER_OK if "критичных проблем не найдено" in value.lower() else MARKER_WARN
 
 
 def _find_check(report: tuple[OperationalCheck, ...], key: str) -> OperationalCheck:

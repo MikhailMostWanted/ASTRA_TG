@@ -266,9 +266,9 @@ def test_reply_examples_rebuild_filters_noise_and_retrieval_prefers_good_local_e
                 ReminderRepository(session),
                 reply_examples,
             ).build_status_message()
-            assert "Статус Astra AFT" in status_text
-            assert "Источники: 2 активных, сообщений 9, источников с данными 2" in status_text
-            assert "Следующий шаг:" in status_text
+            assert "Astra AFT / Status" in status_text
+            assert "[OK] Источники: 2 активных, сообщений 9, с данными 2" in status_text
+            assert "Следующий шаг" in status_text
 
         await runtime.dispose()
 
@@ -386,8 +386,8 @@ def test_reply_commands_use_few_shot_support_and_show_examples(
             SimpleNamespace(args="@product_team"),
             runtime.session_factory,
         )
-        assert any("Few-shot support: найден" in answer for answer in reply_message.answers)
-        assert any("Что сделал few-shot-слой:" in answer for answer in reply_message.answers)
+        assert any("[OK] Few-shot:" in answer for answer in reply_message.answers)
+        assert any("Почему этот ответ" in answer for answer in reply_message.answers)
 
         async with runtime.session_factory() as session:
             chats = ChatRepository(session)
@@ -439,7 +439,7 @@ def test_reply_commands_use_few_shot_support_and_show_examples(
             SimpleNamespace(args="@no_examples"),
             runtime.session_factory,
         )
-        assert any("Few-shot support: не найден" in answer for answer in no_support_message.answers)
+        assert any("[OFF] Few-shot: нет" in answer for answer in no_support_message.answers)
 
         await runtime.dispose()
 

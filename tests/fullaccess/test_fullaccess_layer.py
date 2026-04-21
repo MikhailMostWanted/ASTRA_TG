@@ -115,10 +115,10 @@ def test_fullaccess_status_command_reports_disabled_mode(monkeypatch, tmp_path: 
         )
 
         assert len(message.answers) == 1
-        assert "Слой: выключен" in message.answers[0]
-        assert "api_id/api_hash: не настроены" in message.answers[0]
-        assert "Авторизация: нет" in message.answers[0]
-        assert "Read-only: активен" in message.answers[0]
+        assert "[OFF] Experimental слой: выключен" in message.answers[0]
+        assert "[OFF] api_id/api_hash: не настроены" in message.answers[0]
+        assert "[OFF] Авторизация: нет" in message.answers[0]
+        assert "[OK] Read-only: активен" in message.answers[0]
 
         await runtime.dispose()
 
