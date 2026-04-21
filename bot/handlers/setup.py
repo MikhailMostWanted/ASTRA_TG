@@ -56,14 +56,13 @@ async def handle_setup_callback(
         if parsed.kind == "digest_run":
             sender = _resolve_sender(callback=callback, callback_message=callback_message)
             preview_chat_id = _extract_chat_id(callback_message)
-            notice = await service.run_digest(
+            result_card = await service.run_digest(
                 window_argument=parsed.arg or "24h",
                 preview_chat_id=preview_chat_id,
                 sender=sender,
             )
             await session.commit()
-            if notice and hasattr(callback_message, "answer"):
-                await callback_message.answer(notice)
+            await _send_card(callback_message, result_card)
             card = await service.build_screen(parsed.screen)
             await _edit_card(callback_message, card)
             await callback.answer("Дайджест собран.")
@@ -83,12 +82,70 @@ async def handle_setup_callback(
             result = await service.run_reminders_scan(window_argument=parsed.arg or "24h")
             await session.commit()
             if hasattr(callback_message, "answer"):
-                await callback_message.answer(result.summary_text)
+                summary_card = await service.build_reminders_scan_result_card(
+                    window_argument=parsed.arg or "24h",
+                    result=result,
+                )
+                await callback_message.answer(summary_card.text, reply_markup=summary_card.reply_markup)
                 for item in result.cards:
                     await callback_message.answer(item.text, reply_markup=item.reply_markup)
             card = await service.build_screen(parsed.screen)
             await _edit_card(callback_message, card)
             await callback.answer("Скан завершён.")
+            return
+
+        if parsed.kind == "memory_chat":
+            await _send_card(
+                callback_message,
+                await service.build_memory_result_card(reference=parsed.arg or ""),
+            )
+            await callback.answer("Карточка памяти отправлена.")
+            return
+
+        if parsed.kind == "reply_chat":
+            await _send_card(
+                callback_message,
+                await service.build_reply_result_card(reference=parsed.arg or ""),
+            )
+            await callback.answer("Вариант ответа отправлен.")
+            return
+
+        if parsed.kind == "reply_examples":
+            await _send_card(
+                callback_message,
+                await service.build_reply_examples_card(reference=parsed.arg or ""),
+            )
+            await callback.answer("Похожие ответы отправлены.")
+            return
+
+        if parsed.kind == "style_status":
+            await _send_card(
+                callback_message,
+                await service.build_style_status_card(reference=parsed.arg or ""),
+            )
+            await callback.answer("Статус стиля отправлен.")
+            return
+
+        if parsed.kind == "sources_toggle":
+            await _send_card(
+                callback_message,
+                await service.toggle_source(reference=parsed.arg or ""),
+            )
+            await session.commit()
+            card = await service.build_screen(parsed.screen)
+            await _edit_card(callback_message, card)
+            await callback.answer("Источник обновлён.")
+            return
+
+        if parsed.kind == "fullaccess_chat":
+            await _send_card(
+                callback_message,
+                await service.sync_fullaccess_chat(reference=parsed.arg or ""),
+            )
+            await session.commit()
+            card = await service.build_screen(parsed.screen)
+            await _edit_card(callback_message, card)
+            await callback.answer("Синхронизация завершена.")
             return
 
         if parsed.kind == "reminders_tasks":
@@ -110,6 +167,12 @@ async def _edit_card(callback_message: object | None, card) -> None:
     if callback_message is None or not hasattr(callback_message, "edit_text"):
         raise RuntimeError("Невозможно обновить setup-экран: callback message недоступно.")
     await callback_message.edit_text(card.text, reply_markup=card.reply_markup)
+
+
+async def _send_card(callback_message: object | None, card) -> None:
+    if callback_message is None or not hasattr(callback_message, "answer"):
+        raise RuntimeError("Невозможно отправить setup-карточку: callback message недоступно.")
+    await callback_message.answer(card.text, reply_markup=card.reply_markup)
 
 
 def _extract_chat_id(callback_message: object | None) -> int:

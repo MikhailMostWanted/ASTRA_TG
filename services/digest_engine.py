@@ -32,6 +32,7 @@ class DigestExecutionPlan:
     digest_id: int | None
     message_count: int
     source_count: int
+    summary_short: str
     llm_refine_requested: bool = False
     llm_refine_applied: bool = False
     llm_refine_provider: str | None = None
@@ -101,6 +102,7 @@ class DigestEngineService:
                 digest_id=None,
                 message_count=0,
                 source_count=0,
+                summary_short=f"За {window.label} по активным digest-источникам сообщений не найдено.",
             )
 
         build_result = self.builder.build(
@@ -155,6 +157,7 @@ class DigestEngineService:
             digest_id=digest.id,
             message_count=build_result.total_messages,
             source_count=build_result.source_count,
+            summary_short=build_result.summary_short,
             llm_refine_requested=llm_requested,
             llm_refine_applied=llm_applied,
             llm_refine_provider=llm_provider_name,

@@ -508,6 +508,40 @@ class MessageRepository:
         )
         return int(result.scalar_one())
 
+    async def list_reply_ready_chats(
+        self,
+        *,
+        min_messages: int = 3,
+        limit: int | None = None,
+    ) -> list[Chat]:
+        eligible_chats = (
+            select(
+                Message.chat_id.label("chat_id"),
+                func.max(Message.sent_at).label("last_message_at"),
+            )
+            .join(Chat, Message.chat_id == Chat.id)
+            .where(
+                Chat.is_enabled.is_(True),
+                Chat.type != "channel",
+            )
+            .group_by(Message.chat_id)
+            .having(func.count(Message.id) >= min_messages)
+            .subquery()
+        )
+        statement = (
+            select(Chat)
+            .join(eligible_chats, eligible_chats.c.chat_id == Chat.id)
+            .order_by(
+                desc(eligible_chats.c.last_message_at),
+                func.lower(Chat.title),
+                Chat.telegram_chat_id,
+            )
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())
+
     async def get_messages_for_reminder_scan(
         self,
         *,

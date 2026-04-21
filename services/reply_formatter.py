@@ -89,3 +89,50 @@ class ReplyFormatter:
         if suggestion.alternative_action:
             lines.append(f"Вместо ответа: {suggestion.alternative_action}")
         return "\n".join(lines)
+
+    def format_inline_result(self, result: ReplyResult) -> str:
+        if result.kind != "suggestion" or result.suggestion is None:
+            lines = [
+                f"Чат: {result.chat_title or 'не определён'}",
+                f"Источник: {result.chat_reference or 'не определён'}",
+                "",
+                result.error_message or "Подсказку пока не получилось собрать.",
+            ]
+            return "\n".join(lines)
+
+        suggestion = result.suggestion
+        style_source = "ручной" if suggestion.style_source == "override" else "авто"
+        few_shot_label = (
+            f"few-shot: {suggestion.few_shot_match_count}"
+            if suggestion.few_shot_found
+            else "few-shot: нет"
+        )
+        llm_label = ""
+        if suggestion.llm_refine_requested:
+            llm_label = (
+                f", LLM: {suggestion.llm_refine_provider or 'провайдер'}"
+                if suggestion.llm_refine_applied
+                else ", LLM: резервный режим"
+            )
+        lines = [
+            f"Чат: {result.chat_title}",
+            f"Источник: {result.chat_reference}",
+            "",
+            "Сообщение-ориентир",
+            result.source_message_preview or suggestion.source_message_preview,
+            "",
+            "Итоговая серия",
+            *self.style_formatter.format_reply_messages(
+                suggestion.final_reply_messages or suggestion.reply_messages
+            ),
+            "",
+            f"Почему: {suggestion.reason_short}",
+            f"Риск / уверенность: {suggestion.risk_label} / {round(suggestion.confidence * 100)}%",
+            (
+                f"Style / persona / few-shot: {suggestion.style_profile_key} ({style_source}), "
+                f"persona: {'да' if suggestion.persona_applied else 'нет'}, {few_shot_label}{llm_label}"
+            ),
+        ]
+        if suggestion.alternative_action:
+            lines.append(f"Вместо ответа: {suggestion.alternative_action}")
+        return "\n".join(lines)

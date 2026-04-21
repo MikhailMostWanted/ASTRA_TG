@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from config.settings import Settings
+from services.operational_state import OperationalStateService
 from services.setup_ui import SetupUIService
 from storage.database import bootstrap_database, build_database_runtime
 from storage.repositories import (
@@ -387,6 +388,409 @@ def test_setup_ui_overview_reflects_ready_state(monkeypatch, tmp_path: Path) -> 
             assert "Готовые чаты: 1" in card.text
             assert "Astra AFT / Напоминания" in reminders_card.text
             assert "Активные напоминания: 1" in reminders_card.text
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_stage2_optional_overview_screens_render_provider_fullaccess_and_ops(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "setup-stage2-optional" / "astra.db"
+        session_path = tmp_path / "setup-stage2-optional" / "fullaccess"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("LLM_ENABLED", "true")
+        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("FULLACCESS_ENABLED", "true")
+        monkeypatch.setenv("FULLACCESS_API_ID", "123456")
+        monkeypatch.setenv("FULLACCESS_API_HASH", "test_hash")
+        monkeypatch.setenv("FULLACCESS_PHONE", "+70000000000")
+        monkeypatch.setenv("FULLACCESS_SESSION_PATH", str(session_path))
+
+        session_path.with_suffix(".session").parent.mkdir(parents=True, exist_ok=True)
+        session_path.with_suffix(".session").touch()
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            state = OperationalStateService(SettingRepository(session))
+            await state.record_backup(path="/tmp/astra-backup.sqlite3", source_path=str(database_path))
+            await state.record_export(path="/tmp/astra-export.json")
+            await state.record_error("worker", message="worker: reminder_delivery lag")
+            await state.record_error("provider", message="provider: timeout")
+            await session.commit()
+
+        async with runtime.session_factory() as session:
+            service = SetupUIService.from_session(session)
+            provider_card = await service.build_screen("provider")
+            fullaccess_card = await service.build_screen("fullaccess")
+            ops_card = await service.build_screen("ops")
+
+            assert "Astra AFT / Provider [OPT]" in provider_card.text
+            assert "Конфиг: не настроен" in provider_card.text
+            assert "Reply refine: недоступен" in provider_card.text
+            assert {"Статус", "Домой", "Обновить"}.issubset(
+                set(_keyboard_texts(provider_card.reply_markup))
+            )
+
+            assert "Astra AFT / Full-access [EXP]" in fullaccess_card.text
+            assert "Read-only барьер: активен" in fullaccess_card.text
+            assert "Session: есть" in fullaccess_card.text
+            assert {"Статус", "Чаты", "Sync", "Домой", "Обновить"}.issubset(
+                set(_keyboard_texts(fullaccess_card.reply_markup))
+            )
+
+            assert "Astra AFT / Ops" in ops_card.text
+            assert "Последний backup:" in ops_card.text
+            assert "Последний export:" in ops_card.text
+            assert "python -m apps.ops backup" in ops_card.text
+            assert {"Doctor", "Статус", "Домой", "Обновить"}.issubset(
+                set(_keyboard_texts(ops_card.reply_markup))
+            )
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_stage2_reply_and_memory_pickers_and_result_cards_work(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "setup-stage2-pickers" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            settings_repo = SettingRepository(session)
+            chat_memory = ChatMemoryRepository(session)
+            people_memory = PersonMemoryRepository(session)
+            reply_examples = ReplyExampleRepository(session)
+
+            source_chat = await chats.upsert_chat(
+                telegram_chat_id=-100705,
+                title="Команда клиента",
+                handle="client_room",
+                chat_type="group",
+                is_enabled=True,
+            )
+            await messages.create_message(
+                chat_id=source_chat.id,
+                telegram_message_id=1,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 21, 9, 0, tzinfo=timezone.utc),
+                raw_text="Соберите, пожалуйста, короткий статус по клиенту.",
+                normalized_text="Соберите, пожалуйста, короткий статус по клиенту.",
+            )
+            await messages.create_message(
+                chat_id=source_chat.id,
+                telegram_message_id=2,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 21, 9, 5, tzinfo=timezone.utc),
+                raw_text="Да, собираю.",
+                normalized_text="Да, собираю.",
+            )
+            await messages.create_message(
+                chat_id=source_chat.id,
+                telegram_message_id=3,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 21, 9, 8, tzinfo=timezone.utc),
+                raw_text="Ок, жду итог к вечеру.",
+                normalized_text="Ок, жду итог к вечеру.",
+            )
+            await settings_repo.set_value(key="bot.owner_chat_id", value_text="990005")
+            await chat_memory.upsert_chat_memory(
+                chat_id=source_chat.id,
+                chat_summary_short="Чат с клиентским статусом.",
+                chat_summary_long="Здесь регулярно согласуют клиентский статус и сроки.",
+                current_state="Нужно быстро вернуть статус по клиенту.",
+                dominant_topics_json=[{"topic": "клиент", "mentions": 3}],
+                recent_conflicts_json=[],
+                pending_tasks_json=["Отправить статус"],
+                linked_people_json=[{"person_key": "tg:11", "display_name": "Анна", "message_count": 2}],
+                last_digest_at=datetime(2026, 4, 21, 8, 30, tzinfo=timezone.utc),
+            )
+            await people_memory.upsert_person_memory(
+                person_key="tg:11",
+                display_name="Анна",
+                relationship_label="контакт",
+                importance_score=0.8,
+                last_summary="Ждёт короткие понятные апдейты.",
+                known_facts_json=["Нужен статус к вечеру"],
+                sensitive_topics_json=[],
+                open_loops_json=["Клиентский статус"],
+                interaction_pattern="Просит коротко и по делу.",
+            )
+            await reply_examples.create_example(
+                chat_id=source_chat.id,
+                inbound_message_id=1,
+                outbound_message_id=2,
+                inbound_text="Соберите, пожалуйста, короткий статус по клиенту.",
+                outbound_text="Собираю и пришлю одним сообщением вечером.",
+                inbound_normalized="Соберите, пожалуйста, короткий статус по клиенту.",
+                outbound_normalized="Собираю и пришлю одним сообщением вечером.",
+                context_before_json=[],
+                example_type="soft_reply",
+                source_person_key="tg:11",
+                quality_score=0.9,
+            )
+            await session.commit()
+
+            service = SetupUIService.from_session(session)
+            reply_picker = await service.build_screen("reply_pick")
+            memory_picker = await service.build_screen("memory_pick")
+
+            assert "Astra AFT / Reply / Выбор чата" in reply_picker.text
+            assert "Команда клиента" in reply_picker.text
+            assert "client_room" in reply_picker.text
+            assert "Команда клиента" in _keyboard_texts(reply_picker.reply_markup)
+
+            assert "Astra AFT / Memory / Выбор чата" in memory_picker.text
+            assert "Чат с клиентским статусом." in memory_picker.text
+            assert "Команда клиента" in _keyboard_texts(memory_picker.reply_markup)
+
+        setup_module = importlib.import_module("bot.handlers.setup")
+
+        reply_message = FakeEditableMessage(bot=FakeBot(), chat_id=701006)
+        await setup_module.handle_setup_callback(
+            FakeCallback(data="ux:reply:chat:client_room", message=reply_message, bot=reply_message.bot),
+            runtime.session_factory,
+        )
+        assert any("Astra AFT / Reply / Команда клиента" in answer.text for answer in reply_message.answers)
+        assert any("Итоговая серия" in answer.text for answer in reply_message.answers)
+        assert any("Риск / уверенность" in answer.text for answer in reply_message.answers)
+        assert {"Похожие", "Style", "Назад", "Домой"}.issubset(
+            set(_keyboard_texts(reply_message.answers[0].reply_markup))
+        )
+
+        examples_message = FakeEditableMessage(bot=FakeBot(), chat_id=701007)
+        await setup_module.handle_setup_callback(
+            FakeCallback(data="ux:reply:examples:client_room", message=examples_message, bot=examples_message.bot),
+            runtime.session_factory,
+        )
+        assert any("Astra AFT / Reply / Похожие ответы" in answer.text for answer in examples_message.answers)
+        assert any("Похожие прошлые ответы" in answer.text for answer in examples_message.answers)
+
+        style_message = FakeEditableMessage(bot=FakeBot(), chat_id=701008)
+        await setup_module.handle_setup_callback(
+            FakeCallback(data="ux:style:status:client_room", message=style_message, bot=style_message.bot),
+            runtime.session_factory,
+        )
+        assert any("Astra AFT / Reply / Style" in answer.text for answer in style_message.answers)
+        assert any("Эффективный профиль" in answer.text for answer in style_message.answers)
+
+        memory_message = FakeEditableMessage(bot=FakeBot(), chat_id=701009)
+        await setup_module.handle_setup_callback(
+            FakeCallback(data="ux:memory:chat:client_room", message=memory_message, bot=memory_message.bot),
+            runtime.session_factory,
+        )
+        assert any("Astra AFT / Memory / Карточка" in answer.text for answer in memory_message.answers)
+        assert any("Память по чату: Команда клиента" in answer.text for answer in memory_message.answers)
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_stage2_sources_toggle_callback_updates_screen_and_state(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "setup-stage2-sources-toggle" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            chat = await chats.upsert_chat(
+                telegram_chat_id=-100706,
+                title="Новостной канал",
+                handle="news_room",
+                chat_type="channel",
+                is_enabled=True,
+            )
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=1,
+                sender_id=21,
+                sender_name="Редактор",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 21, 11, 0, tzinfo=timezone.utc),
+                raw_text="Сегодня обновили регламент.",
+                normalized_text="Сегодня обновили регламент.",
+            )
+            await session.commit()
+
+        setup_module = importlib.import_module("bot.handlers.setup")
+        message = FakeEditableMessage(bot=FakeBot(), chat_id=701010)
+        callback = FakeCallback(data="ux:sources:toggle:news_room", message=message, bot=message.bot)
+        await setup_module.handle_setup_callback(callback, runtime.session_factory)
+
+        assert any("Astra AFT / Источники / Обновление" in answer.text for answer in message.answers)
+        assert any("Источник выключен." in answer.text for answer in message.answers)
+        assert len(message.edits) == 1
+        assert "Astra AFT / Источники" in message.edits[0].text
+
+        async with runtime.session_factory() as session:
+            chat = await ChatRepository(session).find_chat_by_handle_or_telegram_id("@news_room")
+            assert chat is not None
+            assert chat.is_enabled is False
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_stage2_digest_and_reminders_inline_actions_return_polished_cards(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "setup-stage2-result-cards" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            settings_repo = SettingRepository(session)
+
+            source_chat = await chats.upsert_chat(
+                telegram_chat_id=-100707,
+                title="Операционный поток",
+                handle="ops_flow",
+                chat_type="group",
+                is_enabled=True,
+            )
+            digest_chat = await chats.upsert_chat(
+                telegram_chat_id=-100708,
+                title="Digest приёмник",
+                handle="digest_sink",
+                chat_type="channel",
+                is_enabled=True,
+            )
+            await messages.create_message(
+                chat_id=source_chat.id,
+                telegram_message_id=1,
+                sender_id=31,
+                sender_name="Олег",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime.now(timezone.utc) - timedelta(hours=1),
+                raw_text="Клиент подтвердил дедлайн, нужен короткий апдейт по задачам.",
+                normalized_text="Клиент подтвердил дедлайн, нужен короткий апдейт по задачам.",
+            )
+            await messages.create_message(
+                chat_id=source_chat.id,
+                telegram_message_id=2,
+                sender_id=31,
+                sender_name="Олег",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+                raw_text="Напомни завтра утром вернуться к договору.",
+                normalized_text="Напомни завтра утром вернуться к договору.",
+            )
+            await settings_repo.set_value(key="bot.owner_chat_id", value_text="990007")
+            await settings_repo.set_value(key="digest.target.chat_id", value_text=str(digest_chat.telegram_chat_id))
+            await settings_repo.set_value(key="digest.target.label", value_text="@digest_sink")
+            await settings_repo.set_value(key="digest.target.type", value_text="channel")
+            await session.commit()
+
+        setup_module = importlib.import_module("bot.handlers.setup")
+
+        digest_message = FakeEditableMessage(bot=FakeBot(), chat_id=701011)
+        await setup_module.handle_setup_callback(
+            FakeCallback(data="ux:digest:run:12h", message=digest_message, bot=digest_message.bot),
+            runtime.session_factory,
+        )
+        assert any("Astra AFT / Digest / Результат" in answer.text for answer in digest_message.answers)
+        assert any("Окно:" in answer.text for answer in digest_message.answers)
+        assert any("Цель:" in answer.text for answer in digest_message.answers)
+        assert any("Что произошло:" in answer.text for answer in digest_message.answers)
+        assert {"12h", "24h", "Домой", "Digest"}.issubset(
+            set(_keyboard_texts(digest_message.answers[0].reply_markup))
+        )
+        assert digest_message.bot.sent_messages
+
+        reminders_message = FakeEditableMessage(bot=FakeBot(), chat_id=701012)
+        await setup_module.handle_setup_callback(
+            FakeCallback(data="ux:reminders:scan:24h", message=reminders_message, bot=reminders_message.bot),
+            runtime.session_factory,
+        )
+        assert any("Astra AFT / Reminders / Скан" in answer.text for answer in reminders_message.answers)
+        assert any("Новых candidate-карточек" in answer.text for answer in reminders_message.answers)
+        assert any("Owner chat готов" in answer.text for answer in reminders_message.answers)
+        assert {"12h", "24h", "Напоминания", "Домой"}.issubset(
+            set(_keyboard_texts(reminders_message.answers[0].reply_markup))
+        )
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_stage2_callback_navigation_renders_new_screens(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "setup-stage2-navigation" / "astra.db"
+        session_path = tmp_path / "setup-stage2-navigation" / "fullaccess"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+        monkeypatch.setenv("FULLACCESS_ENABLED", "true")
+        monkeypatch.setenv("FULLACCESS_API_ID", "123456")
+        monkeypatch.setenv("FULLACCESS_API_HASH", "test_hash")
+        monkeypatch.setenv("FULLACCESS_PHONE", "+70000000000")
+        monkeypatch.setenv("FULLACCESS_SESSION_PATH", str(session_path))
+        session_path.with_suffix(".session").parent.mkdir(parents=True, exist_ok=True)
+        session_path.with_suffix(".session").touch()
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        setup_module = importlib.import_module("bot.handlers.setup")
+        expectations = {
+            "ux:provider": "Astra AFT / Provider [OPT]",
+            "ux:fullaccess": "Astra AFT / Full-access [EXP]",
+            "ux:ops": "Astra AFT / Ops",
+            "ux:reply:pick": "Astra AFT / Reply / Выбор чата",
+            "ux:memory:pick": "Astra AFT / Memory / Выбор чата",
+            "ux:fullaccess:chats": "Astra AFT / Full-access / Чаты",
+        }
+        for callback_data, expected_title in expectations.items():
+            message = FakeEditableMessage(bot=FakeBot(), chat_id=701013)
+            callback = FakeCallback(data=callback_data, message=message, bot=message.bot)
+            await setup_module.handle_setup_callback(callback, runtime.session_factory)
+            assert len(message.edits) == 1
+            assert expected_title in message.edits[0].text
+            assert callback.answers == [(None, False)]
 
         await runtime.dispose()
 
