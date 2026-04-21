@@ -40,29 +40,29 @@ cp .env.example .env
 pip install -e ".[dev,fullaccess]"
 ```
 
-После editable-установки в активированном `.venv` появляется installable CLI-команда `astra`.
+После editable-установки в активированном `.venv` появляется installable CLI-команда `astratg`.
 
-## CLI `astra`
+## CLI `astratg`
 
-Основной локальный operational UX теперь идёт через `astra`:
+Основной локальный operational UX теперь идёт через `astratg`:
 
 ```bash
-astra start
-astra status
-astra logs --tail 50
-astra backup
-astra export
-astra stop
+astratg start
+astratg status
+astratg logs --tail 50
+astratg backup
+astratg export
+astratg stop
 ```
 
 Что делает CLI:
 
-- `astra start` поднимает `bot` и фоновый `worker` через текущий Python-интерпретатор активного окружения;
-- `astra stop` останавливает только процессы, запущенные через этот CLI;
-- `astra status` показывает `.env`, состояние `bot/worker`, пути к pid/log, доступность базы и provider;
-- `astra doctor` строит диагностический отчёт поверх существующего operational слоя;
-- `astra backup` и `astra export` прокидывают уже существующие `apps.ops` команды;
-- `astra logs` показывает лог-файлы из `var/log/` и умеет печатать tail последних строк.
+- `astratg start` поднимает `bot` и фоновый `worker` через текущий Python-интерпретатор активного окружения;
+- `astratg stop` останавливает только процессы, запущенные через этот CLI;
+- `astratg status` показывает `.env`, состояние `bot/worker`, пути к pid/log, доступность базы и provider;
+- `astratg doctor` строит диагностический отчёт поверх существующего operational слоя;
+- `astratg backup` и `astratg export` прокидывают уже существующие `apps.ops` команды;
+- `astratg logs` показывает лог-файлы из `var/log/` и умеет печатать tail последних строк.
 
 Runtime-файлы CLI:
 
@@ -73,9 +73,9 @@ Runtime-файлы CLI:
 
 Фоновый `worker` в CLI-режиме не меняет reminder-логику: он просто периодически запускает уже существующий `run_worker_once()` локальным loop-wrapper-ом.
 
-Чтобы вызывать `astra` из любого терминала на macOS:
+Чтобы вызывать `astratg` из любого терминала на macOS:
 
-- если хочешь использовать именно текущий проектный `.venv`, добавь alias на абсолютный путь к `.venv/bin/astra`;
+- если хочешь использовать именно текущий проектный `.venv`, добавь alias на абсолютный путь к `.venv/bin/astratg`;
 - если нужен отдельный глобально доступный wrapper, можно поставить проект через `pipx install --editable /абсолютный/путь/к/ASTRA_TG`.
 
 CLI сам переключается в корень репозитория, поэтому команды можно вызывать не только из каталога проекта.
@@ -161,20 +161,20 @@ pytest
 Высокоуровневый локальный запуск:
 
 ```bash
-astra start
-astra start bot
-astra start worker
-astra stop
-astra stop bot
-astra stop worker
-astra restart
-astra status
-astra status bot
-astra status worker
-astra doctor
-astra logs --tail 50
-astra backup
-astra export
+astratg start
+astratg start bot
+astratg start worker
+astratg stop
+astratg stop bot
+astratg stop worker
+astratg restart
+astratg status
+astratg status bot
+astratg status worker
+astratg doctor
+astratg logs --tail 50
+astratg backup
+astratg export
 ```
 
 Низкоуровневые entrypoints и ops-утилиты по-прежнему доступны напрямую:
@@ -226,11 +226,11 @@ python -m apps.bot
 
 Базовый безопасный цикл теперь такой:
 
-1. Запусти `astra start` и смотри стартовую self-check сводку через `astra logs --tail 50`.
-2. Проверь состояние `astra status` или `astra doctor`.
-3. Перед ручными экспериментами сделай `astra backup`.
-4. Для компактной диагностики проекта выгрузи `astra export`.
-5. Когда локальный контур больше не нужен, останови его через `astra stop`.
+1. Запусти `astratg start` и смотри стартовую self-check сводку через `astratg logs --tail 50`.
+2. Проверь состояние `astratg status` или `astratg doctor`.
+3. Перед ручными экспериментами сделай `astratg backup`.
+4. Для компактной диагностики проекта выгрузи `astratg export`.
+5. Когда локальный контур больше не нужен, останови его через `astratg stop`.
 
 Что теперь проверяется на старте `apps.bot` и `apps.worker`:
 
@@ -245,14 +245,14 @@ python -m apps.bot
 
 ## Backup и diagnostic export
 
-`astra backup`:
+`astratg backup`:
 
 - делает локальную timestamped-копию SQLite-базы в `var/backups/`;
 - использует штатный SQLite backup API, без небезопасных трюков;
 - сохраняет путь последнего backup в operational state;
 - внутри прокидывает уже существующий `apps.ops backup`.
 
-`astra export`:
+`astratg export`:
 
 - пишет компактную JSON-сводку в `var/exports/`;
 - показывает количества источников, сообщений, digest, memory cards, reply examples, tasks/reminders;

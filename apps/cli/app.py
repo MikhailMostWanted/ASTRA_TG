@@ -42,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_component_command(
         subparsers,
         "stop",
-        help_text="Остановить процессы, запущенные через astra.",
+        help_text="Остановить процессы, запущенные через astratg.",
     )
     _add_component_command(
         subparsers,
@@ -204,7 +204,7 @@ async def _run_managed_bot() -> None:
         LOGGER,
         20,
         "cli.bot_runtime.started",
-        "astra bot runtime запущен.",
+        "astratg bot runtime запущен.",
         repository_root=get_repository_root(),
         python_executable=sys.executable,
     )
@@ -218,7 +218,7 @@ async def _run_managed_worker() -> None:
         LOGGER,
         20,
         "cli.worker_runtime.started",
-        "astra worker runtime запущен.",
+        "astratg worker runtime запущен.",
         repository_root=get_repository_root(),
         python_executable=sys.executable,
         interval_seconds=DEFAULT_WORKER_INTERVAL_SECONDS,
@@ -235,7 +235,7 @@ async def _worker_loop(settings: Settings) -> None:
                 LOGGER,
                 20,
                 "cli.worker_runtime.cancelled",
-                "astra worker runtime получил сигнал остановки.",
+                "astratg worker runtime получил сигнал остановки.",
             )
             raise
         except Exception as error:
@@ -243,7 +243,7 @@ async def _worker_loop(settings: Settings) -> None:
                 LOGGER,
                 "cli.worker_runtime.iteration_failed",
                 error,
-                message="Итерация astra worker завершилась ошибкой.",
+                message="Итерация astratg worker завершилась ошибкой.",
             )
 
         await asyncio.sleep(DEFAULT_WORKER_INTERVAL_SECONDS)

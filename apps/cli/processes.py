@@ -120,7 +120,7 @@ def inspect_process(component: ComponentName) -> ProcessState:
         managed=True,
         stale_pid_file=False,
         command=command,
-        detail="Процесс запущен через astra CLI.",
+            detail="Процесс запущен через astratg CLI.",
     )
 
 
@@ -152,7 +152,7 @@ def start_component(
     command = build_managed_command(component, python_executable=python_executable)
     start_label = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with files.log_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n=== astra start {component} {start_label} ===\n")
+        handle.write(f"\n=== astratg start {component} {start_label} ===\n")
         handle.flush()
         process = subprocess.Popen(
             command,

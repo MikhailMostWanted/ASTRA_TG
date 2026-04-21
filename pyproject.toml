@@ -27,7 +27,7 @@ fullaccess = [
 ]
 
 [project.scripts]
-astra = "apps.cli.app:main"
+astratg = "apps.cli.app:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
