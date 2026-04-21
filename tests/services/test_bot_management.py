@@ -246,11 +246,15 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             assert "Настроено ручных style-override: 0" in status_text
             assert "/reply в style-режиме: готов" in status_text
             assert "/reply в persona-aware режиме: готов" in status_text
+            assert "Few-shot layer: не готов" in status_text
+            assert "Reply examples: 0" in status_text
+            assert "Чатов с reply examples: 0" in status_text
+            assert "/reply с few-shot support: не готов" in status_text
             assert "Чатов с данными для reply: 0" in status_text
             assert "Опора reply на memory: нет" in status_text
             assert "Последний rebuild memory: ещё не выполнялся" in status_text
             assert "Данных для memory: да" in status_text
-            assert "Схема БД: 20260420_02" in status_text
+            assert "Схема БД: 20260421_01" in status_text
             assert "digest_target_chat_id: -100900" in settings_text
             assert "digest_target_label: @digest" in settings_text
             assert any("Новости дня" in message and "Сообщений: 0" in message for message in sources_messages)

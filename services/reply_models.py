@@ -52,6 +52,8 @@ class ReplyDraft:
     chat_id: int
     situation: str
     source_message_preview: str
+    few_shot_match_count: int = 0
+    few_shot_notes: tuple[str, ...] = ()
     alternative_action: str | None = None
 
 
@@ -74,6 +76,9 @@ class ReplySuggestion:
     chat_id: int
     situation: str
     source_message_preview: str
+    few_shot_found: bool
+    few_shot_match_count: int
+    few_shot_notes: tuple[str, ...]
     alternative_action: str | None = None
 
     @property

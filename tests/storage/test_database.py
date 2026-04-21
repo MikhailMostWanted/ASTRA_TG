@@ -16,6 +16,8 @@ EXPECTED_TABLES = {
     "messages",
     "messages_fts",
     "people_memory",
+    "reply_examples",
+    "reply_examples_fts",
     "reminders",
     "settings",
     "style_profiles",
@@ -51,6 +53,13 @@ def test_database_bootstrap_applies_migrations_and_creates_schema(
                     "ORDER BY name"
                 )
             )
+            reply_examples_fts_rows = await connection.execute(
+                text(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type = 'trigger' AND tbl_name = 'reply_examples' "
+                    "ORDER BY name"
+                )
+            )
             revision_row = await connection.execute(text("SELECT version_num FROM alembic_version"))
 
         assert EXPECTED_TABLES.issubset(table_names)
@@ -59,6 +68,11 @@ def test_database_bootstrap_applies_migrations_and_creates_schema(
             "messages_ai",
             "messages_au",
             "messages_bu",
+        }
+        assert {row[0] for row in reply_examples_fts_rows} == {
+            "reply_examples_ai",
+            "reply_examples_au",
+            "reply_examples_bu",
         }
         assert revision_row.scalar_one() is not None
 

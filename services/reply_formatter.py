@@ -33,12 +33,18 @@ class ReplyFormatter:
                 else f"Режим / стиль: {suggestion.style_profile_key} (ручной override)"
             ),
             f"Persona: {'да' if suggestion.persona_applied else 'нет'}",
+            (
+                f"Few-shot support: найден ({suggestion.few_shot_match_count} примера)"
+                if suggestion.few_shot_found
+                else "Few-shot support: не найден"
+            ),
             "Итоговая серия:",
             *self.style_formatter.format_reply_messages(
                 suggestion.final_reply_messages or suggestion.reply_messages
             ),
             "",
             f"Почему: {suggestion.reason_short}",
+            f"Что сделал few-shot-слой: {'; '.join(suggestion.few_shot_notes)}",
             f"Что сделал style-слой: {'; '.join(suggestion.style_notes)}",
             f"Что сделал persona-слой: {'; '.join(suggestion.persona_notes)}",
             (

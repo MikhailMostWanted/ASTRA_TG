@@ -21,6 +21,9 @@ from services.persona_guardrails import PersonaGuardrails
 from services.reply_classifier import ReplyClassifier
 from services.reply_context_builder import ReplyContextBuilder
 from services.reply_engine import ReplyEngineService
+from services.reply_examples_builder import ReplyExamplesBuilder
+from services.reply_examples_formatter import ReplyExamplesFormatter
+from services.reply_examples_retriever import ReplyExamplesRetriever
 from services.reply_formatter import ReplyFormatter
 from services.reply_strategy import ReplyStrategyResolver
 from services.style_adapter import StyleAdapter
@@ -37,6 +40,7 @@ from storage.repositories import (
     DigestRepository,
     MessageRepository,
     PersonMemoryRepository,
+    ReplyExampleRepository,
     ReminderRepository,
     SettingRepository,
     StyleProfileRepository,
@@ -200,6 +204,77 @@ async def handle_reply_command(
         result = await service.build_reply(reference)
 
     await message.answer(formatter.format_result(result))
+
+
+@router.message(Command("examples_rebuild"))
+async def handle_examples_rebuild_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    reference = None
+    if command.args and command.args.strip():
+        try:
+            reference = PARSER.parse_required_reference(
+                command.args,
+                command_name="examples_rebuild",
+            )
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        builder = _build_reply_examples_builder(session)
+        formatter = ReplyExamplesFormatter()
+        try:
+            result = await builder.rebuild(reference)
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+        await session.commit()
+
+    await message.answer(formatter.format_rebuild_result(result))
+
+
+@router.message(Command("reply_examples"))
+async def handle_reply_examples_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    try:
+        reference = PARSER.parse_required_reference(command.args, command_name="reply_examples")
+    except ValueError as error:
+        await message.answer(str(error))
+        return
+
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        chat_repository = ChatRepository(session)
+        formatter = ReplyExamplesFormatter()
+        chat = await chat_repository.find_chat_by_handle_or_telegram_id(reference)
+        if chat is None:
+            await message.answer("Источник не найден. Проверь chat_id или @username.")
+            return
+
+        context_or_issue = _build_reply_context_builder(session).build(chat)
+        context_or_issue = await context_or_issue
+        if hasattr(context_or_issue, "code"):
+            await message.answer(context_or_issue.message)
+            return
+
+        retrieval = await _build_reply_examples_retriever(session).retrieve_for_context(
+            context_or_issue,
+            limit=5,
+        )
+        await message.answer(
+            formatter.format_matches(
+                chat_title=chat.title,
+                chat_reference=reference if str(reference).startswith("@") else str(chat.telegram_chat_id),
+                retrieval_result=retrieval,
+            )
+        )
 
 
 @router.message(Command("style_profiles"))
@@ -427,6 +502,7 @@ def _build_status_service(session: AsyncSession) -> BotStatusService:
         chat_style_override_repository=ChatStyleOverrideRepository(session),
         task_repository=TaskRepository(session),
         reminder_repository=ReminderRepository(session),
+        reply_example_repository=ReplyExampleRepository(session),
     )
 
 
@@ -471,6 +547,32 @@ def _build_reply_service(session: AsyncSession) -> ReplyEngineService:
         persona_core_service=PersonaCoreService(setting_repository),
         persona_adapter=PersonaAdapter(),
         persona_guardrails=PersonaGuardrails(),
+        reply_examples_retriever=_build_reply_examples_retriever(session),
+    )
+
+
+def _build_reply_context_builder(session: AsyncSession) -> ReplyContextBuilder:
+    message_repository = MessageRepository(session)
+    chat_memory_repository = ChatMemoryRepository(session)
+    person_memory_repository = PersonMemoryRepository(session)
+    return ReplyContextBuilder(
+        message_repository=message_repository,
+        chat_memory_repository=chat_memory_repository,
+        person_memory_repository=person_memory_repository,
+    )
+
+
+def _build_reply_examples_builder(session: AsyncSession) -> ReplyExamplesBuilder:
+    return ReplyExamplesBuilder(
+        chat_repository=ChatRepository(session),
+        message_repository=MessageRepository(session),
+        reply_example_repository=ReplyExampleRepository(session),
+    )
+
+
+def _build_reply_examples_retriever(session: AsyncSession) -> ReplyExamplesRetriever:
+    return ReplyExamplesRetriever(
+        reply_example_repository=ReplyExampleRepository(session),
     )
 
 

@@ -26,6 +26,8 @@ BOT_COMMAND_SPECS: tuple[BotCommandSpec, ...] = (
     BotCommandSpec("digest_target", "Сохранить чат или канал для digest"),
     BotCommandSpec("digest_now", "Собрать digest по сохранённым сообщениям"),
     BotCommandSpec("reply", "Подсказать ответ по локальному контексту"),
+    BotCommandSpec("examples_rebuild", "Пересобрать локальные reply examples"),
+    BotCommandSpec("reply_examples", "Показать похожие прошлые ответы"),
     BotCommandSpec("style_profiles", "Показать доступные style-профили"),
     BotCommandSpec("style_set", "Назначить style-профиль для чата"),
     BotCommandSpec("style_unset", "Снять ручной style-override"),

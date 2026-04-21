@@ -70,6 +70,8 @@ python -m apps.bot
 - `/digest_target <chat_id|@username>` — сохранить чат или канал доставки digest.
 - `/digest_now [12h|24h|3d]` — вручную собрать digest по сохранённым сообщениям.
 - `/reply <chat_id|@username>` — получить persona-aware подсказку ответа по конкретному чату.
+- `/examples_rebuild [chat_id|@username]` — пересобрать локальную базу reply examples по сохранённым сообщениям.
+- `/reply_examples <chat_id|@username>` — показать похожие прошлые реальные ответы для текущей reply-ситуации.
 - `/style_profiles` — показать доступные встроенные style-профили.
 - `/style_set <chat_id|@username> <profile_key>` — вручную назначить style-профиль для уже известного чата.
 - `/style_unset <chat_id|@username>` — снять ручной style-override.
@@ -155,15 +157,16 @@ python -m apps.bot
 
 ## Reply MVP
 
-Теперь поверх `messages`, `chat_memory` и `people_memory` подключён первый локальный reply coach без внешних LLM, с реальным style layer и первым owner persona layer:
+Теперь поверх `messages`, `chat_memory` и `people_memory` подключён первый локальный reply coach без внешних LLM, с реальным style layer, первым owner persona layer и локальным few-shot retrieval layer:
 
 - `/reply <chat_id|@username>` работает только по локальной SQLite-БД и уже сохранённым сообщениям;
 - движок берёт последние 20–40 сообщений, память по чату и связанным людям, а затем выбирает один лучший draft-ответ;
 - reply layer остаётся эвристическим и детерминированным: без OpenAI, Anthropic и локальных моделей;
 - поверх базового draft теперь работает отдельный style layer с встроенными профилями и chat-specific override;
 - поверх style layer теперь сидит отдельный owner persona core с детерминированным enrichment и guardrails;
+- поверх локальной истории теперь сидит и отдельный few-shot retrieval layer: он собирает пары `входящий контекст -> мой реальный ответ`, хранит их в `reply_examples` и подмешивает похожие примеры в `/reply` как дополнительную опору;
 - текущая цель слоя — не style cloning и не personality mining, а безопасный управляемый Telegram-ответ с понятной причиной выбора;
-- в ответе бот показывает стиль, факт применения persona, итоговую серию сообщений, краткое объяснение, риск и уверенность.
+- в ответе бот показывает стиль, факт применения persona, наличие few-shot support, итоговую серию сообщений, краткое объяснение, риск и уверенность.
 
 Что умеет reply engine на этом шаге:
 
@@ -172,8 +175,20 @@ python -m apps.bot
 - выбирать effective style-профиль по ручному override или простому fallback из памяти;
 - превращать базовый draft не только в одну строку, а в серию из 1–4 коротких Telegram-сообщений;
 - дополнительно прогонять style-aware серию через owner persona core, чтобы ответ звучал ближе к владельцу по ритму, объяснению и ограничениям;
+- находить несколько похожих прошлых реальных ответов владельца по локальной БД и использовать их как объяснимую few-shot опору без копипаста и без embeddings;
 - показывать `persona_notes`, guardrail-флаги и финальную persona-aware серию в preview;
 - честно говорить, если чата нет, данных пока мало или последнее сохранённое сообщение уже от пользователя.
+
+### Few-shot retrieval layer
+
+Что делает локальный few-shot слой на этом шаге:
+
+- `/examples_rebuild` пересобирает `reply_examples` только по локальной SQLite-БД;
+- builder спокойно извлекает пары `последний inbound -> ближайший outbound владельца` в разумном окне времени;
+- мусорные короткие сообщения, сервисные команды и слабые пары отсекаются простыми эвристиками и `quality_score`;
+- retrieval идёт детерминированно через SQLite FTS5 по `inbound_normalized`, а затем усиливается бонусами за тот же чат, того же человека, тип ситуации, свежесть и качество;
+- `/reply_examples` показывает, какие локальные примеры реально были найдены и почему они попали в top-k;
+- `/reply` использует few-shot слой только как guidance для стратегии, уверенности, длины и ритма, но не копирует прошлый ответ целиком.
 
 ## Reminder MVP
 
@@ -248,9 +263,11 @@ alembic revision -m "описание изменения"
 - ORM-модели лежат в `models/`.
 - Первый слой доступа к данным лежит в `storage/repositories.py`.
 - Полнотекстовый поиск по сообщениям подготовлен через SQLite FTS5: виртуальная таблица `messages_fts` и триггеры на `messages`.
+- Для few-shot слоя добавлены `reply_examples`, `reply_examples_fts` и отдельные триггеры синхронизации FTS.
 - Сервисный ingest находится в `services/message_ingest.py`, а нормализация входящих сообщений — в `services/message_normalizer.py`.
 - Memory-сервисы лежат в `services/memory_builder.py`, `services/chat_memory_builder.py`, `services/people_memory_builder.py` и `services/memory_formatter.py`.
 - Reply-сервисы лежат в `services/reply_context_builder.py`, `services/reply_classifier.py`, `services/reply_strategy.py`, `services/reply_engine.py` и `services/reply_formatter.py`.
+- Few-shot reply-сервисы лежат в `services/reply_examples_builder.py`, `services/reply_examples_retriever.py`, `services/reply_examples_formatter.py` и `services/reply_examples_models.py`.
 - Reminder-сервисы лежат в `services/reminder_extractor.py`, `services/reminder_service.py`, `services/reminder_formatter.py` и `services/reminder_delivery.py`.
 - Persona-сервисы лежат в `services/persona_rules.py`, `services/persona_core.py`, `services/persona_adapter.py`, `services/persona_guardrails.py` и `services/persona_formatter.py`.
 

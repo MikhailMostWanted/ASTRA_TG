@@ -6,6 +6,8 @@ from services.persona_adapter import PersonaAdapter
 from services.persona_core import PersonaCoreService
 from services.persona_guardrails import PersonaGuardrails
 from services.reply_context_builder import ReplyContextBuilder
+from services.reply_examples_models import ReplyExamplesRetrievalResult
+from services.reply_examples_retriever import ReplyExamplesRetriever
 from services.reply_classifier import ReplyClassifier
 from services.reply_models import ReplyResult, ReplySuggestion
 from services.reply_strategy import ReplyStrategyResolver
@@ -28,6 +30,7 @@ class ReplyEngineService:
     persona_core_service: PersonaCoreService
     persona_adapter: PersonaAdapter
     persona_guardrails: PersonaGuardrails
+    reply_examples_retriever: ReplyExamplesRetriever | None = None
 
     async def build_reply(self, reference: str) -> ReplyResult:
         chat = await self.chat_repository.find_chat_by_handle_or_telegram_id(reference)
@@ -51,9 +54,27 @@ class ReplyEngineService:
             )
 
         classification = self.classifier.classify(context_or_issue)
+        if self.reply_examples_retriever is None:
+            few_shot_support = ReplyExamplesRetrievalResult(
+                matches=(),
+                support_used=False,
+                match_count=0,
+                confidence_delta=0.0,
+                strategy_bias=None,
+                length_hint=None,
+                rhythm_hint=None,
+                dominant_topic_hint=None,
+                notes=("Похожих реальных ответов не нашёл.",),
+            )
+        else:
+            few_shot_support = await self.reply_examples_retriever.retrieve_for_context(
+                context_or_issue,
+                limit=3,
+            )
         draft = self.strategy_resolver.resolve(
             context=context_or_issue,
             classification=classification,
+            few_shot_support=few_shot_support,
         )
         style_selection = await self.style_selector.select_for_context(context_or_issue)
         styled_reply = self.style_adapter.adapt(
@@ -123,6 +144,9 @@ class ReplyEngineService:
                 chat_id=draft.chat_id,
                 situation=draft.situation,
                 source_message_preview=draft.source_message_preview,
+                few_shot_found=few_shot_support.support_used,
+                few_shot_match_count=draft.few_shot_match_count,
+                few_shot_notes=draft.few_shot_notes or few_shot_support.notes,
                 alternative_action=draft.alternative_action,
             ),
             source_sender_name=context_or_issue.target_message.sender_name,

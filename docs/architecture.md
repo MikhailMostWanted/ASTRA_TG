@@ -2,7 +2,7 @@
 
 ## Назначение
 
-Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты, reply coach и reminders по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис: сначала safe draft, потом style layer, а теперь ещё и детерминированный owner persona layer с guardrails. Reminder слой тоже уже подключён как локальный детерминированный pipeline: scan по сохранённым сообщениям, подтверждение кандидатов и доставка due reminders через worker.
+Репозиторий остаётся локальным single-user MVP. Первая полезная ценность — digest-сводки, memory-карты, reply coach и reminders по выбранным Telegram-источникам. Reply слой уже подключён как локальный эвристический сервис: сначала safe draft, потом style layer, затем детерминированный owner persona layer с guardrails, а теперь ещё и локальный few-shot retrieval layer поверх реальных прошлых ответов владельца. Reminder слой тоже уже подключён как локальный детерминированный pipeline: scan по сохранённым сообщениям, подтверждение кандидатов и доставка due reminders через worker.
 
 ## Зоны ответственности модулей
 
@@ -10,7 +10,7 @@
 - `bot/` содержит aiogram routing и тонкие Telegram-handlers.
 - `bot/` теперь также даёт Telegram-интерфейс для управления allowlist источников, базовыми настройками digest и приёма входящих updates для ingest.
 - `worker/` содержит точки входа для фонового bootstrap/run-once сценария.
-- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine, style layer, persona layer, reminder extraction/delivery и статусные сводки.
+- `services/` содержит прикладную логику, которую вызывают handlers и entrypoint’ы, включая реестр источников, digest target, ingest pipeline, digest engine, memory builders, reply engine, style layer, persona layer, local few-shot retrieval layer, reminder extraction/delivery и статусные сводки.
 - `config/` содержит общие настройки из окружения.
 - `storage/` содержит SQLAlchemy runtime, bootstrap через Alembic и репозитории доступа к данным.
 - `models/` содержит ORM-схему SQLite для MVP-сущностей.
@@ -95,16 +95,30 @@
 - `services/reply_context_builder.py` собирает reply-context только из локальной БД: последние сообщения чата, `chat_memory`, связанный `people_memory`, признаки открытых хвостов и конфликтов;
 - `services/reply_classifier.py` определяет тип ситуации простыми эвристиками: вопрос, просьба, лёгкий бытовой обмен, напряжённый фрагмент или сценарий, где лучше не отвечать сразу;
 - `services/reply_strategy.py` выбирает безопасную стратегию ответа и формирует базовый safe draft;
+- `services/reply_examples_builder.py` собирает структурированные пары `inbound -> outbound` в `reply_examples` по локальной истории;
+- `services/reply_examples_retriever.py` делает детерминированный top-k поиск по `reply_examples_fts` и добавляет explainable бонусы за тот же чат, того же человека, тип ситуации, свежесть и качество;
+- `services/reply_examples_formatter.py` отвечает за наблюдаемость few-shot слоя в `/reply_examples` и служебных preview;
 - `services/style_selector.py` выбирает effective style-профиль по ручному override или по простому fallback из memory;
 - `services/style_adapter.py` детерминированно превращает базовый draft в серию коротких сообщений;
 - `services/persona_core.py` загружает owner persona core и guardrails из `settings`;
 - `services/persona_adapter.py` мягко обогащает style-aware серию owner-like ритмом, связками и ограничениями;
 - `services/persona_guardrails.py` проверяет длину, литературность, шумную пунктуацию, грубость и карикатурные паттерны;
-- `services/reply_engine.py` оркестрирует весь flow и возвращает структурированный persona-aware результат;
+- `services/reply_engine.py` оркестрирует весь flow и возвращает структурированный persona-aware результат с few-shot support;
 - `services/reply_formatter.py` превращает его в Telegram-friendly сообщение для `/reply`;
 - `storage/repositories.py` даёт минимальные выборки и агрегаты для reply readiness, style profiles, chat overrides, `settings` и связанных memory-карт.
 
-Ключевой принцип этого слоя: reply suggestions строятся только по локальным `messages + chat_memory + people_memory`, а style/persona adaptation остаётся полностью структурированной и детерминированной. Здесь нет внешних LLM, автоматического обучения на всём архиве, магического style cloning или автоответа. Текущий owner persona core — это управляемая база под будущий deeper persona / few-shot layer, а не попытка сразу сделать full personality clone.
+Ключевой принцип этого слоя: reply suggestions строятся только по локальным `messages + chat_memory + people_memory + reply_examples`, а style/persona/few-shot adaptation остаётся полностью структурированной и детерминированной. Здесь нет внешних LLM, автоматического обучения на всём архиве, embeddings, vector DB, магического style cloning или автоответа. Few-shot слой — это объяснимый retrieval MVP, который готовит базу под будущий более глубокий provider-aware reply layer, но сам остаётся локальным и безопасным.
+
+## Few-shot retrieval layer
+
+Локальный few-shot слой устроен так:
+
+- `reply_examples` хранит не полный дамп чатов, а только выделенные пары `входящий контекст -> реальный исходящий ответ владельца`;
+- builder берёт последнее содержательное входящее сообщение и ближайший содержательный исходящий ответ владельца в том же чате, если между ними нет слишком большого разрыва;
+- слабые пары отрезаются простыми правилами: пустой текст, короткий шум, сервисные команды, слишком длинные простыни и низкий `quality_score`;
+- поиск идёт детерминированно через SQLite FTS5 по `inbound_normalized`, затем результаты ранжируются локальными бонусами за тот же чат, того же человека, тип ситуации, свежесть и качество;
+- `/reply_examples` показывает найденные пары человеку в читаемом виде, без JSON blob;
+- `/reply` использует few-shot слой только как guidance для выбора тона, длины, ритма и уверенности, но не копирует старый ответ побуквенно.
 
 ## Style layer
 

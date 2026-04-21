@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from services.reply_examples_models import ReplyExamplesRetrievalResult
 from services.reply_models import ReplyClassification, ReplyContext, ReplyDraft
 
 
@@ -12,21 +13,28 @@ class ReplyStrategyResolver:
         *,
         context: ReplyContext,
         classification: ReplyClassification,
+        few_shot_support: ReplyExamplesRetrievalResult | None = None,
     ) -> ReplyDraft:
-        strategy, risk_label, base_confidence = self._choose_strategy(classification)
+        strategy, risk_label, base_confidence = self._choose_strategy(
+            classification,
+            few_shot_support=few_shot_support,
+        )
         confidence = self._adjust_confidence(
             base_confidence=base_confidence,
             context=context,
             classification=classification,
+            few_shot_support=few_shot_support,
         )
         reply_text = self._build_reply_text(
             context=context,
             classification=classification,
             strategy=strategy,
+            few_shot_support=few_shot_support,
         )
         reason_short = self._build_reason_short(
             context=context,
             classification=classification,
+            few_shot_support=few_shot_support,
         )
         source_preview = _format_source_preview(context.target_message)
         alternative_action = None
@@ -45,10 +53,24 @@ class ReplyStrategyResolver:
             chat_id=context.chat.id,
             situation=classification.situation,
             source_message_preview=source_preview,
+            few_shot_match_count=few_shot_support.match_count if few_shot_support else 0,
+            few_shot_notes=few_shot_support.notes if few_shot_support else (),
             alternative_action=alternative_action,
         )
 
-    def _choose_strategy(self, classification: ReplyClassification) -> tuple[str, str, float]:
+    def _choose_strategy(
+        self,
+        classification: ReplyClassification,
+        *,
+        few_shot_support: ReplyExamplesRetrievalResult | None,
+    ) -> tuple[str, str, float]:
+        if (
+            few_shot_support is not None
+            and few_shot_support.support_used
+            and few_shot_support.strategy_bias == "clarify"
+            and classification.situation in {"question", "soft_reply"}
+        ):
+            return "уточнить", "низкий", 0.76
         if classification.situation == "no_reply":
             return "не отвечать", "лучше не отвечать", 0.86
         if classification.situation == "tension":
@@ -69,6 +91,7 @@ class ReplyStrategyResolver:
         base_confidence: float,
         context: ReplyContext,
         classification: ReplyClassification,
+        few_shot_support: ReplyExamplesRetrievalResult | None,
     ) -> float:
         confidence = base_confidence
         if context.has_memory_support:
@@ -81,6 +104,8 @@ class ReplyStrategyResolver:
             confidence -= 0.05
         if len(_pick_message_text(context.target_message)) <= 18:
             confidence -= 0.04
+        if few_shot_support is not None and few_shot_support.support_used:
+            confidence += few_shot_support.confidence_delta
         return max(0.35, min(round(confidence, 2), 0.95))
 
     def _build_reply_text(
@@ -89,19 +114,35 @@ class ReplyStrategyResolver:
         context: ReplyContext,
         classification: ReplyClassification,
         strategy: str,
+        few_shot_support: ReplyExamplesRetrievalResult | None,
     ) -> str:
-        topic_chunk = _build_topic_chunk(classification.topic_hint)
+        topic_hint = classification.topic_hint
+        if topic_hint is None and few_shot_support is not None:
+            topic_hint = few_shot_support.dominant_topic_hint
+        topic_chunk = _build_topic_chunk(topic_hint)
+        short_mode = few_shot_support is not None and few_shot_support.length_hint == "short"
+        strategy_bias = few_shot_support.strategy_bias if few_shot_support else None
         if strategy == "не отвечать":
             return (
                 "Сейчас лучше не отвечать сразу. Тут нет явного запроса, "
                 "а быстрый ответ только добавит шума."
             )
         if strategy == "снять напряжение":
+            if strategy_bias == "promise_update":
+                return (
+                    f"Понял{topic_chunk}. Спокойно проверю детали и вернусь с коротким апдейтом "
+                    "без лишней резкости."
+                )
             return (
                 f"Понял{topic_chunk}. Спокойно проверю детали и вернусь с конкретным апдейтом "
                 "без лишних эмоций."
             )
         if strategy == "уточнить":
+            if short_mode:
+                return (
+                    f"Понял{topic_chunk}. Что для тебя сейчас самое срочное? "
+                    "Тогда отвечу точнее и без лишней воды."
+                )
             return (
                 f"Вижу вопрос{topic_chunk}. Уточни, пожалуйста, что для тебя сейчас самое срочное, "
                 "и я отвечу точнее."
@@ -114,9 +155,16 @@ class ReplyStrategyResolver:
                 "как только проверю детали."
             )
         if classification.has_request or classification.has_question:
+            if strategy_bias == "promise_update":
+                return (
+                    f"Понял{topic_chunk}. Смотрю это сейчас и вернусь с коротким апдейтом "
+                    "чуть позже."
+                )
             return (
                 f"Понял{topic_chunk}. Смотрю это сейчас и вернусь с конкретным апдейтом чуть позже."
             )
+        if short_mode:
+            return f"Понял{topic_chunk}. Посмотрю и коротко вернусь."
         return f"Понял{topic_chunk}. Я это посмотрю и коротко вернусь с ответом."
 
     def _build_reason_short(
@@ -124,6 +172,7 @@ class ReplyStrategyResolver:
         *,
         context: ReplyContext,
         classification: ReplyClassification,
+        few_shot_support: ReplyExamplesRetrievalResult | None,
     ) -> str:
         parts = [classification.reason]
         if context.pending_loops:
@@ -134,6 +183,8 @@ class ReplyStrategyResolver:
             None,
         ):
             parts.append("Память по человеку подсказывает держать ответ коротким и спокойным.")
+        if few_shot_support is not None and few_shot_support.support_used:
+            parts.append(few_shot_support.notes[0])
         return " ".join(parts[:3])
 
 

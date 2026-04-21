@@ -219,7 +219,7 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
             await session.commit()
 
             assert await repo_settings.get_value("digest.target.label") == "@astra_digest"
-            assert await system.get_schema_revision() == "20260420_02"
+            assert await system.get_schema_revision() == "20260421_01"
 
         await runtime.dispose()
 

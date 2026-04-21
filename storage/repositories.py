@@ -18,6 +18,7 @@ from models import (
     DigestItem,
     Message,
     PersonMemory,
+    ReplyExample,
     Reminder,
     Setting,
     StyleProfile,
@@ -42,6 +43,24 @@ class DigestMessageRecord:
 class ChatMessageRecord:
     chat: Chat
     message: Message
+
+
+@dataclass(frozen=True, slots=True)
+class ReplyExampleSearchCandidate:
+    id: int
+    chat_id: int
+    chat_title: str
+    inbound_message_id: int | None
+    outbound_message_id: int | None
+    inbound_text: str
+    outbound_text: str
+    inbound_normalized: str
+    outbound_normalized: str
+    example_type: str
+    source_person_key: str | None
+    quality_score: float
+    created_at: datetime
+    fts_rank: float
 
 
 @dataclass(slots=True)
@@ -499,6 +518,165 @@ class MessageRepository:
         return [
             ChatMessageRecord(chat=chat, message=message)
             for message, chat in result.all()
+        ]
+
+
+@dataclass(slots=True)
+class ReplyExampleRepository:
+    session: AsyncSession
+
+    async def create_example(
+        self,
+        *,
+        chat_id: int,
+        inbound_message_id: int | None,
+        outbound_message_id: int | None,
+        inbound_text: str,
+        outbound_text: str,
+        inbound_normalized: str,
+        outbound_normalized: str,
+        context_before_json: dict[str, Any] | list[Any] | None,
+        example_type: str,
+        source_person_key: str | None,
+        quality_score: float,
+    ) -> ReplyExample:
+        example = ReplyExample(
+            chat_id=chat_id,
+            inbound_message_id=inbound_message_id,
+            outbound_message_id=outbound_message_id,
+            inbound_text=inbound_text,
+            outbound_text=outbound_text,
+            inbound_normalized=inbound_normalized,
+            outbound_normalized=outbound_normalized,
+            context_before_json=context_before_json,
+            example_type=example_type,
+            source_person_key=source_person_key,
+            quality_score=quality_score,
+        )
+        self.session.add(example)
+        await self.session.flush()
+        return example
+
+    async def list_examples(self, *, limit: int | None = None) -> list[ReplyExample]:
+        statement = (
+            select(ReplyExample)
+            .order_by(
+                desc(ReplyExample.quality_score),
+                desc(ReplyExample.created_at),
+                desc(ReplyExample.id),
+            )
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        result = await self.session.execute(statement)
+        return list(result.scalars().all())
+
+    async def delete_all(self) -> int:
+        result = await self.session.execute(select(ReplyExample))
+        items = list(result.scalars().all())
+        if not items:
+            return 0
+        for item in items:
+            await self.session.delete(item)
+        await self.session.flush()
+        return len(items)
+
+    async def delete_for_chat(self, *, chat_id: int) -> int:
+        result = await self.session.execute(
+            select(ReplyExample).where(ReplyExample.chat_id == chat_id)
+        )
+        items = list(result.scalars().all())
+        for item in items:
+            await self.session.delete(item)
+        await self.session.flush()
+        return len(items)
+
+    async def delete_for_chats(self, chat_ids: Sequence[int]) -> int:
+        normalized_ids = [chat_id for chat_id in dict.fromkeys(chat_ids) if chat_id]
+        if not normalized_ids:
+            return 0
+        result = await self.session.execute(
+            select(ReplyExample).where(ReplyExample.chat_id.in_(normalized_ids))
+        )
+        items = list(result.scalars().all())
+        for item in items:
+            await self.session.delete(item)
+        await self.session.flush()
+        return len(items)
+
+    async def count_examples(self) -> int:
+        result = await self.session.execute(select(func.count()).select_from(ReplyExample))
+        return int(result.scalar_one())
+
+    async def count_chats_with_examples(self) -> int:
+        result = await self.session.execute(
+            select(func.count(func.distinct(ReplyExample.chat_id)))
+        )
+        return int(result.scalar_one())
+
+    async def search_similar(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        min_quality: float = 0.0,
+    ) -> list[ReplyExampleSearchCandidate]:
+        normalized = query.strip()
+        if not normalized:
+            return []
+
+        result = await self.session.execute(
+            text(
+                """
+                SELECT
+                    reply_examples.id,
+                    reply_examples.chat_id,
+                    chats.title AS chat_title,
+                    reply_examples.inbound_message_id,
+                    reply_examples.outbound_message_id,
+                    reply_examples.inbound_text,
+                    reply_examples.outbound_text,
+                    reply_examples.inbound_normalized,
+                    reply_examples.outbound_normalized,
+                    reply_examples.example_type,
+                    reply_examples.source_person_key,
+                    reply_examples.quality_score,
+                    reply_examples.created_at,
+                    bm25(reply_examples_fts) AS fts_rank
+                FROM reply_examples
+                JOIN reply_examples_fts ON reply_examples_fts.rowid = reply_examples.id
+                JOIN chats ON chats.id = reply_examples.chat_id
+                WHERE reply_examples_fts MATCH :query
+                  AND reply_examples.quality_score >= :min_quality
+                ORDER BY bm25(reply_examples_fts), reply_examples.quality_score DESC, reply_examples.created_at DESC
+                LIMIT :limit
+                """
+            ),
+            {
+                "query": normalized,
+                "min_quality": float(min_quality),
+                "limit": int(limit),
+            },
+        )
+        rows = result.mappings().all()
+        return [
+            ReplyExampleSearchCandidate(
+                id=int(row["id"]),
+                chat_id=int(row["chat_id"]),
+                chat_title=str(row["chat_title"] or ""),
+                inbound_message_id=_coerce_optional_int(row["inbound_message_id"]),
+                outbound_message_id=_coerce_optional_int(row["outbound_message_id"]),
+                inbound_text=str(row["inbound_text"] or ""),
+                outbound_text=str(row["outbound_text"] or ""),
+                inbound_normalized=str(row["inbound_normalized"] or ""),
+                outbound_normalized=str(row["outbound_normalized"] or ""),
+                example_type=str(row["example_type"] or "soft_reply"),
+                source_person_key=str(row["source_person_key"]) if row["source_person_key"] else None,
+                quality_score=float(row["quality_score"] or 0.0),
+                created_at=_coerce_datetime(row["created_at"]),
+                fts_rank=float(row["fts_rank"] or 0.0),
+            )
+            for row in rows
         ]
 
 
@@ -1218,6 +1396,31 @@ def _build_person_message_filter(person_key: str):
         if not handle:
             return None
         return func.lower(Message.sender_name) == f"@{handle}"
+
+
+def _coerce_optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return datetime.now(timezone.utc)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return datetime.now(timezone.utc)
 
     if normalized.startswith("name:"):
         name = normalized.split(":", 1)[1].strip().casefold()

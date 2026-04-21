@@ -14,6 +14,7 @@ from storage.repositories import (
     DigestRepository,
     MessageRepository,
     PersonMemoryRepository,
+    ReplyExampleRepository,
     ReminderRepository,
     SettingRepository,
     StyleProfileRepository,
@@ -35,6 +36,7 @@ class BotStatusService:
     chat_style_override_repository: ChatStyleOverrideRepository
     task_repository: TaskRepository | None = None
     reminder_repository: ReminderRepository | None = None
+    reply_example_repository: ReplyExampleRepository | None = None
 
     async def build_status_message(self) -> str:
         total_sources = await self.chat_repository.count_chats()
@@ -50,6 +52,16 @@ class BotStatusService:
         total_people_memory = await self.person_memory_repository.count_people_memory()
         total_style_profiles = await self.style_profile_repository.count_profiles()
         total_style_overrides = await self.chat_style_override_repository.count_overrides()
+        total_reply_examples = (
+            await self.reply_example_repository.count_examples()
+            if self.reply_example_repository is not None
+            else 0
+        )
+        reply_example_chats = (
+            await self.reply_example_repository.count_chats_with_examples()
+            if self.reply_example_repository is not None
+            else 0
+        )
         candidate_tasks = (
             await self.task_repository.count_candidates()
             if self.task_repository is not None
@@ -138,6 +150,14 @@ class BotStatusService:
                 and persona_state.core_loaded
                 and persona_state.guardrails_active
                 else "/reply в persona-aware режиме: не готов"
+            ),
+            "Few-shot layer: готов" if total_reply_examples > 0 else "Few-shot layer: не готов",
+            f"Reply examples: {total_reply_examples}",
+            f"Чатов с reply examples: {reply_example_chats}",
+            (
+                "/reply с few-shot support: готов"
+                if total_reply_examples > 0
+                else "/reply с few-shot support: не готов"
             ),
             f"Чатов с данными для reply: {reply_ready_chats}",
             (
