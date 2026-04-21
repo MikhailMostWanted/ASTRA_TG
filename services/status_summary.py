@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from config.settings import Settings
+from fullaccess.auth import FullAccessAuthService
 from services.bot_owner import BotOwnerService
 from services.digest_target import DigestTargetService
 from services.digest_window import parse_digest_window
@@ -40,6 +41,7 @@ class BotStatusService:
     reminder_repository: ReminderRepository | None = None
     reply_example_repository: ReplyExampleRepository | None = None
     provider_manager: ProviderManager | None = None
+    fullaccess_auth_service: FullAccessAuthService | None = None
 
     async def build_status_message(self) -> str:
         total_sources = await self.chat_repository.count_chats()
@@ -96,6 +98,11 @@ class BotStatusService:
         owner_chat_id = await BotOwnerService(self.setting_repository).get_owner_chat_id()
         schema_revision = await self.system_repository.get_schema_revision()
         provider_status = await self._get_provider_status(check_api=False)
+        fullaccess_status = (
+            await self.fullaccess_auth_service.build_status_report()
+            if self.fullaccess_auth_service is not None
+            else None
+        )
         digest_window = parse_digest_window(None)
         digest_window_counts = await self.message_repository.count_messages_by_digest_chat(
             window_start=digest_window.start,
@@ -129,6 +136,31 @@ class BotStatusService:
             f"Memory-карт людей: {total_people_memory}",
             "Reply layer: готов",
             "Provider layer: готов" if provider_status.configured else "Provider layer: не готов",
+            (
+                "Full-access experimental layer: включён"
+                if fullaccess_status is not None and fullaccess_status.enabled
+                else "Full-access experimental layer: выключен"
+            ),
+            (
+                "Full-access авторизация: да"
+                if fullaccess_status is not None and fullaccess_status.authorized
+                else "Full-access авторизация: нет"
+            ),
+            (
+                "Full-access read-only: активен"
+                if fullaccess_status is None or fullaccess_status.effective_readonly
+                else "Full-access read-only: не активен"
+            ),
+            (
+                f"Full-access чатов синхронизировано: {fullaccess_status.synced_chat_count}"
+                if fullaccess_status is not None
+                else "Full-access чатов синхронизировано: 0"
+            ),
+            (
+                "Full-access как дополнительный источник: готов"
+                if fullaccess_status is not None and fullaccess_status.ready_for_manual_sync
+                else "Full-access как дополнительный источник: не готов"
+            ),
             (
                 "LLM refine для reply: доступен"
                 if provider_status.reply_refine_available

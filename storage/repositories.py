@@ -318,6 +318,21 @@ class MessageRepository:
         result = await self.session.execute(select(func.count()).select_from(Message))
         return int(result.scalar_one())
 
+    async def count_messages_by_source_adapter(self, source_adapter: str) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(Message)
+            .where(Message.source_adapter == source_adapter)
+        )
+        return int(result.scalar_one())
+
+    async def count_distinct_chats_by_source_adapter(self, source_adapter: str) -> int:
+        result = await self.session.execute(
+            select(func.count(func.distinct(Message.chat_id)))
+            .where(Message.source_adapter == source_adapter)
+        )
+        return int(result.scalar_one())
+
     async def count_messages_for_chat(self, *, chat_id: int) -> int:
         result = await self.session.execute(
             select(func.count()).select_from(Message).where(Message.chat_id == chat_id)

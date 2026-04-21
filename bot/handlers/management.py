@@ -6,6 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from bot.handlers.common import remember_owner_chat_if_private
 from config.settings import Settings
+from fullaccess.auth import FullAccessAuthService
+from fullaccess.formatter import FullAccessFormatter
+from fullaccess.sync import FullAccessSyncService
 from services.chat_memory_builder import ChatMemoryBuilder
 from services.command_parser import BotCommandParser
 from services.digest_builder import DigestBuilder
@@ -77,6 +80,109 @@ async def handle_provider_status_command(
         await remember_owner_chat_if_private(message, session)
         service = _build_status_service(session)
         await message.answer(await service.build_provider_status_message())
+
+
+@router.message(Command("fullaccess_status"))
+async def handle_fullaccess_status_command(
+    message: Message,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        service = _build_fullaccess_auth_service(session)
+        formatter = FullAccessFormatter()
+        await message.answer(formatter.format_status(await service.build_status_report()))
+
+
+@router.message(Command("fullaccess_login"))
+async def handle_fullaccess_login_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    login_code = command.args.strip() if command.args and command.args.strip() else None
+    if login_code and len(login_code.split()) > 1:
+        await message.answer(
+            "Через бота поддержан только код Telegram. Если нужен пароль 2FA, "
+            "используй локальный helper: python -m fullaccess.cli login --code <код>."
+        )
+        return
+
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        service = _build_fullaccess_auth_service(session)
+        formatter = FullAccessFormatter()
+        try:
+            result = (
+                await service.complete_login(login_code)
+                if login_code is not None
+                else await service.begin_login()
+            )
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+        await session.commit()
+
+    await message.answer(formatter.format_login(result))
+
+
+@router.message(Command("fullaccess_logout"))
+async def handle_fullaccess_logout_command(
+    message: Message,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        service = _build_fullaccess_auth_service(session)
+        formatter = FullAccessFormatter()
+        result = await service.logout()
+        await session.commit()
+
+    await message.answer(formatter.format_logout(result))
+
+
+@router.message(Command("fullaccess_chats"))
+async def handle_fullaccess_chats_command(
+    message: Message,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        service = _build_fullaccess_sync_service(session)
+        formatter = FullAccessFormatter()
+        try:
+            result = await service.list_chats()
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+
+    await message.answer(formatter.format_chat_list(result))
+
+
+@router.message(Command("fullaccess_sync"))
+async def handle_fullaccess_sync_command(
+    message: Message,
+    command: CommandObject,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    try:
+        reference = PARSER.parse_required_reference(command.args, command_name="fullaccess_sync")
+    except ValueError as error:
+        await message.answer(str(error))
+        return
+
+    async with session_factory() as session:
+        await remember_owner_chat_if_private(message, session)
+        service = _build_fullaccess_sync_service(session)
+        formatter = FullAccessFormatter()
+        try:
+            result = await service.sync_chat(reference)
+        except ValueError as error:
+            await message.answer(str(error))
+            return
+        await session.commit()
+
+    await message.answer(formatter.format_sync_result(result))
 
 
 @router.message(Command("sources"))
@@ -570,6 +676,24 @@ def _build_status_service(session: AsyncSession) -> BotStatusService:
         reminder_repository=ReminderRepository(session),
         reply_example_repository=ReplyExampleRepository(session),
         provider_manager=_build_provider_manager(),
+        fullaccess_auth_service=_build_fullaccess_auth_service(session),
+    )
+
+
+def _build_fullaccess_auth_service(session: AsyncSession) -> FullAccessAuthService:
+    settings = Settings()
+    return FullAccessAuthService(
+        settings=settings,
+        setting_repository=SettingRepository(session),
+        message_repository=MessageRepository(session),
+    )
+
+
+def _build_fullaccess_sync_service(session: AsyncSession) -> FullAccessSyncService:
+    return FullAccessSyncService(
+        settings=Settings(),
+        chat_repository=ChatRepository(session),
+        message_repository=MessageRepository(session),
     )
 
 

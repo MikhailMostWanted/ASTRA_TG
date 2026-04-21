@@ -11,6 +11,7 @@ Astra AFT — локальный MVP Telegram-ассистента. Репози
 - первый локальный reply coach MVP по уже сохранённым сообщениям и memory-картам.
 - первый локальный reminders MVP с подтверждением кандидатов и доставкой из worker.
 - optional provider layer для безопасного LLM-refine поверх уже существующих deterministic reply и digest пайплайнов.
+- experimental full-access scaffold в read-only режиме для ручного sync пользовательской истории в тот же `message_store`.
 
 ## Стек
 
@@ -32,6 +33,12 @@ cp .env.example .env
 ```
 
 Перед запуском бота заполните `TELEGRAM_BOT_TOKEN` в `.env`.
+
+Если нужен experimental full-access transport через Telethon, поставьте optional extra отдельно:
+
+```bash
+pip install -e ".[dev,fullaccess]"
+```
 
 ## Provider layer
 
@@ -57,6 +64,49 @@ LLM_REFINE_DIGEST_ENABLED=true
 - provider не вшит в бизнес-логику и сидит отдельным abstraction layer в `services/providers/`;
 - LLM используется только как optional refinement поверх уже собранного deterministic baseline;
 - если provider не настроен, недоступен или не проходит guardrails, сервис честно откатывается к локальному результату.
+
+## Experimental full-access scaffold
+
+Bot-first сценарий остаётся основным. Experimental full-access слой не включён по умолчанию, не заменяет основной поток и сейчас работает только как ручной read-only scaffold.
+
+Минимальный `.env` для этого режима:
+
+```env
+FULLACCESS_ENABLED=true
+FULLACCESS_API_ID=...
+FULLACCESS_API_HASH=...
+FULLACCESS_SESSION_PATH=./var/fullaccess.session
+FULLACCESS_PHONE=+79990000000
+FULLACCESS_READONLY=true
+FULLACCESS_SYNC_LIMIT=200
+```
+
+Что делает этот слой на текущем шаге:
+
+- хранит локальную пользовательскую Telegram-session;
+- даёт `/fullaccess_status`, `/fullaccess_login`, `/fullaccess_logout`;
+- показывает доступные пользовательские чаты через `/fullaccess_chats`;
+- вручную синкает историю одного чата через `/fullaccess_sync <chat_id|@username>`;
+- пишет сообщения в те же `chats/messages`, помечая их `source_adapter=fullaccess`;
+- при первом sync автоматически регистрирует чат как `category=fullaccess`, `is_enabled=false`, `exclude_from_digest=true`.
+
+Что этот слой принципиально не делает:
+
+- не отправляет сообщения от имени пользователя;
+- не редактирует и не удаляет сообщения;
+- не ставит реакции;
+- не запускает автоответ;
+- не крутит фоновые автономные sync/send циклы;
+- не заменяет Telegram-клиент.
+
+Если Telegram после кода попросит пароль 2FA, безопасный локальный helper:
+
+```bash
+python -m fullaccess.cli status
+python -m fullaccess.cli request-code
+python -m fullaccess.cli login --code 12345
+python -m fullaccess.cli logout
+```
 
 ## Основные команды
 
@@ -84,6 +134,11 @@ python -m apps.bot
 - `/help` — список доступных команд.
 - `/status` — техническая сводка по состоянию проекта и ingest-метрикам.
 - `/provider_status` — состояние optional provider layer, моделей и runtime-доступности API.
+- `/fullaccess_status` — состояние experimental full-access слоя, session и read-only барьера.
+- `/fullaccess_login [код]` — запросить код входа или завершить авторизацию user-session.
+- `/fullaccess_logout` — локально удалить session/pending auth full-access слоя.
+- `/fullaccess_chats` — показать доступные пользовательские чаты без массового импорта.
+- `/fullaccess_sync <chat_id|@username>` — вручную синкать историю одного user-чата в общий `message_store`.
 - `/reminders_scan [24h|3d] [chat_id|@username]` — просканировать локальные сообщения на задачи и reminders-кандидаты.
 - `/tasks` — показать активные задачи.
 - `/reminders` — показать активные reminders.
@@ -113,6 +168,11 @@ python -m apps.bot
 - что deterministic mode активен;
 - готов ли provider layer;
 - доступны ли LLM refine режимы для reply и digest.
+- включён ли experimental full-access слой;
+- авторизована ли user-session;
+- активен ли read-only барьер;
+- сколько чатов уже синхронизировано через full-access;
+- готов ли проект использовать full-access как дополнительный источник данных.
 
 Для `/source_add` и `/digest_target` поддержан best-effort сценарий через форвард или reply:
 

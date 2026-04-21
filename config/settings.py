@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     llm_timeout: float = 15.0
     llm_refine_reply_enabled: bool = False
     llm_refine_digest_enabled: bool = False
+    fullaccess_enabled: bool = False
+    fullaccess_api_id: int | None = None
+    fullaccess_api_hash: str | None = None
+    fullaccess_session_path: str = "./var/fullaccess.session"
+    fullaccess_phone: str | None = None
+    fullaccess_readonly: bool = True
+    fullaccess_sync_limit: int = 200
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -35,3 +42,10 @@ class Settings(BaseSettings):
             return None
 
         return Path(self.database_url.removeprefix(prefix)).expanduser()
+
+    @property
+    def fullaccess_session_file(self) -> Path:
+        path = Path(self.fullaccess_session_path).expanduser()
+        if path.suffix != ".session":
+            path = path.with_suffix(f"{path.suffix}.session" if path.suffix else ".session")
+        return path

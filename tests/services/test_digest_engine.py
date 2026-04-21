@@ -2,7 +2,7 @@ import asyncio
 import importlib
 import importlib.util
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -298,6 +298,7 @@ def test_digest_llm_handler_falls_back_to_deterministic_digest_when_provider_una
 
         runtime = build_database_runtime(Settings())
         await bootstrap_database(runtime)
+        recent_message_at = datetime.now(timezone.utc) - timedelta(hours=1)
 
         async with runtime.session_factory() as session:
             chats = ChatRepository(session)
@@ -319,7 +320,7 @@ def test_digest_llm_handler_falls_back_to_deterministic_digest_when_provider_una
                 direction="inbound",
                 source_adapter="telegram",
                 source_type="message",
-                sent_at=datetime(2026, 4, 20, 9, 30, tzinfo=timezone.utc),
+                sent_at=recent_message_at,
                 raw_text="Деплой на staging завершён, проверяем отчёты по конверсии и отклики пользователей.",
                 normalized_text="Деплой на staging завершён, проверяем отчёты по конверсии и отклики пользователей.",
             )
@@ -414,6 +415,7 @@ def test_digest_now_handler_runs_happy_path(monkeypatch, tmp_path: Path) -> None
 
         runtime = build_database_runtime(Settings())
         await bootstrap_database(runtime)
+        recent_message_at = datetime.now(timezone.utc) - timedelta(hours=1)
 
         async with runtime.session_factory() as session:
             chats = ChatRepository(session)
@@ -436,7 +438,7 @@ def test_digest_now_handler_runs_happy_path(monkeypatch, tmp_path: Path) -> None
                 direction="inbound",
                 source_adapter="telegram",
                 source_type="message",
-                sent_at=datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc),
+                sent_at=recent_message_at,
                 raw_text="Подготовили первый реальный digest MVP без LLM и с локальной эвристикой ранжирования.",
                 normalized_text="Подготовили первый реальный digest MVP без LLM и с локальной эвристикой ранжирования.",
             )

@@ -21,6 +21,9 @@ dev = [
     "pytest>=8.0,<9.0",
     "ruff>=0.6,<1.0",
 ]
+fullaccess = [
+    "Telethon>=1.36,<2.0",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

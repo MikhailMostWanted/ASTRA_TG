@@ -17,6 +17,7 @@
 - `schemas/` содержит typed payloads и transport models.
 - `adapters/` задаёт переиспользуемые границы адаптеров.
 - `telegram_bot/`, `business/` и `fullaccess/` содержат реализации адаптеров для будущих режимов доступа.
+- `fullaccess/` теперь уже не просто placeholder: там живёт experimental read-only scaffold для пользовательской session, chat discovery и ручного history sync в общий `message_store`.
 - `migrations/` содержит конфигурацию Alembic и ревизии схемы.
 
 ## Правила границ
@@ -28,6 +29,7 @@
 - Предпочитать аддитивные модули вместо разрастания монолитных файлов.
 - Использовать bot layer как bridge между `storage/` и будущим digest engine, а не как место для самой digest-логики.
 - Provider layer держать отдельным и опциональным: никаких прямых вызовов конкретного вендора из reply/digest бизнес-логики.
+- Full-access слой держать отдельным от bot-first ingest: только ручные команды, только read-only операции, никаких send/edit/delete/reaction hooks.
 
 ## Provider layer
 
@@ -53,6 +55,24 @@ Provider layer устроен как отдельный верхний слой 
 - `storage/repositories.py` делает upsert в `messages` по `(chat_id, telegram_message_id)` и отдаёт агрегаты для `/status` и `/sources`.
 
 Эта цепочка соединяет Telegram bot adapter с `message_store` (`messages` и `messages_fts`) и напрямую питает digest engine MVP на реальных накопленных данных.
+
+## Experimental full-access scaffold
+
+Experimental full-access слой теперь устроен как отдельный read-only path поверх того же хранилища:
+
+- `fullaccess/client.py` инкапсулирует optional Telethon transport за локальным интерфейсом и не разносит Telethon по остальному проекту;
+- `fullaccess/auth.py` отвечает за `/fullaccess_status`, `/fullaccess_login`, `/fullaccess_logout`, хранение pending auth state в локальных `settings` и работу с локальной session;
+- `fullaccess/sync.py` даёт `/fullaccess_chats` и `/fullaccess_sync <chat_id|@username>`, то есть только chat discovery и ручной sync одного чата за вызов;
+- `fullaccess/formatter.py` собирает bot-friendly ответы без бизнес-логики в handlers;
+- `bot/handlers/management.py` остаётся тонким Telegram bridge и просто вызывает соответствующие сервисы.
+
+Ключевые ограничения этого слоя:
+
+- main bot-first ветка и существующий ingest UX остаются как были;
+- full-access не включён по умолчанию и требует явного `.env`-конфига;
+- full-access сейчас строго read-only: нет send, edit, delete, reactions и фоновой автономии;
+- sync идёт только вручную по одному чату и пишет в те же `messages`, используя `source_adapter=fullaccess`;
+- при первом sync чат может auto-upsert-иться в `chats`, но как `category=fullaccess`, `is_enabled=false`, `exclude_from_digest=true`, то есть без автоматического включения опасных режимов.
 
 ## Digest pipeline
 

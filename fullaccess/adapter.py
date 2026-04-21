@@ -3,4 +3,7 @@ from adapters.base import AdapterStub
 
 class FullAccessAdapter(AdapterStub):
     name = "fullaccess"
-    notes = "TODO: implement full-history/full-action Telegram access boundaries."
+    notes = (
+        "Experimental read-only scaffold for manual user-session auth, "
+        "chat discovery and one-chat-at-a-time history sync into message_store."
+    )

@@ -1,1 +1,1 @@
-"""Future full-access adapter layer."""
+"""Experimental read-only full-access layer."""
