@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from bot.handlers.common import remember_owner_chat_if_private
 from services.error_handling import user_safe_handler
+from services.setup_ui import SetupUIService
 from services.startup import BotStartupService
 
 
@@ -18,9 +19,13 @@ async def handle_start_command(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:
-        await remember_owner_chat_if_private(message, session)
+        owner_chat_known = await remember_owner_chat_if_private(message, session)
         service = BotStartupService()
-        await message.answer(service.build_start_message())
+        setup_ui = SetupUIService.from_session(session)
+        await message.answer(
+            service.build_start_message(),
+            reply_markup=await setup_ui.build_start_keyboard(owner_chat_known=owner_chat_known),
+        )
 
 
 @router.message(Command("onboarding"))

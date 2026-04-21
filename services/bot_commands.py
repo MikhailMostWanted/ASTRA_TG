@@ -33,6 +33,7 @@ BOT_COMMAND_SPECS: tuple[BotCommandSpec, ...] = (
     BotCommandSpec("start", "Короткий вход и привязка owner chat", "setup"),
     BotCommandSpec("onboarding", "Быстрый first-run guide", "setup"),
     BotCommandSpec("help", "Список команд по разделам", "setup"),
+    BotCommandSpec("setup", "Центр управления и готовности", "setup"),
     BotCommandSpec("status", "Короткая живая сводка состояния", "diagnostics"),
     BotCommandSpec("checklist", "Пошаговая operational checklist", "diagnostics"),
     BotCommandSpec("doctor", "Диагностика и предупреждения", "diagnostics"),

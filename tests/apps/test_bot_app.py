@@ -46,6 +46,7 @@ def test_configure_bot_commands_registers_management_commands() -> None:
         "start",
         "onboarding",
         "help",
+        "setup",
         "status",
         "checklist",
         "doctor",

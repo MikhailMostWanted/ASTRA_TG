@@ -1,0 +1,397 @@
+import asyncio
+import importlib
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+
+from config.settings import Settings
+from services.setup_ui import SetupUIService
+from storage.database import bootstrap_database, build_database_runtime
+from storage.repositories import (
+    ChatMemoryRepository,
+    ChatRepository,
+    MessageRepository,
+    PersonMemoryRepository,
+    ReplyExampleRepository,
+    ReminderRepository,
+    SettingRepository,
+    TaskRepository,
+)
+
+
+@dataclass(slots=True)
+class FakeAnswer:
+    text: str
+    reply_markup: object | None = None
+
+
+@dataclass(slots=True)
+class FakeSentMessage:
+    chat_id: int
+    text: str
+    message_id: int
+
+
+@dataclass(slots=True)
+class FakeBot:
+    sent_messages: list[FakeSentMessage] = field(default_factory=list)
+
+    async def send_message(self, chat_id: int, text: str):
+        sent = FakeSentMessage(
+            chat_id=chat_id,
+            text=text,
+            message_id=len(self.sent_messages) + 1,
+        )
+        self.sent_messages.append(sent)
+        return SimpleNamespace(message_id=sent.message_id)
+
+
+@dataclass(slots=True)
+class FakeEditableMessage:
+    bot: FakeBot
+    chat_id: int
+    chat_type: str = "private"
+    answers: list[FakeAnswer] = field(default_factory=list)
+    edits: list[FakeAnswer] = field(default_factory=list)
+    chat: object = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.chat = SimpleNamespace(id=self.chat_id, type=self.chat_type)
+
+    async def answer(self, text: str, reply_markup=None):
+        self.answers.append(FakeAnswer(text=text, reply_markup=reply_markup))
+        return SimpleNamespace(message_id=1000 + len(self.answers))
+
+    async def edit_text(self, text: str, reply_markup=None):
+        self.edits.append(FakeAnswer(text=text, reply_markup=reply_markup))
+        return SimpleNamespace(message_id=2000 + len(self.edits))
+
+
+@dataclass(slots=True)
+class FakeCallback:
+    data: str
+    message: FakeEditableMessage
+    bot: FakeBot
+    answers: list[tuple[str | None, bool]] = field(default_factory=list)
+
+    async def answer(self, text: str | None = None, show_alert: bool = False):
+        self.answers.append((text, show_alert))
+
+
+def test_setup_command_renders_home_screen_and_saves_owner_chat(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "setup-home" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        setup_module = importlib.import_module("bot.handlers.setup")
+        message = FakeEditableMessage(bot=FakeBot(), chat_id=701001)
+        await setup_module.handle_setup_command(message, runtime.session_factory)
+
+        assert len(message.answers) == 1
+        answer = message.answers[0]
+        assert "Astra AFT / Центр управления" in answer.text
+        assert "Следующий шаг" in answer.text
+        assert answer.reply_markup is not None
+        assert {"Статус", "Чеклист", "Диагностика", "Источники", "Дайджест", "Память", "Ответы", "Напоминания", "Обновить"}.issubset(
+            set(_keyboard_texts(answer.reply_markup))
+        )
+
+        async with runtime.session_factory() as session:
+            owner_chat_id = await SettingRepository(session).get_value("bot.owner_chat_id")
+            assert owner_chat_id == "701001"
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_start_command_shows_begin_setup_button_for_cold_start(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "start-cold" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        start_module = importlib.import_module("bot.handlers.start")
+        message = FakeEditableMessage(bot=FakeBot(), chat_id=701002)
+        await start_module.handle_start_command(message, runtime.session_factory)
+
+        assert len(message.answers) == 1
+        answer = message.answers[0]
+        assert "/setup" in answer.text
+        assert answer.reply_markup is not None
+        assert _keyboard_texts(answer.reply_markup)[0] == "Начать настройку"
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_start_command_shows_control_center_button_when_system_has_progress(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "start-progress" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            chat = await chats.upsert_chat(
+                telegram_chat_id=-100701,
+                title="Продуктовая команда",
+                handle="product_team",
+                chat_type="group",
+                is_enabled=True,
+            )
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=1,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 21, 9, 0, tzinfo=timezone.utc),
+                raw_text="Есть первый контекст.",
+                normalized_text="Есть первый контекст.",
+            )
+            await session.commit()
+
+        start_module = importlib.import_module("bot.handlers.start")
+        message = FakeEditableMessage(bot=FakeBot(), chat_id=701003)
+        await start_module.handle_start_command(message, runtime.session_factory)
+
+        assert len(message.answers) == 1
+        answer = message.answers[0]
+        assert answer.reply_markup is not None
+        assert _keyboard_texts(answer.reply_markup)[0] == "Открыть центр управления"
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_setup_callback_navigation_renders_section_and_utility_row(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "setup-callback" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        setup_module = importlib.import_module("bot.handlers.setup")
+        message = FakeEditableMessage(bot=FakeBot(), chat_id=701004)
+        callback = FakeCallback(data="ux:sources", message=message, bot=message.bot)
+        await setup_module.handle_setup_callback(callback, runtime.session_factory)
+
+        assert len(message.edits) == 1
+        edit = message.edits[0]
+        assert "Astra AFT / Источники" in edit.text
+        assert edit.reply_markup is not None
+        assert {"Назад", "Домой", "Обновить", "Как добавить"}.issubset(
+            set(_keyboard_texts(edit.reply_markup))
+        )
+        assert callback.answers == [(None, False)]
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_memory_rebuild_callback_runs_existing_service(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "setup-memory-action" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:TEST_TOKEN")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            chat = await chats.upsert_chat(
+                telegram_chat_id=-100702,
+                title="Команда релиза",
+                handle="release_team",
+                chat_type="group",
+                is_enabled=True,
+            )
+            for message_id, text in (
+                (1, "Соберите обновление по релизу."),
+                (2, "Я отвечу после созвона."),
+                (3, "Напомни завтра про договор."),
+            ):
+                await messages.create_message(
+                    chat_id=chat.id,
+                    telegram_message_id=message_id,
+                    sender_id=11,
+                    sender_name="Анна",
+                    direction="inbound",
+                    source_adapter="telegram",
+                    source_type="message",
+                    sent_at=datetime(2026, 4, 21, 10, message_id, tzinfo=timezone.utc),
+                    raw_text=text,
+                    normalized_text=text,
+                )
+            await session.commit()
+
+        setup_module = importlib.import_module("bot.handlers.setup")
+        message = FakeEditableMessage(bot=FakeBot(), chat_id=701005)
+        callback = FakeCallback(data="ux:memory:rebuild", message=message, bot=message.bot)
+        await setup_module.handle_setup_callback(callback, runtime.session_factory)
+
+        assert any("Пересборка памяти завершена." in answer.text for answer in message.answers)
+        assert len(message.edits) == 1
+        assert "Astra AFT / Память" in message.edits[0].text
+
+        async with runtime.session_factory() as session:
+            assert await ChatMemoryRepository(session).count_chat_memory() > 0
+            assert await PersonMemoryRepository(session).count_people_memory() > 0
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_setup_ui_overview_reflects_ready_state(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "setup-overview-ready" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            settings_repo = SettingRepository(session)
+            chat_memory = ChatMemoryRepository(session)
+            people_memory = PersonMemoryRepository(session)
+            reply_examples = ReplyExampleRepository(session)
+            tasks = TaskRepository(session)
+            reminders = ReminderRepository(session)
+
+            source_chat = await chats.upsert_chat(
+                telegram_chat_id=-100703,
+                title="Операционный чат",
+                handle="ops_ready",
+                chat_type="group",
+                is_enabled=True,
+            )
+            digest_chat = await chats.upsert_chat(
+                telegram_chat_id=-100704,
+                title="Digest канал",
+                handle="ops_digest",
+                chat_type="channel",
+                is_enabled=True,
+            )
+            await session.commit()
+
+            for message_id, text in (
+                (1, "Соберите финальный статус по клиенту."),
+                (2, "Я отвечу после созвона."),
+                (3, "Напомни завтра про договор."),
+            ):
+                await messages.create_message(
+                    chat_id=source_chat.id,
+                    telegram_message_id=message_id,
+                    sender_id=11,
+                    sender_name="Анна",
+                    direction="inbound",
+                    source_adapter="telegram",
+                    source_type="message",
+                    sent_at=datetime(2026, 4, 21, 12, message_id, tzinfo=timezone.utc),
+                    raw_text=text,
+                    normalized_text=text,
+                )
+
+            await settings_repo.set_value(key="bot.owner_chat_id", value_text="990001")
+            await settings_repo.set_value(
+                key="digest.target.chat_id",
+                value_text=str(digest_chat.telegram_chat_id),
+            )
+            await settings_repo.set_value(key="digest.target.label", value_text="@ops_digest")
+            await settings_repo.set_value(key="digest.target.type", value_text="channel")
+            await chat_memory.upsert_chat_memory(
+                chat_id=source_chat.id,
+                chat_summary_short="Чат готов к ответам.",
+                chat_summary_long="В чате есть контекст для digest и reply.",
+                current_state="Идёт работа по клиенту.",
+                dominant_topics_json=["клиент", "договор"],
+                recent_conflicts_json=[],
+                pending_tasks_json=["Проверить договор"],
+                linked_people_json=[{"name": "Анна"}],
+                last_digest_at=datetime(2026, 4, 21, 13, 0, tzinfo=timezone.utc),
+            )
+            await people_memory.upsert_person_memory(
+                person_key="tg:11",
+                display_name="Анна",
+                relationship_label="контакт",
+                importance_score=0.9,
+                last_summary="Анна ведёт клиента.",
+                known_facts_json=["Связана с клиентом"],
+                sensitive_topics_json=[],
+                open_loops_json=["Договор"],
+                interaction_pattern="Деловой контакт",
+            )
+            await reply_examples.create_example(
+                chat_id=source_chat.id,
+                inbound_message_id=1,
+                outbound_message_id=2,
+                inbound_text="Соберите финальный статус по клиенту.",
+                outbound_text="Собираю и пришлю после созвона.",
+                inbound_normalized="Соберите финальный статус по клиенту.",
+                outbound_normalized="Собираю и пришлю после созвона.",
+                context_before_json=[],
+                example_type="soft_reply",
+                source_person_key="tg:11",
+                quality_score=0.8,
+            )
+            task = await tasks.create_task(
+                source_chat_id=source_chat.id,
+                source_message_id=None,
+                title="Проверить договор",
+                summary="Нужно вернуться к договору завтра.",
+                due_at=datetime(2026, 4, 22, 9, 0, tzinfo=timezone.utc),
+                status="active",
+                needs_user_confirmation=False,
+                suggested_remind_at=datetime(2026, 4, 22, 8, 0, tzinfo=timezone.utc),
+                confidence=0.81,
+            )
+            await reminders.create_reminder(
+                task_id=task.id,
+                remind_at=datetime.now(timezone.utc) + timedelta(hours=2),
+                status="active",
+                payload_json={"source_chat_title": "Операционный чат"},
+            )
+            await session.commit()
+
+            card = await SetupUIService.from_session(session).build_screen("reply")
+            reminders_card = await SetupUIService.from_session(session).build_screen("reminders")
+
+            assert "Astra AFT / Ответы" in card.text
+            assert "Готовых чатов: 1" in card.text
+            assert "Похожие ответы: да" in card.text
+            assert "Готовые чаты: 1" in card.text
+            assert "Astra AFT / Напоминания" in reminders_card.text
+            assert "Активные напоминания: 1" in reminders_card.text
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def _keyboard_texts(reply_markup) -> list[str]:
+    return [button.text for row in reply_markup.inline_keyboard for button in row]

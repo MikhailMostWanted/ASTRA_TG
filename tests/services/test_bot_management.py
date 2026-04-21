@@ -236,6 +236,7 @@ def test_start_message_explains_onboarding() -> None:
     message = BotStartupService().build_start_message()
 
     assert "Astra AFT" in message
+    assert "/setup" in message
     assert "/onboarding" in message
     assert "/checklist" in message
     assert "/doctor" in message

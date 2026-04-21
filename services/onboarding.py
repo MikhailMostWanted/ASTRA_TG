@@ -29,7 +29,8 @@ class OnboardingFormatter:
     def build_start_message(self) -> str:
         return (
             "Astra AFT готов к работе в bot-first режиме.\n\n"
-            "Начни с /onboarding.\n"
+            "Открой /setup, чтобы увидеть готовность и следующий шаг.\n"
+            "Стартовый путь: /onboarding.\n"
             "Быстрый self-check: /status, /checklist, /doctor.\n"
             "Список команд по разделам: /help."
         )
