@@ -40,6 +40,46 @@ cp .env.example .env
 pip install -e ".[dev,fullaccess]"
 ```
 
+После editable-установки в активированном `.venv` появляется installable CLI-команда `astra`.
+
+## CLI `astra`
+
+Основной локальный operational UX теперь идёт через `astra`:
+
+```bash
+astra start
+astra status
+astra logs --tail 50
+astra backup
+astra export
+astra stop
+```
+
+Что делает CLI:
+
+- `astra start` поднимает `bot` и фоновый `worker` через текущий Python-интерпретатор активного окружения;
+- `astra stop` останавливает только процессы, запущенные через этот CLI;
+- `astra status` показывает `.env`, состояние `bot/worker`, пути к pid/log, доступность базы и provider;
+- `astra doctor` строит диагностический отчёт поверх существующего operational слоя;
+- `astra backup` и `astra export` прокидывают уже существующие `apps.ops` команды;
+- `astra logs` показывает лог-файлы из `var/log/` и умеет печатать tail последних строк.
+
+Runtime-файлы CLI:
+
+- `var/run/astra-bot.pid`
+- `var/run/astra-worker.pid`
+- `var/log/astra-bot.log`
+- `var/log/astra-worker.log`
+
+Фоновый `worker` в CLI-режиме не меняет reminder-логику: он просто периодически запускает уже существующий `run_worker_once()` локальным loop-wrapper-ом.
+
+Чтобы вызывать `astra` из любого терминала на macOS:
+
+- если хочешь использовать именно текущий проектный `.venv`, добавь alias на абсолютный путь к `.venv/bin/astra`;
+- если нужен отдельный глобально доступный wrapper, можно поставить проект через `pipx install --editable /абсолютный/путь/к/ASTRA_TG`.
+
+CLI сам переключается в корень репозитория, поэтому команды можно вызывать не только из каталога проекта.
+
 ## Provider layer
 
 Deterministic режим остаётся основным и работает даже при полностью пустом LLM-конфиге.
@@ -118,23 +158,32 @@ python -m fullaccess.cli logout
 pytest
 ```
 
-Operational utilities:
+Высокоуровневый локальный запуск:
+
+```bash
+astra start
+astra start bot
+astra start worker
+astra stop
+astra stop bot
+astra stop worker
+astra restart
+astra status
+astra status bot
+astra status worker
+astra doctor
+astra logs --tail 50
+astra backup
+astra export
+```
+
+Низкоуровневые entrypoints и ops-утилиты по-прежнему доступны напрямую:
 
 ```bash
 python -m apps.ops status
 python -m apps.ops backup
 python -m apps.ops export
-```
-
-Одноразовый bootstrap worker-процесса:
-
-```bash
 python -m apps.worker
-```
-
-Запуск Telegram-бота:
-
-```bash
 python -m apps.bot
 ```
 
@@ -177,11 +226,11 @@ python -m apps.bot
 
 Базовый безопасный цикл теперь такой:
 
-1. Запусти `python -m apps.bot` и смотри стартовую self-check сводку в логах.
-2. Для фоновой доставки reminders запускай `python -m apps.worker` отдельным run-once шагом или по cron.
-3. Перед ручными экспериментами проверь `python -m apps.ops status`.
-4. Перед изменениями данных сделай `python -m apps.ops backup`.
-5. Для компактной диагностики проекта выгрузи `python -m apps.ops export`.
+1. Запусти `astra start` и смотри стартовую self-check сводку через `astra logs --tail 50`.
+2. Проверь состояние `astra status` или `astra doctor`.
+3. Перед ручными экспериментами сделай `astra backup`.
+4. Для компактной диагностики проекта выгрузи `astra export`.
+5. Когда локальный контур больше не нужен, останови его через `astra stop`.
 
 Что теперь проверяется на старте `apps.bot` и `apps.worker`:
 
@@ -196,19 +245,21 @@ python -m apps.bot
 
 ## Backup и diagnostic export
 
-`python -m apps.ops backup`:
+`astra backup`:
 
 - делает локальную timestamped-копию SQLite-базы в `var/backups/`;
 - использует штатный SQLite backup API, без небезопасных трюков;
-- сохраняет путь последнего backup в operational state.
+- сохраняет путь последнего backup в operational state;
+- внутри прокидывает уже существующий `apps.ops backup`.
 
-`python -m apps.ops export`:
+`astra export`:
 
 - пишет компактную JSON-сводку в `var/exports/`;
 - показывает количества источников, сообщений, digest, memory cards, reply examples, tasks/reminders;
 - добавляет состояние provider/full-access;
 - добавляет последние operational timestamps: digest, memory rebuild, reminder delivery, full-access sync, backup, export;
-- включает recent errors и startup warnings, если они были.
+- включает recent errors и startup warnings, если они были;
+- внутри прокидывает уже существующий `apps.ops export`.
 
 ## Логи и ошибки
 
