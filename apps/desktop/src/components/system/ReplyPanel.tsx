@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Bug,
+  ChevronDown,
+  ChevronUp,
   CheckCheck,
   Copy,
   DatabaseZap,
@@ -84,13 +87,17 @@ export function ReplyPanel({
   }, [suggestion]);
 
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [showDebug, setShowDebug] = useState(false);
 
   useEffect(() => {
     setSelectedIndex(0);
+    setShowDebug(false);
   }, [suggestion?.sourceMessageId, suggestion?.replyText]);
 
   const selectedReply = replyOptions[selectedIndex]?.text || "";
   const selectedVariant = replyOptions[selectedIndex] || null;
+  const llmDebug = suggestion?.llmDebug ?? null;
+  const llmDecisionReason = llmDebug?.decisionReason ?? null;
   const sendDisabledReason =
     "Прямая отправка через Desktop пока отключена: current full-access слой остаётся read-only. Черновик и локальная отметка работают честно.";
 
@@ -212,6 +219,8 @@ export function ReplyPanel({
               "border-0 ring-1",
               suggestion.llmStatus?.mode === "llm_refine"
                 ? "bg-emerald-300/12 text-emerald-100 ring-emerald-300/15"
+                : suggestion.llmStatus?.mode === "rejected_by_guardrails"
+                  ? "bg-rose-400/12 text-rose-100 ring-rose-300/15"
                 : suggestion.llmStatus?.mode === "fallback"
                   ? "bg-amber-300/12 text-amber-100 ring-amber-300/15"
                   : "bg-white/7 text-slate-200 ring-white/10",
@@ -241,11 +250,14 @@ export function ReplyPanel({
               <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-300">
                 {freshness.lastSyncAt ? <span>sync {formatDateTime(freshness.lastSyncAt)}</span> : null}
                 {freshness.reference ? <span>{freshness.reference}</span> : null}
+                {freshness.syncTrigger ? <span>{freshness.syncTrigger === "auto" ? "auto-sync" : "manual sync"}</span> : null}
+                {freshness.updatedNow ? <span>хвост обновлён сейчас</span> : null}
                 {freshness.canManualSync ? (
                   <span>
                     +{freshness.createdCount} новых • {freshness.updatedCount} обновлено
                   </span>
                 ) : null}
+                {freshness.syncError ? <span className="text-rose-100">{freshness.syncError}</span> : null}
               </div>
             </div>
           ) : null}
@@ -261,6 +273,14 @@ export function ReplyPanel({
             <div className="mt-2 text-sm leading-6 text-cyan-50/85">
               {suggestion.focusReason || suggestion.reasonShort}
             </div>
+            {suggestion.replyOpportunityMode === "follow_up_after_self" ? (
+              <div className="mt-3 rounded-[18px] border border-cyan-300/12 bg-black/16 px-4 py-3 text-sm leading-6 text-cyan-50/90">
+                <div className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/70">
+                  Почему reply уместен после твоего сообщения
+                </div>
+                <div className="mt-2">{suggestion.replyOpportunityReason || "В контексте остался незакрытый хвост."}</div>
+              </div>
+            ) : null}
             {safeReply.sourceMessagePreview ? (
               <div className="mt-3 rounded-[18px] border border-white/8 bg-black/16 px-4 py-3 text-sm leading-6 text-slate-200">
                 <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Опорный триггер</div>
@@ -411,6 +431,7 @@ export function ReplyPanel({
             <div className="flex flex-col gap-3 text-sm leading-6 text-slate-300">
               <div>Стратегия: {suggestion.strategy || "deterministic"}</div>
               {selectedVariant ? <div>Выбранный вариант: {selectedVariant.label}</div> : null}
+              <div>Контекст: {suggestion.replyOpportunityReason || "стандартный reply"}</div>
               <div>Style profile: {suggestion.styleProfileKey || "без профиля"}</div>
               <div>Persona: {suggestion.personaApplied ? "применена" : "не применялась"}</div>
               <div>
@@ -435,6 +456,48 @@ export function ReplyPanel({
               ) : null}
               {suggestion.llmRefineNotes.length > 0 ? (
                 <div>LLM notes: {suggestion.llmRefineNotes.map(stringifyUnknown).join(" • ")}</div>
+              ) : null}
+            </div>
+
+            <div className="mt-4 rounded-[18px] border border-white/6 bg-white/[0.03]">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                onClick={() => setShowDebug((current) => !current)}
+              >
+                <div className="flex items-center gap-2 text-sm font-medium text-white">
+                  <Bug className="size-4" />
+                  Debug / details
+                </div>
+                <div className="inline-flex items-center gap-2 text-xs text-slate-400">
+                  {suggestion.llmStatus?.label || "Deterministic"}
+                  {showDebug ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+                </div>
+              </button>
+
+              {showDebug ? (
+                <div className="border-t border-white/6 px-4 py-4 text-sm leading-6 text-slate-300">
+                  <div>Режим: {suggestion.llmStatus?.mode || "deterministic"}</div>
+                  <div className="mt-2">
+                    Причина:{" "}
+                    {llmDecisionReason?.detail
+                      || suggestion.llmStatus?.detail
+                      || "LLM refine не запрашивался, используется deterministic baseline."}
+                  </div>
+                  {llmDecisionReason?.flags.length ? (
+                    <div className="mt-2">
+                      Guardrails: {llmDecisionReason.flags.join(" • ")}
+                    </div>
+                  ) : null}
+                  <div className="mt-4 text-[11px] uppercase tracking-[0.24em] text-slate-500">Baseline</div>
+                  <div className="mt-2 whitespace-pre-wrap rounded-[14px] border border-white/6 bg-black/18 px-3 py-3 text-slate-100">
+                    {llmDebug?.baselineText || suggestion.replyText || "Нет baseline."}
+                  </div>
+                  <div className="mt-4 text-[11px] uppercase tracking-[0.24em] text-slate-500">Raw LLM candidate</div>
+                  <div className="mt-2 whitespace-pre-wrap rounded-[14px] border border-white/6 bg-black/18 px-3 py-3 text-slate-100">
+                    {llmDebug?.rawCandidate || "Кандидат не сохранялся: LLM refine не применялся или провайдер не вернул текст."}
+                  </div>
+                </div>
               ) : null}
             </div>
           </div>

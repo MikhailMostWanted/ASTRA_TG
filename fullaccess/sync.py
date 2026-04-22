@@ -46,7 +46,7 @@ class FullAccessSyncService:
             returned_count=len(visible_chats),
         )
 
-    async def sync_chat(self, reference: str) -> FullAccessSyncResult:
+    async def sync_chat(self, reference: str, *, trigger: str = "manual") -> FullAccessSyncResult:
         config = await self._require_read_ready_config()
         existing_chat = await self.chat_repository.find_chat_by_handle_or_telegram_id(reference)
         latest_local_message_id = (
@@ -127,6 +127,7 @@ class FullAccessSyncService:
                 created_count=created_count,
                 updated_count=updated_count,
                 skipped_count=skipped_count,
+                trigger=trigger,
             )
             await operational_state.record_fullaccess_chat_sync(
                 local_chat_id=local_chat.id,
@@ -136,6 +137,7 @@ class FullAccessSyncService:
                 created_count=created_count,
                 updated_count=updated_count,
                 skipped_count=skipped_count,
+                trigger=trigger,
             )
         log_event(
             LOGGER,

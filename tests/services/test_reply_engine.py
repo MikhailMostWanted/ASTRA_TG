@@ -16,7 +16,11 @@ from storage.repositories import (
     SettingRepository,
     StyleProfileRepository,
 )
-from services.providers.models import ProviderExecutionResult, ProviderStatus
+from services.providers.models import (
+    ProviderExecutionResult,
+    ProviderStatus,
+    ReplyRefinementCandidate,
+)
 
 
 @dataclass(slots=True)
@@ -61,6 +65,37 @@ class FakeUnavailableProviderManager:
 
     async def rewrite_reply(self, request):
         return ProviderExecutionResult.failure("API сейчас недоступен.")
+
+
+class FakeRejectingProviderManager(FakeUnavailableProviderManager):
+    async def get_status(self, *, check_api: bool = False):
+        return ProviderStatus(
+            enabled=True,
+            configured=True,
+            provider_name="openai_compatible",
+            model_fast="test-fast",
+            model_deep="test-deep",
+            timeout_seconds=15.0,
+            available=True,
+            reason="API сконфигурирован.",
+            reply_refine_enabled=True,
+            digest_refine_enabled=True,
+            reply_refine_available=True,
+            digest_refine_available=True,
+            api_checked=check_api,
+        )
+
+    async def rewrite_reply(self, request):
+        return ProviderExecutionResult.success(
+            ReplyRefinementCandidate(
+                messages=(
+                    "В данном случае благодарю за терпение, завтра утром отправлю файл на 25 страниц!!!",
+                ),
+                raw_text="В данном случае благодарю за терпение, завтра утром отправлю файл на 25 страниц!!!",
+                model_name="test-fast",
+            ),
+            provider_name="openai_compatible",
+        )
 
 
 def test_reply_engine_builds_local_draft_and_formats_handler_response(
@@ -325,6 +360,13 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
                 chat_type="group",
                 is_enabled=True,
             )
+            resolved_outbound_chat = await chats.upsert_chat(
+                telegram_chat_id=-100304,
+                title="Тема уже закрыта моим сообщением",
+                handle="self_closed",
+                chat_type="group",
+                is_enabled=True,
+            )
             persona_disabled_chat = await chats.upsert_chat(
                 telegram_chat_id=-100303,
                 title="Persona выключен",
@@ -345,6 +387,18 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
                 sent_at=datetime(2026, 4, 20, 8, 0, tzinfo=timezone.utc),
                 raw_text="Привет",
                 normalized_text="Привет",
+            )
+            await messages.create_message(
+                chat_id=outbound_chat.id,
+                telegram_message_id=0,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 8, 1, tzinfo=timezone.utc),
+                raw_text="Смотрю и скоро вернусь.",
+                normalized_text="Смотрю и скоро вернусь.",
             )
             await messages.create_message(
                 chat_id=outbound_chat.id,
@@ -369,6 +423,42 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
                 sent_at=datetime(2026, 4, 20, 8, 15, tzinfo=timezone.utc),
                 raw_text="Да, вечером скину.",
                 normalized_text="Да, вечером скину.",
+            )
+            await messages.create_message(
+                chat_id=resolved_outbound_chat.id,
+                telegram_message_id=0,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 8, 14, tzinfo=timezone.utc),
+                raw_text="Поймал, сейчас посмотрю.",
+                normalized_text="Поймал, сейчас посмотрю.",
+            )
+            await messages.create_message(
+                chat_id=resolved_outbound_chat.id,
+                telegram_message_id=1,
+                sender_id=25,
+                sender_name="Саша",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 8, 16, tzinfo=timezone.utc),
+                raw_text="Скинь итоговый файл, пожалуйста.",
+                normalized_text="Скинь итоговый файл, пожалуйста.",
+            )
+            await messages.create_message(
+                chat_id=resolved_outbound_chat.id,
+                telegram_message_id=2,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 8, 18, tzinfo=timezone.utc),
+                raw_text="Файл уже отправил тебе в почту.",
+                normalized_text="Файл уже отправил тебе в почту.",
             )
             await messages.create_message(
                 chat_id=persona_disabled_chat.id,
@@ -413,8 +503,22 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
             assert "мало" in formatter.format_result(too_short).lower()
 
             self_last = await service.build_reply("@self_last")
-            assert self_last.kind == "latest_is_self"
-            assert "уже от тебя" in formatter.format_result(self_last).lower()
+            assert self_last.kind == "suggestion"
+            assert self_last.suggestion is not None
+            assert self_last.suggestion.reply_opportunity_mode == "follow_up_after_self"
+            self_last_reason = self_last.suggestion.reply_opportunity_reason.lower()
+            assert any(
+                marker in self_last_reason
+                for marker in ("follow-up", "обещание вернуться", "уместен")
+            )
+            assert self_last.suggestion.strategy != "не отвечать"
+
+            self_closed = await service.build_reply("@self_closed")
+            assert self_closed.kind == "suggestion"
+            assert self_closed.suggestion is not None
+            assert self_closed.suggestion.reply_opportunity_mode == "hold"
+            assert self_closed.suggestion.strategy == "не отвечать"
+            assert "явного незакрытого повода" in self_closed.suggestion.reply_opportunity_reason.lower()
 
             await settings_repo.set_value(
                 key="persona.enabled",
@@ -638,6 +742,152 @@ def test_reply_llm_handler_falls_back_to_deterministic_reply_when_provider_unava
         assert any("Команда продукта" in answer for answer in fake_message.answers)
         assert any("[WARN] LLM: резервный режим" in answer for answer in fake_message.answers)
         assert any("API сейчас недоступен" in answer for answer in fake_message.answers)
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_reply_engine_keeps_rejected_llm_candidate_and_guardrail_reason(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "reply-llm-guardrails" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            chat_memory_repo = ChatMemoryRepository(session)
+            person_memory_repo = PersonMemoryRepository(session)
+            settings_repo = SettingRepository(session)
+
+            team_chat = await chats.upsert_chat(
+                telegram_chat_id=-100311,
+                title="Команда продукта",
+                handle="product_team_llm",
+                chat_type="group",
+                is_enabled=True,
+            )
+            await session.commit()
+
+            await messages.create_message(
+                chat_id=team_chat.id,
+                telegram_message_id=1,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
+                raw_text="Смотрю бюджет и вернусь чуть позже.",
+                normalized_text="Смотрю бюджет и вернусь чуть позже.",
+            )
+            await messages.create_message(
+                chat_id=team_chat.id,
+                telegram_message_id=2,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 9, 5, tzinfo=timezone.utc),
+                raw_text="Когда сможешь скинуть финальный файл по бюджету?",
+                normalized_text="Когда сможешь скинуть финальный файл по бюджету?",
+            )
+            await messages.create_message(
+                chat_id=team_chat.id,
+                telegram_message_id=3,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 9, 6, tzinfo=timezone.utc),
+                raw_text="ок",
+                normalized_text="ок",
+            )
+            await chat_memory_repo.upsert_chat_memory(
+                chat_id=team_chat.id,
+                chat_summary_short="Анна ждёт файл по бюджету.",
+                chat_summary_long="Есть открытый хвост по файлу и срокам.",
+                current_state="спокойное рабочее обсуждение, есть открытые хвосты",
+                dominant_topics_json=[{"topic": "бюджет", "mentions": 2}],
+                recent_conflicts_json=[],
+                pending_tasks_json=["Отправить финальный файл по бюджету."],
+                linked_people_json=[{"person_key": "tg:11", "display_name": "Анна", "message_count": 2}],
+                last_digest_at=None,
+            )
+            await person_memory_repo.upsert_person_memory(
+                person_key="tg:11",
+                display_name="Анна",
+                relationship_label="контакт",
+                importance_score=84.0,
+                last_summary="Ждёт финальный файл по бюджету.",
+                known_facts_json=["Ждёт финальный файл по бюджету."],
+                sensitive_topics_json=[],
+                open_loops_json=["Ждёт финальный файл по бюджету."],
+                interaction_pattern="регулярно выходит на связь; обычно пишет коротко, часто задаёт вопросы.",
+            )
+            await session.commit()
+
+            reply_engine_module = importlib.import_module("services.reply_engine")
+            reply_context_module = importlib.import_module("services.reply_context_builder")
+            reply_classifier_module = importlib.import_module("services.reply_classifier")
+            reply_strategy_module = importlib.import_module("services.reply_strategy")
+            style_adapter_module = importlib.import_module("services.style_adapter")
+            style_selector_module = importlib.import_module("services.style_selector")
+            persona_adapter_module = importlib.import_module("services.persona_adapter")
+            persona_core_module = importlib.import_module("services.persona_core")
+            persona_guardrails_module = importlib.import_module("services.persona_guardrails")
+            reply_refiner_module = importlib.import_module("services.providers.reply_refiner")
+
+            service = reply_engine_module.ReplyEngineService(
+                chat_repository=chats,
+                message_repository=messages,
+                chat_memory_repository=chat_memory_repo,
+                person_memory_repository=person_memory_repo,
+                context_builder=reply_context_module.ReplyContextBuilder(
+                    message_repository=messages,
+                    chat_memory_repository=chat_memory_repo,
+                    person_memory_repository=person_memory_repo,
+                ),
+                classifier=reply_classifier_module.ReplyClassifier(),
+                strategy_resolver=reply_strategy_module.ReplyStrategyResolver(),
+                style_selector=style_selector_module.StyleSelectorService(
+                    style_profile_repository=StyleProfileRepository(session),
+                    chat_style_override_repository=ChatStyleOverrideRepository(session),
+                    chat_memory_repository=chat_memory_repo,
+                    person_memory_repository=person_memory_repo,
+                ),
+                style_adapter=style_adapter_module.StyleAdapter(),
+                persona_core_service=persona_core_module.PersonaCoreService(settings_repo),
+                persona_adapter=persona_adapter_module.PersonaAdapter(),
+                persona_guardrails=persona_guardrails_module.PersonaGuardrails(),
+                reply_refiner=reply_refiner_module.ReplyLLMRefiner(
+                    provider_manager=FakeRejectingProviderManager()
+                ),
+            )
+
+            result = await service.build_reply("@product_team_llm", use_provider_refinement=True)
+
+            assert result.kind == "suggestion"
+            assert result.suggestion is not None
+            assert result.suggestion.llm_refine_requested is True
+            assert result.suggestion.llm_refine_applied is False
+            assert result.suggestion.llm_refine_raw_candidate is not None
+            assert "благодарю за терпение" in result.suggestion.llm_refine_raw_candidate.lower()
+            assert result.suggestion.llm_refine_baseline_messages
+            assert result.suggestion.llm_refine_decision_reason is not None
+            assert result.suggestion.llm_refine_decision_reason.source == "guardrails"
+            assert "guardrails" in result.suggestion.llm_refine_decision_reason.summary.lower()
+            assert "слишком_литературно" in result.suggestion.llm_refine_decision_reason.flags
+            assert result.suggestion.reply_text == "\n".join(result.suggestion.final_reply_messages)
+            assert "благодарю за терпение" not in result.suggestion.reply_text.lower()
 
         await runtime.dispose()
 

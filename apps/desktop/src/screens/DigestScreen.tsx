@@ -97,14 +97,22 @@ export function DigestScreen() {
   const previewChunks = safeArray(lastRun?.previewChunks);
   const generation = lastRun
     ? {
-        mode: lastRun.llmRefineApplied ? "llm_refine" : lastRun.llmRefineRequested ? "fallback" : "deterministic",
+        mode: lastRun.llmDebug?.mode
+          || (lastRun.llmRefineApplied
+            ? "llm_refine"
+            : lastRun.llmRefineRequested
+              ? "fallback"
+              : "deterministic"),
         label: lastRun.llmRefineApplied
           ? "LLM refine"
+          : lastRun.llmDebug?.mode === "rejected_by_guardrails"
+            ? "Rejected by guardrails"
           : lastRun.llmRefineRequested
             ? "Fallback"
             : "Deterministic",
         provider: lastRun.llmRefineProvider,
         notes: lastRun.llmRefineNotes,
+        debug: lastRun.llmDebug,
       }
     : digest.generation;
 
@@ -178,6 +186,8 @@ export function DigestScreen() {
                         className={
                           generation.mode === "llm_refine"
                             ? "border-0 bg-emerald-300/12 text-emerald-100 ring-1 ring-emerald-300/15"
+                            : generation.mode === "rejected_by_guardrails"
+                              ? "border-0 bg-rose-400/12 text-rose-100 ring-1 ring-rose-300/15"
                             : generation.mode === "fallback"
                               ? "border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15"
                               : "border-0 bg-white/7 text-slate-200 ring-1 ring-white/10"

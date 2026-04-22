@@ -190,6 +190,8 @@ def serialize_reply_result(result: ReplyResult) -> dict[str, Any]:
         "sourceMessagePreview": suggestion.source_message_preview,
         "focusLabel": suggestion.focus_label,
         "focusReason": suggestion.focus_reason,
+        "replyOpportunityMode": suggestion.reply_opportunity_mode,
+        "replyOpportunityReason": suggestion.reply_opportunity_reason,
         "fewShotFound": suggestion.few_shot_found,
         "fewShotMatchCount": suggestion.few_shot_match_count,
         "fewShotNotes": list(suggestion.few_shot_notes),
@@ -200,6 +202,13 @@ def serialize_reply_result(result: ReplyResult) -> dict[str, Any]:
         "llmRefineNotes": list(suggestion.llm_refine_notes),
         "llmRefineGuardrailFlags": list(suggestion.llm_refine_guardrail_flags),
         "llmStatus": _serialize_reply_llm_status(suggestion),
+        "llmDebug": {
+            "mode": _serialize_reply_llm_status(suggestion)["mode"],
+            "baselineMessages": list(suggestion.llm_refine_baseline_messages),
+            "baselineText": "\n".join(suggestion.llm_refine_baseline_messages).strip() or None,
+            "rawCandidate": suggestion.llm_refine_raw_candidate,
+            "decisionReason": _serialize_llm_decision_reason(suggestion.llm_refine_decision_reason),
+        },
         "variants": _build_reply_variants(suggestion),
     }
     return payload
@@ -368,13 +377,26 @@ def _serialize_reply_llm_status(suggestion) -> dict[str, Any]:
                 else "Финальный текст был мягко улучшен моделью."
             ),
         }
+    if (
+        suggestion.llm_refine_requested
+        and suggestion.llm_refine_decision_reason is not None
+        and suggestion.llm_refine_decision_reason.source == "guardrails"
+    ):
+        return {
+            "mode": "rejected_by_guardrails",
+            "label": "Rejected by guardrails",
+            "provider": suggestion.llm_refine_provider,
+            "detail": suggestion.llm_refine_decision_reason.detail,
+        }
     if suggestion.llm_refine_requested:
         return {
             "mode": "fallback",
             "label": "Fallback",
             "provider": suggestion.llm_refine_provider,
             "detail": (
-                suggestion.llm_refine_notes[0]
+                suggestion.llm_refine_decision_reason.detail
+                if suggestion.llm_refine_decision_reason is not None
+                else suggestion.llm_refine_notes[0]
                 if suggestion.llm_refine_notes
                 else "Модель не дала пригодный результат, оставлен deterministic baseline."
             ),
@@ -384,6 +406,18 @@ def _serialize_reply_llm_status(suggestion) -> dict[str, Any]:
         "label": "Deterministic",
         "provider": None,
         "detail": "Ответ собран локальным deterministic pipeline без внешнего refine.",
+    }
+
+
+def _serialize_llm_decision_reason(value) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return {
+        "source": value.source,
+        "code": value.code,
+        "summary": value.summary,
+        "detail": value.detail,
+        "flags": list(value.flags),
     }
 
 

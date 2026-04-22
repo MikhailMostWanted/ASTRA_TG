@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from models import Chat, ChatMemory, Message, PersonMemory
+from services.providers.models import LLMDecisionReason
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +27,8 @@ class ReplyContext:
     topic_hints: tuple[str, ...]
     pending_loops: tuple[str, ...]
     recent_conflicts: tuple[str, ...]
+    reply_opportunity_mode: str
+    reply_opportunity_reason: str
 
     @property
     def has_memory_support(self) -> bool:
@@ -83,6 +86,8 @@ class ReplySuggestion:
     source_message_preview: str
     focus_label: str
     focus_reason: str
+    reply_opportunity_mode: str
+    reply_opportunity_reason: str
     few_shot_found: bool
     few_shot_match_count: int
     few_shot_notes: tuple[str, ...]
@@ -92,6 +97,9 @@ class ReplySuggestion:
     llm_refine_provider: str | None = None
     llm_refine_notes: tuple[str, ...] = ()
     llm_refine_guardrail_flags: tuple[str, ...] = ()
+    llm_refine_baseline_messages: tuple[str, ...] = ()
+    llm_refine_raw_candidate: str | None = None
+    llm_refine_decision_reason: LLMDecisionReason | None = None
 
     @property
     def reply_text(self) -> str:

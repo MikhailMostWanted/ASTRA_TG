@@ -10,9 +10,9 @@ import { api } from "@/lib/api";
 import { extractErrorMessage, safeArray } from "@/lib/runtime-guards";
 import { useAppStore } from "@/stores/app-store";
 
-const CHAT_POLL_MS = 7_000;
-const WORKSPACE_POLL_MS = 8_000;
-const AUTO_SYNC_MS = 30_000;
+const CHAT_POLL_MS = 6_000;
+const FULLACCESS_WORKSPACE_POLL_MS = 5_000;
+const LOCAL_WORKSPACE_POLL_MS = 7_000;
 
 export function ChatsScreen() {
   const queryClient = useQueryClient();
@@ -41,7 +41,7 @@ export function ChatsScreen() {
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState("activity");
   const deferredSearch = useDeferredValue(search);
-  const initialSyncedChatsRef = useRef<Set<number>>(new Set());
+  const lastWorkspaceSyncAtRef = useRef<string | null>(null);
 
   const chatsQuery = useQuery({
     queryKey: ["chats", deferredSearch, filter, sort],
@@ -75,6 +75,10 @@ export function ChatsScreen() {
     }
   }, [chatItems, selectedChatId, setSelectedChatId]);
 
+  useEffect(() => {
+    lastWorkspaceSyncAtRef.current = null;
+  }, [selectedChatId]);
+
   const selectedChat = chatItems.find((item) => item.id === selectedChatId) || null;
   const selectedChatWorkspace = selectedChatId !== null ? chatWorkspace[selectedChatId] || null : null;
   const fullaccessReady = Boolean(fullaccessQuery.data?.status.readyForManualSync);
@@ -83,7 +87,10 @@ export function ChatsScreen() {
     queryKey: ["chat-workspace", selectedChatId],
     queryFn: () => api.chatWorkspace(selectedChatId as number, 60),
     enabled: selectedChatId !== null,
-    refetchInterval: WORKSPACE_POLL_MS,
+    refetchInterval:
+      selectedChat?.syncStatus === "fullaccess"
+        ? FULLACCESS_WORKSPACE_POLL_MS
+        : LOCAL_WORKSPACE_POLL_MS,
   });
 
   const syncChatMutation = useMutation({
@@ -95,6 +102,7 @@ export function ChatsScreen() {
       chatId: number;
       chatTitle: string;
       silent?: boolean;
+      trigger?: "manual" | "auto";
     }) => api.syncSource(chatId).then((payload) => ({ payload, chatTitle, silent })),
     onSuccess: async ({ payload, chatTitle, silent }) => {
       if (!silent) {
@@ -103,13 +111,15 @@ export function ChatsScreen() {
         );
       }
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["chats"] }),
-        queryClient.invalidateQueries({ queryKey: ["chat-workspace", payload.localChatId] }),
-        queryClient.invalidateQueries({ queryKey: ["fullaccess"] }),
+        queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["chat-workspace", payload.localChatId], exact: true }),
+        queryClient.refetchQueries({ queryKey: ["fullaccess"], type: "active" }),
       ]);
     },
-    onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Не удалось синхронизировать выбранный чат.");
+    onError: (error, variables) => {
+      if (variables.trigger !== "auto") {
+        toast.error(error instanceof Error ? error.message : "Не удалось синхронизировать выбранный чат.");
+      }
     },
   });
   const messageItems = safeArray(workspaceQuery.data?.messages);
@@ -125,58 +135,50 @@ export function ChatsScreen() {
   }, [messageItems, markChatSeen, selectedChatId]);
 
   useEffect(() => {
-    if (!selectedChat || selectedChat.syncStatus !== "fullaccess" || !fullaccessReady) {
+    if (!selectedChat || selectedChat.syncStatus !== "fullaccess") {
       return;
     }
-
-    if (initialSyncedChatsRef.current.has(selectedChat.id) || syncChatMutation.isPending) {
+    const nextSyncAt = freshness?.lastSyncAt || null;
+    if (!nextSyncAt || nextSyncAt === lastWorkspaceSyncAtRef.current) {
       return;
     }
-
-    initialSyncedChatsRef.current.add(selectedChat.id);
-    syncChatMutation.mutate({
-      chatId: selectedChat.id,
-      chatTitle: selectedChat.title,
-      silent: true,
-    });
-  }, [fullaccessReady, selectedChat, syncChatMutation]);
-
-  useEffect(() => {
-    if (!selectedChat || selectedChat.syncStatus !== "fullaccess" || !fullaccessReady) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      if (syncChatMutation.isPending) {
-        return;
-      }
-      syncChatMutation.mutate({
-        chatId: selectedChat.id,
-        chatTitle: selectedChat.title,
-        silent: true,
-      });
-    }, AUTO_SYNC_MS);
-
-    return () => window.clearInterval(timer);
-  }, [fullaccessReady, selectedChat, syncChatMutation]);
+    lastWorkspaceSyncAtRef.current = nextSyncAt;
+    void queryClient.refetchQueries({ queryKey: ["chats"], type: "active" });
+  }, [freshness?.lastSyncAt, queryClient, selectedChat]);
 
   const refreshWorkspace = async () => {
     if (selectedChat) {
       if (selectedChat.syncStatus === "fullaccess" && fullaccessReady) {
-        syncChatMutation.mutate({
-          chatId: selectedChat.id,
-          chatTitle: selectedChat.title,
-        });
+        try {
+          await syncChatMutation.mutateAsync({
+            chatId: selectedChat.id,
+            chatTitle: selectedChat.title,
+            trigger: "manual",
+          });
+        } catch {
+          return;
+        }
         return;
       }
     }
 
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["chats"] }),
-      queryClient.invalidateQueries({ queryKey: ["chat-workspace", selectedChatId] }),
+      queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedChatId], exact: true }),
     ]);
     toast.success("Контекст обновлён.");
   };
+
+  const syncIndicator =
+    selectedChat?.syncStatus === "fullaccess"
+      ? syncChatMutation.isPending || (workspaceQuery.isFetching && fullaccessReady)
+        ? "Активный чат сейчас синхронизируется"
+        : freshness?.syncError
+          ? `Активный чат: авто-sync с ошибкой`
+          : freshness?.updatedNow
+            ? "Активный чат только что обновлён"
+            : freshness?.label || null
+      : null;
 
   const handleCopy = async (value: string) => {
     if (!value) {
@@ -213,6 +215,7 @@ export function ChatsScreen() {
         loading={chatsQuery.isLoading}
         refreshing={chatsQuery.isFetching || syncChatMutation.isPending}
         refreshedAt={chatsQuery.data?.refreshedAt || null}
+        syncIndicator={syncIndicator}
         onSearchChange={setSearch}
         onFilterChange={setFilter}
         onSortChange={setSort}
@@ -246,6 +249,7 @@ export function ChatsScreen() {
           syncChatMutation.mutate({
             chatId: selectedChat.id,
             chatTitle: selectedChat.title,
+            trigger: "manual",
           });
         }}
       />

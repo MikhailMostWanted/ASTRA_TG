@@ -139,6 +139,7 @@ class OperationalStateService:
         created_count: int,
         updated_count: int,
         skipped_count: int,
+        trigger: str = "manual",
     ) -> None:
         await self._store_json(
             SNAPSHOT_KEY_MAP["fullaccess_sync"],
@@ -149,6 +150,7 @@ class OperationalStateService:
                 "created_count": created_count,
                 "updated_count": updated_count,
                 "skipped_count": skipped_count,
+                "trigger": trigger,
             },
         )
 
@@ -162,6 +164,7 @@ class OperationalStateService:
         created_count: int,
         updated_count: int,
         skipped_count: int,
+        trigger: str = "manual",
     ) -> None:
         await self._store_json(
             f"{FULLACCESS_CHAT_SYNC_PREFIX}{local_chat_id}",
@@ -174,6 +177,7 @@ class OperationalStateService:
                 "created_count": created_count,
                 "updated_count": updated_count,
                 "skipped_count": skipped_count,
+                "trigger": trigger,
             },
         )
 

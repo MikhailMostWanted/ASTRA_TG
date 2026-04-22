@@ -9,6 +9,7 @@ from services.digest_formatter import DigestFormatter
 from services.digest_target import DigestTargetService, DigestTargetSnapshot
 from services.digest_window import DigestWindow, parse_digest_window
 from services.providers.digest_refiner import DigestLLMRefiner
+from services.providers.models import LLMDecisionReason
 from storage.repositories import DigestRepository, MessageRepository, SettingRepository
 
 
@@ -38,6 +39,11 @@ class DigestExecutionPlan:
     llm_refine_provider: str | None = None
     llm_refine_notes: tuple[str, ...] = ()
     llm_refine_guardrail_flags: tuple[str, ...] = ()
+    llm_refine_baseline_summary_short: str | None = None
+    llm_refine_baseline_overview_lines: tuple[str, ...] = ()
+    llm_refine_baseline_key_source_lines: tuple[str, ...] = ()
+    llm_refine_raw_candidate: str | None = None
+    llm_refine_decision_reason: LLMDecisionReason | None = None
 
     @property
     def has_digest(self) -> bool:
@@ -103,6 +109,11 @@ class DigestEngineService:
                 llm_notes=(),
                 llm_flags=(),
                 summary_short=f"За {window.label} по активным digest-источникам сообщений не найдено.",
+                llm_baseline_summary_short=None,
+                llm_baseline_overview_lines=(),
+                llm_baseline_key_source_lines=(),
+                llm_raw_candidate=None,
+                llm_decision_reason=None,
             )
             return DigestExecutionPlan(
                 window=window,
@@ -120,11 +131,16 @@ class DigestEngineService:
             records=records,
             message_counts=message_counts,
         )
+        llm_baseline_summary_short = build_result.summary_short
+        llm_baseline_overview_lines = tuple(build_result.overview_lines)
+        llm_baseline_key_source_lines = tuple(build_result.key_source_lines)
         llm_requested = False
         llm_applied = False
         llm_notes: tuple[str, ...] = ()
         llm_flags: tuple[str, ...] = ()
         llm_provider_name: str | None = None
+        llm_raw_candidate: str | None = None
+        llm_decision_reason: LLMDecisionReason | None = None
         if should_try_provider and self.digest_refiner is not None:
             refinement = await self.digest_refiner.refine(build_result)
             llm_requested = refinement.requested
@@ -132,6 +148,17 @@ class DigestEngineService:
             llm_notes = refinement.notes
             llm_flags = refinement.flags
             llm_provider_name = refinement.provider_name
+            llm_baseline_summary_short = (
+                refinement.baseline_summary_short or llm_baseline_summary_short
+            )
+            llm_baseline_overview_lines = (
+                refinement.baseline_overview_lines or llm_baseline_overview_lines
+            )
+            llm_baseline_key_source_lines = (
+                refinement.baseline_key_source_lines or llm_baseline_key_source_lines
+            )
+            llm_raw_candidate = refinement.raw_candidate_text
+            llm_decision_reason = refinement.decision_reason
             build_result = refinement.build_result
             if llm_requested and not llm_applied:
                 log_event(
@@ -159,6 +186,11 @@ class DigestEngineService:
             llm_notes=llm_notes,
             llm_flags=llm_flags,
             summary_short=build_result.summary_short,
+            llm_baseline_summary_short=llm_baseline_summary_short,
+            llm_baseline_overview_lines=llm_baseline_overview_lines,
+            llm_baseline_key_source_lines=llm_baseline_key_source_lines,
+            llm_raw_candidate=llm_raw_candidate,
+            llm_decision_reason=llm_decision_reason,
         )
         log_event(
             LOGGER,
@@ -183,6 +215,11 @@ class DigestEngineService:
             llm_refine_provider=llm_provider_name,
             llm_refine_notes=llm_notes,
             llm_refine_guardrail_flags=llm_flags,
+            llm_refine_baseline_summary_short=llm_baseline_summary_short,
+            llm_refine_baseline_overview_lines=llm_baseline_overview_lines,
+            llm_refine_baseline_key_source_lines=llm_baseline_key_source_lines,
+            llm_refine_raw_candidate=llm_raw_candidate,
+            llm_refine_decision_reason=llm_decision_reason,
         )
 
     async def _should_use_provider_improvement(
@@ -207,12 +244,20 @@ class DigestEngineService:
         llm_notes: tuple[str, ...],
         llm_flags: tuple[str, ...],
         summary_short: str,
+        llm_baseline_summary_short: str | None,
+        llm_baseline_overview_lines: tuple[str, ...],
+        llm_baseline_key_source_lines: tuple[str, ...],
+        llm_raw_candidate: str | None,
+        llm_decision_reason: LLMDecisionReason | None,
     ) -> None:
         mode = "deterministic"
         label = "Детерминированный"
         if llm_applied:
             mode = "llm_refine"
             label = "LLM refine"
+        elif llm_requested and llm_decision_reason is not None and llm_decision_reason.source == "guardrails":
+            mode = "rejected_by_guardrails"
+            label = "Rejected by guardrails"
         elif llm_requested:
             mode = "fallback"
             label = "Fallback на deterministic"
@@ -230,6 +275,26 @@ class DigestEngineService:
                 "notes": list(llm_notes),
                 "flags": list(llm_flags),
                 "summary_short": summary_short,
+                "debug": {
+                    "mode": mode,
+                    "baseline": {
+                        "summary_short": llm_baseline_summary_short,
+                        "overview_lines": list(llm_baseline_overview_lines),
+                        "key_source_lines": list(llm_baseline_key_source_lines),
+                    },
+                    "raw_candidate": llm_raw_candidate,
+                    "decision_reason": (
+                        {
+                            "source": llm_decision_reason.source,
+                            "code": llm_decision_reason.code,
+                            "summary": llm_decision_reason.summary,
+                            "detail": llm_decision_reason.detail,
+                            "flags": list(llm_decision_reason.flags),
+                        }
+                        if llm_decision_reason is not None
+                        else None
+                    ),
+                },
             },
             value_text=None,
         )

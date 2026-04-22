@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 from services.digest_builder import DigestBuildResult
 from services.providers.guardrails import DigestImprovementGuardrails
 from services.providers.manager import ProviderManager
-from services.providers.models import DigestImprovementCandidate
+from services.providers.models import DigestImprovementCandidate, LLMDecisionReason
 from services.providers.prompts import build_digest_improve_request
 
 
@@ -17,6 +17,11 @@ class DigestRefinementOutcome:
     notes: tuple[str, ...]
     flags: tuple[str, ...]
     provider_name: str | None = None
+    baseline_summary_short: str | None = None
+    baseline_overview_lines: tuple[str, ...] = ()
+    baseline_key_source_lines: tuple[str, ...] = ()
+    raw_candidate_text: str | None = None
+    decision_reason: LLMDecisionReason | None = None
 
 
 @dataclass(slots=True)
@@ -29,15 +34,26 @@ class DigestLLMRefiner:
         execution = await self.provider_manager.improve_digest(request)
         provider_name = execution.provider_name
         if not execution.ok or not isinstance(execution.value, DigestImprovementCandidate):
+            detail = (
+                f"{execution.reason or 'Provider improve недоступен.'} "
+                "Показан детерминированный digest."
+            )
             return DigestRefinementOutcome(
                 requested=True,
                 applied=False,
                 build_result=build_result,
-                notes=(
-                    f"{execution.reason or 'Provider improve недоступен.'} Показан детерминированный digest.",
-                ),
+                notes=(detail,),
                 flags=(),
                 provider_name=provider_name,
+                baseline_summary_short=build_result.summary_short,
+                baseline_overview_lines=tuple(build_result.overview_lines),
+                baseline_key_source_lines=tuple(build_result.key_source_lines),
+                decision_reason=LLMDecisionReason(
+                    source="provider",
+                    code="provider_fallback",
+                    summary="LLM improve для digest не применён.",
+                    detail=detail,
+                ),
             )
 
         decision = self.guardrails.apply(
@@ -57,6 +73,11 @@ class DigestLLMRefiner:
                 ),
                 flags=decision.flags,
                 provider_name=provider_name,
+                baseline_summary_short=build_result.summary_short,
+                baseline_overview_lines=tuple(build_result.overview_lines),
+                baseline_key_source_lines=tuple(build_result.key_source_lines),
+                raw_candidate_text=execution.value.raw_text,
+                decision_reason=decision.rejection,
             )
 
         refined_result = replace(
@@ -72,4 +93,8 @@ class DigestLLMRefiner:
             notes=(f"Подчистил wording digest через {provider_name or 'provider'}.",),
             flags=decision.flags,
             provider_name=provider_name,
+            baseline_summary_short=build_result.summary_short,
+            baseline_overview_lines=tuple(build_result.overview_lines),
+            baseline_key_source_lines=tuple(build_result.key_source_lines),
+            raw_candidate_text=execution.value.raw_text,
         )

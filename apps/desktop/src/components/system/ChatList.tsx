@@ -34,6 +34,7 @@ interface ChatListProps {
   loading?: boolean;
   refreshing?: boolean;
   refreshedAt?: string | null;
+  syncIndicator?: string | null;
   onSearchChange: (value: string) => void;
   onFilterChange: (value: string) => void;
   onSortChange: (value: string) => void;
@@ -59,6 +60,7 @@ export function ChatList({
   loading = false,
   refreshing = false,
   refreshedAt = null,
+  syncIndicator = null,
   onSearchChange,
   onFilterChange,
   onSortChange,
@@ -136,7 +138,7 @@ export function ChatList({
         <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
           <div>{formatCompactNumber(safeChats.length)} в выборке</div>
           <div className="truncate">
-            {refreshedAt ? `Обновлено ${formatDateTime(refreshedAt)}` : "Ещё не обновлялось"}
+            {syncIndicator || (refreshedAt ? `Обновлено ${formatDateTime(refreshedAt)}` : "Ещё не обновлялось")}
           </div>
         </div>
       </div>

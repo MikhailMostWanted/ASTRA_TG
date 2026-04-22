@@ -63,6 +63,35 @@ OPEN_LOOP_MARKERS = (
     "апдейт",
     "итог",
 )
+FOLLOW_UP_COMMITMENT_MARKERS = (
+    "смотрю",
+    "проверю",
+    "вернусь",
+    "отпишусь",
+    "дам апдейт",
+    "скину",
+    "пришлю",
+    "напишу",
+    "добью",
+    "к вечеру",
+    "вечером",
+    "чуть позже",
+)
+RESOLUTION_MARKERS = (
+    "уже отправил",
+    "уже скинул",
+    "отправил",
+    "скинул",
+    "прислал",
+    "готово",
+    "сделал",
+    "добавил",
+    "залил",
+    "загрузил",
+    "в почту",
+    "на почту",
+    "во вложении",
+)
 EMOTIONAL_MARKERS = (
     "важно",
     "срочно",
@@ -124,6 +153,20 @@ def has_open_loop_signal(text: str | None) -> bool:
     if not lowered:
         return False
     return any(marker in lowered for marker in OPEN_LOOP_MARKERS)
+
+
+def has_follow_up_commitment_signal(text: str | None) -> bool:
+    lowered = normalize_reply_text(text).casefold()
+    if not lowered:
+        return False
+    return any(marker in lowered for marker in FOLLOW_UP_COMMITMENT_MARKERS)
+
+
+def has_resolution_signal(text: str | None) -> bool:
+    lowered = normalize_reply_text(text).casefold()
+    if not lowered:
+        return False
+    return any(marker in lowered for marker in RESOLUTION_MARKERS)
 
 
 def has_emotional_signal(text: str | None) -> bool:

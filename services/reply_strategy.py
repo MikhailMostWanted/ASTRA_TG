@@ -124,10 +124,41 @@ class ReplyStrategyResolver:
         topic_chunk = _build_topic_chunk(topic_hint)
         short_mode = few_shot_support is not None and few_shot_support.length_hint == "short"
         strategy_bias = few_shot_support.strategy_bias if few_shot_support else None
+        follow_up_after_self = context.reply_opportunity_mode == "follow_up_after_self"
         if strategy == "не отвечать":
             return (
                 "Сейчас лучше не отвечать сразу. Тут нет явного запроса, "
                 "а быстрый ответ только добавит шума."
+            )
+        if follow_up_after_self:
+            if strategy == "снять напряжение":
+                return (
+                    f"Не пропал{topic_chunk}. Держу хвост в работе и вернусь с коротким "
+                    "спокойным апдейтом без лишней резкости."
+                )
+            if strategy == "уточнить":
+                if short_mode:
+                    return (
+                        f"Чтобы не потерять хвост{topic_chunk}, уточню одно: "
+                        "что для тебя сейчас самое срочное?"
+                    )
+                return (
+                    f"Чтобы не потерять хвост{topic_chunk}, уточни, пожалуйста, "
+                    "что сейчас самое срочное, и я вернусь точнее."
+                )
+            if strategy == "поддержать":
+                return (
+                    f"По теме{topic_chunk} я всё ещё в контексте. Если нужен короткий follow-up, "
+                    "добью его без лишней воды."
+                )
+            if strategy_bias == "promise_update":
+                return (
+                    f"По теме{topic_chunk} хвост у меня в работе. Если приоритет сдвинулся, "
+                    "дай знак, и я вернусь коротким апдейтом."
+                )
+            return (
+                f"По теме{topic_chunk} хвост у меня в работе. Если нужен отдельный follow-up, "
+                "вернусь коротко и по делу."
             )
         if strategy == "снять напряжение":
             if strategy_bias == "promise_update":
@@ -177,6 +208,8 @@ class ReplyStrategyResolver:
         few_shot_support: ReplyExamplesRetrievalResult | None,
     ) -> str:
         parts = [classification.reason]
+        if context.reply_opportunity_mode == "follow_up_after_self":
+            parts.append(context.reply_opportunity_reason)
         if context.pending_loops:
             parts.append("В памяти чата уже есть открытый хвост по этой теме.")
         if context.person_memory is not None and getattr(

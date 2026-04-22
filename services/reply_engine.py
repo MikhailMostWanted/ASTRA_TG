@@ -161,18 +161,24 @@ class ReplyEngineService:
         llm_notes: tuple[str, ...] = ()
         llm_flags: tuple[str, ...] = ()
         llm_provider_name: str | None = None
+        llm_baseline_messages = final_messages
+        llm_raw_candidate: str | None = None
+        llm_decision_reason = None
         if should_try_provider and self.reply_refiner is not None:
             refinement = await self.reply_refiner.refine(
                 context=context_or_issue,
                 style_selection=style_selection,
                 persona_state=persona_state,
-                baseline_messages=final_messages,
+                baseline_messages=llm_baseline_messages,
             )
             llm_requested = refinement.requested
             llm_applied = refinement.applied
             llm_notes = refinement.notes
             llm_flags = refinement.flags
             llm_provider_name = refinement.provider_name
+            llm_baseline_messages = refinement.baseline_messages or llm_baseline_messages
+            llm_raw_candidate = refinement.raw_candidate_text
+            llm_decision_reason = refinement.decision_reason
             final_messages = refinement.messages
             if llm_requested and not llm_applied:
                 log_event(
@@ -218,6 +224,8 @@ class ReplyEngineService:
                 source_message_preview=draft.source_message_preview,
                 focus_label=draft.focus_label,
                 focus_reason=draft.focus_reason,
+                reply_opportunity_mode=context_or_issue.reply_opportunity_mode,
+                reply_opportunity_reason=context_or_issue.reply_opportunity_reason,
                 few_shot_found=few_shot_support.support_used,
                 few_shot_match_count=draft.few_shot_match_count,
                 few_shot_notes=draft.few_shot_notes or few_shot_support.notes,
@@ -227,6 +235,9 @@ class ReplyEngineService:
                 llm_refine_provider=llm_provider_name,
                 llm_refine_notes=llm_notes,
                 llm_refine_guardrail_flags=llm_flags,
+                llm_refine_baseline_messages=llm_baseline_messages,
+                llm_refine_raw_candidate=llm_raw_candidate,
+                llm_refine_decision_reason=llm_decision_reason,
             ),
             source_sender_name=context_or_issue.target_message.sender_name,
             source_message_preview=draft.source_message_preview,

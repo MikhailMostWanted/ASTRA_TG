@@ -5,7 +5,11 @@ from typing import Iterable
 
 from services.persona_core import PersonaState
 from services.persona_guardrails import PersonaGuardrails
-from services.providers.models import DigestImprovementCandidate, ReplyRefinementCandidate
+from services.providers.models import (
+    DigestImprovementCandidate,
+    LLMDecisionReason,
+    ReplyRefinementCandidate,
+)
 
 
 LITERARY_PATTERNS = (
@@ -27,6 +31,7 @@ class ReplyRefinementDecision:
     messages: tuple[str, ...]
     flags: tuple[str, ...]
     used_fallback: bool
+    rejection: LLMDecisionReason | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +41,7 @@ class DigestImprovementDecision:
     key_source_lines: tuple[str, ...]
     flags: tuple[str, ...]
     used_fallback: bool
+    rejection: LLMDecisionReason | None = None
 
 
 @dataclass(slots=True)
@@ -54,10 +60,20 @@ class ReplyRefinementGuardrails:
         normalized = tuple(_normalize_lines(candidate.messages))
         baseline = tuple(_normalize_lines(baseline_messages))
         if not normalized:
+            flags = ("пустой_ответ",)
             return ReplyRefinementDecision(
                 messages=baseline,
-                flags=("пустой_ответ",),
+                flags=flags,
                 used_fallback=True,
+                rejection=_build_guardrail_rejection(
+                    code="empty_candidate",
+                    summary="LLM-кандидат для reply пустой.",
+                    detail=(
+                        "После нормализации у кандидата не осталось текста, "
+                        "поэтому сохранён deterministic baseline."
+                    ),
+                    flags=flags,
+                ),
             )
 
         flags: list[str] = []
@@ -80,6 +96,15 @@ class ReplyRefinementGuardrails:
                 messages=baseline,
                 flags=combined_flags,
                 used_fallback=True,
+                rejection=_build_guardrail_rejection(
+                    code="guardrails_rejected",
+                    summary="LLM-кандидат для reply отклонён guardrails.",
+                    detail=_format_guardrail_detail(
+                        combined_flags,
+                        fallback_label="deterministic baseline",
+                    ),
+                    flags=combined_flags,
+                ),
             )
         return ReplyRefinementDecision(
             messages=persona_decision.messages,
@@ -111,12 +136,22 @@ class DigestImprovementGuardrails:
             used_fallback=False,
         )
         if not summary_short or not overview_lines or not key_source_lines:
+            flags = ("пустой_дайджест",)
             return DigestImprovementDecision(
                 summary_short=fallback.summary_short,
                 overview_lines=fallback.overview_lines,
                 key_source_lines=fallback.key_source_lines,
-                flags=("пустой_дайджест",),
+                flags=flags,
                 used_fallback=True,
+                rejection=_build_guardrail_rejection(
+                    code="empty_candidate",
+                    summary="LLM-кандидат для digest пустой.",
+                    detail=(
+                        "LLM не вернул полный digest-кандидат, поэтому сохранён "
+                        "детерминированный вариант."
+                    ),
+                    flags=flags,
+                ),
             )
 
         flags: list[str] = []
@@ -151,6 +186,15 @@ class DigestImprovementGuardrails:
                 key_source_lines=fallback.key_source_lines,
                 flags=tuple(dict.fromkeys(flags)),
                 used_fallback=True,
+                rejection=_build_guardrail_rejection(
+                    code="guardrails_rejected",
+                    summary="LLM-кандидат для digest отклонён guardrails.",
+                    detail=_format_guardrail_detail(
+                        tuple(dict.fromkeys(flags)),
+                        fallback_label="детерминированный digest",
+                    ),
+                    flags=tuple(dict.fromkeys(flags)),
+                ),
             )
         return DigestImprovementDecision(
             summary_short=summary_short,
@@ -159,6 +203,35 @@ class DigestImprovementGuardrails:
             flags=(),
             used_fallback=False,
         )
+
+
+def _build_guardrail_rejection(
+    *,
+    code: str,
+    summary: str,
+    detail: str,
+    flags: tuple[str, ...],
+) -> LLMDecisionReason:
+    return LLMDecisionReason(
+        source="guardrails",
+        code=code,
+        summary=summary,
+        detail=detail,
+        flags=flags,
+    )
+
+
+def _format_guardrail_detail(
+    flags: tuple[str, ...],
+    *,
+    fallback_label: str,
+) -> str:
+    if not flags:
+        return f"Сработали guardrails, поэтому сохранён {fallback_label}."
+    return (
+        f"Сработали guardrails: {', '.join(flags)}. "
+        f"Сохранён {fallback_label}."
+    )
 
 
 def _normalize_lines(lines: Iterable[str]) -> tuple[str, ...]:

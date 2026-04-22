@@ -115,6 +115,9 @@ export function MessageList({
               <span>UI обновлён {lastUpdatedAt ? formatDateTime(lastUpdatedAt) : "только открылся"}</span>
               <span>{formatDateTime(chat.lastMessageAt)} • {chat.messageCount} сообщений</span>
               {freshness ? <span>{freshness.label}</span> : null}
+              {freshness?.syncTrigger ? <span>{freshness.syncTrigger === "auto" ? "auto-sync" : "manual sync"}</span> : null}
+              {freshness?.updatedNow ? <span>хвост дочитан сейчас</span> : null}
+              {freshness?.syncError ? <span className="text-rose-200">{freshness.syncError}</span> : null}
             </div>
           </div>
 

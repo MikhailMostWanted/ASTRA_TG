@@ -160,6 +160,17 @@ export interface ChatFreshnessPayload {
   createdCount: number;
   updatedCount: number;
   skippedCount: number;
+  syncTrigger: string | null;
+  updatedNow: boolean;
+  syncError: string | null;
+}
+
+export interface LLMDecisionReasonPayload {
+  source: string;
+  code: string;
+  summary: string;
+  detail: string;
+  flags: string[];
 }
 
 export interface ReplySuggestion {
@@ -183,6 +194,8 @@ export interface ReplySuggestion {
   sourceMessagePreview: string | null;
   focusLabel: string | null;
   focusReason: string | null;
+  replyOpportunityMode: string | null;
+  replyOpportunityReason: string | null;
   fewShotFound: boolean;
   fewShotMatchCount: number;
   fewShotNotes: string[];
@@ -193,10 +206,17 @@ export interface ReplySuggestion {
   llmRefineNotes: string[];
   llmRefineGuardrailFlags: string[];
   llmStatus: {
-    mode: "deterministic" | "llm_refine" | "fallback" | string;
+    mode: "deterministic" | "llm_refine" | "fallback" | "rejected_by_guardrails" | string;
     label: string;
     provider: string | null;
     detail: string | null;
+  } | null;
+  llmDebug: {
+    mode: string;
+    baselineMessages: string[];
+    baselineText: string | null;
+    rawCandidate: string | null;
+    decisionReason: LLMDecisionReasonPayload | null;
   } | null;
   variants: Array<{
     id: string;
@@ -374,7 +394,7 @@ export interface DigestOverviewPayload {
   generation: {
     digest_id: number | null;
     window: string;
-    mode: "deterministic" | "llm_refine" | "fallback" | string;
+    mode: "deterministic" | "llm_refine" | "fallback" | "rejected_by_guardrails" | string;
     label: string;
     llm_requested: boolean;
     llm_applied: boolean;
@@ -382,6 +402,16 @@ export interface DigestOverviewPayload {
     notes: string[];
     flags: string[];
     summary_short: string | null;
+    debug: {
+      mode: string;
+      baseline: {
+        summary_short: string | null;
+        overview_lines: string[];
+        key_source_lines: string[];
+      };
+      raw_candidate: string | null;
+      decision_reason: LLMDecisionReasonPayload | null;
+    } | null;
   } | null;
 }
 
@@ -403,6 +433,16 @@ export interface DigestRunPayload {
   llmRefineProvider: string | null;
   llmRefineNotes: string[];
   llmRefineGuardrailFlags: string[];
+  llmDebug: {
+    mode: string;
+    baseline: {
+      summaryShort: string | null;
+      overviewLines: string[];
+      keySourceLines: string[];
+    };
+    rawCandidate: string | null;
+    decisionReason: LLMDecisionReasonPayload | null;
+  } | null;
   digest: DigestRecord | null;
 }
 

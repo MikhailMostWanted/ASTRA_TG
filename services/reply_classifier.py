@@ -43,6 +43,7 @@ class ReplyClassifier:
         has_open_loops = bool(
             context.pending_loops
             or (getattr(context.person_memory, "open_loops_json", None) or [])
+            or context.reply_opportunity_mode == "follow_up_after_self"
         )
         interaction_pattern = (
             getattr(context.person_memory, "interaction_pattern", None) or ""
@@ -62,12 +63,28 @@ class ReplyClassifier:
                 topic_hint=topic_hint,
             )
 
+        if (
+            context.latest_message.direction == "outbound"
+            and context.reply_opportunity_mode != "follow_up_after_self"
+        ):
+            return ReplyClassification(
+                situation="no_reply",
+                reason=context.reply_opportunity_reason,
+                has_question=False,
+                has_request=False,
+                has_tension=False,
+                should_reply=False,
+                needs_softness=False,
+                topic_hint=topic_hint,
+            )
+
         return self.classify_text(
             text=text,
             chat_state=chat_state,
             interaction_pattern=interaction_pattern,
             has_open_loops=has_open_loops,
             topic_hint=topic_hint,
+            follow_up_after_self=context.reply_opportunity_mode == "follow_up_after_self",
         )
 
     def classify_text(
@@ -78,6 +95,7 @@ class ReplyClassifier:
         interaction_pattern: str,
         has_open_loops: bool,
         topic_hint: str | None = None,
+        follow_up_after_self: bool = False,
     ) -> ReplyClassification:
         normalized = " ".join(text.split()).strip()
         lowered = normalized.casefold()
@@ -107,7 +125,11 @@ class ReplyClassifier:
         if has_tension and ("!" in normalized or "срочно" in lowered or "почему" in lowered):
             return ReplyClassification(
                 situation="tension",
-                reason="Фокус ответа звучит напряжённо, поэтому лучше отвечать спокойно и без встречной резкости.",
+                reason=(
+                    "Несмотря на последнее исходящее, в теме осталось напряжение, поэтому лучше вернуться спокойно и без встречной резкости."
+                    if follow_up_after_self
+                    else "Фокус ответа звучит напряжённо, поэтому лучше отвечать спокойно и без встречной резкости."
+                ),
                 has_question=has_question,
                 has_request=has_request,
                 has_tension=True,
@@ -119,7 +141,11 @@ class ReplyClassifier:
         if needs_softness:
             return ReplyClassification(
                 situation="soft_reply",
-                reason="Фокус ответа лучше закрывать мягко и предметно, чтобы не разогнать лишнюю резкость.",
+                reason=(
+                    "После твоего последнего сообщения тема всё ещё просится в мягкий follow-up, чтобы не разогнать лишнюю резкость."
+                    if follow_up_after_self
+                    else "Фокус ответа лучше закрывать мягко и предметно, чтобы не разогнать лишнюю резкость."
+                ),
                 has_question=has_question,
                 has_request=has_request,
                 has_tension=has_tension,
@@ -131,7 +157,11 @@ class ReplyClassifier:
         if has_question:
             return ReplyClassification(
                 situation="question",
-                reason="Фокус ответа выглядит как вопрос или уточнение, поэтому безопаснее ответить коротко и по делу.",
+                reason=(
+                    "Несмотря на последнее исходящее, вопрос по фокусу всё ещё выглядит незакрытым, поэтому уместен короткий follow-up."
+                    if follow_up_after_self
+                    else "Фокус ответа выглядит как вопрос или уточнение, поэтому безопаснее ответить коротко и по делу."
+                ),
                 has_question=True,
                 has_request=has_request,
                 has_tension=has_tension,
@@ -143,7 +173,11 @@ class ReplyClassifier:
         if has_request or has_open_loops or has_open_loop_signal_text:
             return ReplyClassification(
                 situation="request",
-                reason="Фокус ответа похож на просьбу или ожидание действия, поэтому лучше подтвердить, что тема взята в работу.",
+                reason=(
+                    "После твоего последнего сообщения по фокусу всё ещё висит ожидание действия, поэтому можно вернуться коротким follow-up."
+                    if follow_up_after_self
+                    else "Фокус ответа похож на просьбу или ожидание действия, поэтому лучше подтвердить, что тема взята в работу."
+                ),
                 has_question=has_question,
                 has_request=True,
                 has_tension=has_tension,

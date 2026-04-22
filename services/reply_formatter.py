@@ -122,6 +122,7 @@ def _why_and_details(result: ReplyResult) -> list[str]:
         "",
         "Почему именно так",
         compact_text(suggestion.reason_short, limit=140),
+        format_status_line(MARKER_OK, "Повод сейчас", compact_text(suggestion.reply_opportunity_reason, limit=110)),
         "",
         "Тех. детали",
         format_status_line(MARKER_OK, "Стиль", f"{suggestion.style_profile_key} ({style_source})"),

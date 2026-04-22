@@ -87,6 +87,15 @@ from .serializers import (
 
 DEFAULT_DIGEST_WINDOW = "24h"
 DEFAULT_LOG_TAIL = 80
+AUTO_WORKSPACE_SYNC_MIN_SECONDS = 12
+
+
+@dataclass(frozen=True, slots=True)
+class ChatTailRefreshStatus:
+    attempted: bool
+    updated: bool
+    error: str | None = None
+    trigger: str | None = None
 
 
 @dataclass(slots=True)
@@ -255,10 +264,15 @@ class DesktopBridge:
         async with self.runtime.session_factory() as session:
             chat_repository = ChatRepository(session)
             message_repository = MessageRepository(session)
-            setting_repository = SettingRepository(session)
             chat = await chat_repository.get_by_id(chat_id)
             if chat is None:
                 raise LookupError("Чат не найден.")
+
+            tail_refresh = await self._maybe_refresh_chat_tail(session, chat=chat)
+            if tail_refresh.error:
+                chat = await chat_repository.get_by_id(chat_id)
+                if chat is None:
+                    raise LookupError("Чат не найден.")
 
             recent_desc = await message_repository.get_recent_messages(chat_id=chat.id, limit=max(1, limit))
             messages = list(reversed(recent_desc))
@@ -271,6 +285,7 @@ class DesktopBridge:
                 session,
                 chat=chat,
                 last_message=last_message,
+                tail_refresh=tail_refresh,
             )
 
             return {
@@ -598,6 +613,37 @@ class DesktopBridge:
                 "llmRefineProvider": plan.llm_refine_provider,
                 "llmRefineNotes": list(plan.llm_refine_notes),
                 "llmRefineGuardrailFlags": list(plan.llm_refine_guardrail_flags),
+                "llmDebug": {
+                    "mode": (
+                        "llm_refine"
+                        if plan.llm_refine_applied
+                        else "rejected_by_guardrails"
+                        if (
+                            plan.llm_refine_decision_reason is not None
+                            and plan.llm_refine_decision_reason.source == "guardrails"
+                        )
+                        else "fallback"
+                        if plan.llm_refine_requested
+                        else "deterministic"
+                    ),
+                    "baseline": {
+                        "summaryShort": plan.llm_refine_baseline_summary_short,
+                        "overviewLines": list(plan.llm_refine_baseline_overview_lines),
+                        "keySourceLines": list(plan.llm_refine_baseline_key_source_lines),
+                    },
+                    "rawCandidate": plan.llm_refine_raw_candidate,
+                    "decisionReason": (
+                        {
+                            "source": plan.llm_refine_decision_reason.source,
+                            "code": plan.llm_refine_decision_reason.code,
+                            "summary": plan.llm_refine_decision_reason.summary,
+                            "detail": plan.llm_refine_decision_reason.detail,
+                            "flags": list(plan.llm_refine_decision_reason.flags),
+                        }
+                        if plan.llm_refine_decision_reason is not None
+                        else None
+                    ),
+                },
                 "digest": serialize_digest(digest) if digest is not None else None,
             }
 
@@ -943,7 +989,46 @@ class DesktopBridge:
         }
         return payload
 
-    async def _build_chat_freshness(self, session, *, chat, last_message) -> dict[str, Any]:
+    async def _maybe_refresh_chat_tail(self, session, *, chat) -> ChatTailRefreshStatus:
+        if chat.category != "fullaccess":
+            return ChatTailRefreshStatus(attempted=False, updated=False)
+
+        setting_repository = SettingRepository(session)
+        status = await self._build_fullaccess_auth_service(session).build_status_report()
+        if not status.ready_for_manual_sync:
+            return ChatTailRefreshStatus(attempted=False, updated=False)
+
+        sync_event = await OperationalStateService(setting_repository).get_fullaccess_chat_sync(chat.id)
+        if sync_event is not None and sync_event.timestamp is not None:
+            age_seconds = max(
+                0,
+                int((datetime.now(timezone.utc) - sync_event.timestamp).total_seconds()),
+            )
+            if age_seconds < AUTO_WORKSPACE_SYNC_MIN_SECONDS:
+                return ChatTailRefreshStatus(
+                    attempted=False,
+                    updated=False,
+                    trigger=str(sync_event.payload.get("trigger") or "manual"),
+                )
+
+        try:
+            await self._build_fullaccess_sync_service(session).sync_chat(
+                build_chat_reference(chat),
+                trigger="auto",
+            )
+        except ValueError as error:
+            await session.rollback()
+            return ChatTailRefreshStatus(
+                attempted=True,
+                updated=False,
+                error=str(error),
+                trigger="auto",
+            )
+
+        await session.commit()
+        return ChatTailRefreshStatus(attempted=True, updated=True, trigger="auto")
+
+    async def _build_chat_freshness(self, session, *, chat, last_message, tail_refresh: ChatTailRefreshStatus | None = None) -> dict[str, Any]:
         is_fullaccess_chat = chat.category == "fullaccess" or (
             last_message is not None and last_message.source_adapter == "fullaccess"
         )
@@ -960,20 +1045,41 @@ class DesktopBridge:
                 "createdCount": 0,
                 "updatedCount": 0,
                 "skippedCount": 0,
+                "syncTrigger": None,
+                "updatedNow": False,
+                "syncError": None,
             }
 
         setting_repository = SettingRepository(session)
         status = await self._build_fullaccess_auth_service(session).build_status_report()
         sync_event = await OperationalStateService(setting_repository).get_fullaccess_chat_sync(chat.id)
         sync_payload = sync_event.payload if sync_event is not None else {}
-        last_sync_at = sync_event.timestamp
+        last_sync_at = sync_event.timestamp if sync_event is not None else None
 
         mode = "fresh"
         label = "Контекст свежий"
         is_stale = False
         detail = "Последний full-access sync был недавно, reply строится по свежему хвосту."
+        sync_trigger = (
+            str(sync_payload.get("trigger"))
+            if sync_payload.get("trigger") is not None
+            else tail_refresh.trigger if tail_refresh is not None else None
+        )
+        sync_error = tail_refresh.error if tail_refresh is not None else None
+        updated_now = bool(tail_refresh is not None and tail_refresh.updated)
 
-        if not status.ready_for_manual_sync:
+        if sync_error:
+            mode = "attention"
+            label = "Авто-sync не удался"
+            is_stale = True
+            detail = (
+                f"Автообновление временно не удалось: {sync_error}. "
+                "Показан последний локальный хвост без падения shell."
+            )
+        elif updated_now:
+            label = "Хвост обновлён"
+            detail = "Активный чат только что дочитан через full-access, reply строится по свежему хвосту."
+        elif not status.ready_for_manual_sync:
             mode = "attention"
             label = "Full-access требует внимания"
             is_stale = True
@@ -1014,6 +1120,9 @@ class DesktopBridge:
             "createdCount": int(sync_payload.get("created_count") or 0),
             "updatedCount": int(sync_payload.get("updated_count") or 0),
             "skippedCount": int(sync_payload.get("skipped_count") or 0),
+            "syncTrigger": sync_trigger,
+            "updatedNow": updated_now,
+            "syncError": sync_error,
         }
 
     @asynccontextmanager

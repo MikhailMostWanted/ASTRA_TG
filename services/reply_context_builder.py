@@ -11,10 +11,12 @@ from services.memory_common import (
 )
 from services.reply_models import ReplyContext, ReplyContextIssue
 from services.reply_signal import (
+    has_follow_up_commitment_signal,
     has_emotional_signal,
     has_open_loop_signal,
     has_question_signal,
     has_request_signal,
+    has_resolution_signal,
     is_low_signal_text,
     pick_focus_label,
 )
@@ -29,6 +31,10 @@ class _ReplyFocusCandidate:
     focus_label: str
     is_low_signal: bool
     age_from_end: int
+    later_meaningful_inbound_count: int
+    later_low_signal_inbound_count: int
+    later_outbound_count: int
+    later_outbound_has_follow_up_commitment: bool
 
 
 @dataclass(slots=True)
@@ -55,15 +61,6 @@ class ReplyContextBuilder:
 
         recent_messages = tuple(reversed(recent_desc))
         latest_message = recent_messages[-1]
-        if latest_message.direction == "outbound":
-            return ReplyContextIssue(
-                code="latest_is_self",
-                message=(
-                    "Подсказку не строю: последнее сохранённое сообщение уже от тебя. "
-                    "Лучше дождаться новой входящей реплики."
-                ),
-            )
-
         text_messages = [message for message in recent_messages if _pick_message_text(message)]
         if len(text_messages) < self.min_messages:
             return ReplyContextIssue(
@@ -107,6 +104,11 @@ class ReplyContextBuilder:
             chat_memory=chat_memory,
             recent_messages=recent_messages,
         )
+        reply_opportunity_mode, reply_opportunity_reason = self._build_reply_opportunity(
+            recent_messages=recent_messages,
+            focus_candidate=focus_candidate,
+            pending_loops=pending_loops,
+        )
 
         return ReplyContext(
             chat=chat,
@@ -125,6 +127,8 @@ class ReplyContextBuilder:
             topic_hints=topic_hints,
             pending_loops=pending_loops,
             recent_conflicts=recent_conflicts,
+            reply_opportunity_mode=reply_opportunity_mode,
+            reply_opportunity_reason=reply_opportunity_reason,
         )
 
     def _select_focus_candidate(
@@ -132,21 +136,13 @@ class ReplyContextBuilder:
         recent_messages: tuple[Message, ...],
     ) -> _ReplyFocusCandidate | None:
         selection_messages = recent_messages[-self.selection_window :]
-        last_outbound_index = max(
-            (
-                index
-                for index, message in enumerate(selection_messages)
-                if message.direction == "outbound"
-            ),
-            default=-1,
-        )
-        unresolved_slice = selection_messages[last_outbound_index + 1 :]
         inbound_candidates = [
             self._score_focus_candidate(
                 message=message,
-                age_from_end=(len(unresolved_slice) - index - 1),
+                age_from_end=(len(selection_messages) - index - 1),
+                later_messages=selection_messages[index + 1 :],
             )
-            for index, message in enumerate(unresolved_slice)
+            for index, message in enumerate(selection_messages)
             if message.direction == "inbound" and _pick_message_text(message)
         ]
         if not inbound_candidates:
@@ -162,6 +158,7 @@ class ReplyContextBuilder:
         *,
         message: Message,
         age_from_end: int,
+        later_messages: tuple[Message, ...],
     ) -> _ReplyFocusCandidate:
         text = _pick_message_text(message)
         question_signal = has_question_signal(text)
@@ -170,6 +167,31 @@ class ReplyContextBuilder:
         emotional_signal = has_emotional_signal(text)
         low_signal = is_low_signal_text(text)
         token_count = len(tokenize_text(text))
+        later_meaningful_inbound_count = len(
+            [
+                later_message
+                for later_message in later_messages
+                if later_message.direction == "inbound"
+                and not is_low_signal_text(_pick_message_text(later_message))
+            ]
+        )
+        later_low_signal_inbound_count = len(
+            [
+                later_message
+                for later_message in later_messages
+                if later_message.direction == "inbound"
+                and is_low_signal_text(_pick_message_text(later_message))
+            ]
+        )
+        later_outbound_messages = [
+            later_message
+            for later_message in later_messages
+            if later_message.direction == "outbound" and _pick_message_text(later_message)
+        ]
+        later_outbound_has_follow_up_commitment = any(
+            has_follow_up_commitment_signal(_pick_message_text(later_message))
+            for later_message in later_outbound_messages
+        )
 
         score = 0.18
         if question_signal:
@@ -189,6 +211,13 @@ class ReplyContextBuilder:
         if message.reply_to_message_id is not None:
             score += 0.15
         score += self._recency_bonus(age_from_end)
+        score -= min(0.75, later_meaningful_inbound_count * 0.32)
+        if later_low_signal_inbound_count and later_meaningful_inbound_count == 0:
+            score += 0.18
+        if later_outbound_has_follow_up_commitment:
+            score += 0.46
+        elif later_outbound_messages and later_meaningful_inbound_count == 0:
+            score -= 0.18
         if low_signal:
             score -= 1.6
 
@@ -199,6 +228,10 @@ class ReplyContextBuilder:
             focus_label=pick_focus_label(text),
             is_low_signal=low_signal,
             age_from_end=age_from_end,
+            later_meaningful_inbound_count=later_meaningful_inbound_count,
+            later_low_signal_inbound_count=later_low_signal_inbound_count,
+            later_outbound_count=len(later_outbound_messages),
+            later_outbound_has_follow_up_commitment=later_outbound_has_follow_up_commitment,
         )
 
     def _build_focus_reason(
@@ -225,6 +258,12 @@ class ReplyContextBuilder:
                 "поэтому стратегия «не отвечать» остаётся нормальным вариантом."
             )
 
+        if focus_candidate.later_outbound_has_follow_up_commitment:
+            return (
+                "Выбран незакрытый вопрос или просьба, которые остались в контексте даже после "
+                "твоего более позднего промежуточного апдейта."
+            )
+
         focus_lead = {
             "вопрос": "Выбран последний незакрытый вопрос в свежем окне сообщений.",
             "просьба": "Выбрана последняя незакрытая просьба, где от тебя ожидают действие или апдейт.",
@@ -247,6 +286,68 @@ class ReplyContextBuilder:
         if focus_candidate.age_from_end <= 2:
             return f"{focus_lead} Этот фрагмент всё ещё в самом свежем слое диалога."
         return focus_lead
+
+    def _build_reply_opportunity(
+        self,
+        *,
+        recent_messages: tuple[Message, ...],
+        focus_candidate: _ReplyFocusCandidate,
+        pending_loops: tuple[str, ...],
+    ) -> tuple[str, str]:
+        latest_message = recent_messages[-1]
+        if latest_message.direction != "outbound":
+            return (
+                "direct_reply",
+                "Последний осмысленный входящий сигнал остаётся без ответа, поэтому reply уместен прямо сейчас.",
+            )
+
+        if focus_candidate.is_low_signal:
+            return (
+                "hold",
+                "Последнее сообщение уже было от тебя, а сильного нового повода дописывать сверху не видно.",
+            )
+
+        latest_outbound_text = _pick_message_text(latest_message)
+        has_follow_up_commitment = has_follow_up_commitment_signal(latest_outbound_text)
+        has_resolution = has_resolution_signal(latest_outbound_text)
+        has_pending_tail = bool(pending_loops)
+        latest_outbound_short = (
+            is_low_signal_text(latest_outbound_text)
+            or len(tokenize_text(latest_outbound_text)) <= 5
+        )
+
+        if has_resolution and focus_candidate.focus_label in {"вопрос", "просьба", "незакрытая тема"}:
+            return (
+                "hold",
+                "Последнее исходящее уже выглядит как закрытие вопроса, поэтому явного незакрытого повода писать ещё раз не видно.",
+            )
+
+        if has_pending_tail and (
+            focus_candidate.focus_label in {"вопрос", "просьба", "незакрытая тема"}
+            or has_follow_up_commitment
+        ):
+            return (
+                "follow_up_after_self",
+                "Несмотря на последнее исходящее, в памяти и свежем окне остался незакрытый хвост по теме.",
+            )
+
+        if has_follow_up_commitment:
+            return (
+                "follow_up_after_self",
+                "Последнее исходящее выглядит как промежуточный апдейт или обещание вернуться, "
+                "поэтому follow-up всё ещё уместен.",
+            )
+
+        if focus_candidate.focus_label in {"вопрос", "просьба"} and latest_outbound_short:
+            return (
+                "follow_up_after_self",
+                "После твоего последнего короткого ответа исходный вопрос всё ещё выглядит не до конца закрытым.",
+            )
+
+        return (
+            "hold",
+            "После твоего последнего сообщения явного незакрытого повода писать ещё раз не видно.",
+        )
 
     def _recency_bonus(self, age_from_end: int) -> float:
         if age_from_end <= 2:

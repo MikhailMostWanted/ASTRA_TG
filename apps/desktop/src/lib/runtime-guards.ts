@@ -69,6 +69,8 @@ export function normalizeReplySuggestion(value: unknown): ReplySuggestion | null
   }
 
   const llmStatus = isPlainObject(value.llmStatus) ? value.llmStatus : null;
+  const llmDebug = isPlainObject(value.llmDebug) ? value.llmDebug : null;
+  const decisionReason = llmDebug && isPlainObject(llmDebug.decisionReason) ? llmDebug.decisionReason : null;
   const rawVariants = Array.isArray(value.variants) ? value.variants : [];
 
   return {
@@ -92,6 +94,8 @@ export function normalizeReplySuggestion(value: unknown): ReplySuggestion | null
     sourceMessagePreview: safeStringOrNull(value.sourceMessagePreview),
     focusLabel: safeStringOrNull(value.focusLabel),
     focusReason: safeStringOrNull(value.focusReason),
+    replyOpportunityMode: safeStringOrNull(value.replyOpportunityMode),
+    replyOpportunityReason: safeStringOrNull(value.replyOpportunityReason),
     fewShotFound: safeBoolean(value.fewShotFound),
     fewShotMatchCount: safeNumberOrNull(value.fewShotMatchCount) ?? 0,
     fewShotNotes: safeStringArray(value.fewShotNotes),
@@ -107,6 +111,23 @@ export function normalizeReplySuggestion(value: unknown): ReplySuggestion | null
           label: safeString(llmStatus.label, "Deterministic"),
           provider: safeStringOrNull(llmStatus.provider),
           detail: safeStringOrNull(llmStatus.detail),
+        }
+      : null,
+    llmDebug: llmDebug
+      ? {
+          mode: safeString(llmDebug.mode, "deterministic"),
+          baselineMessages: safeStringArray(llmDebug.baselineMessages),
+          baselineText: safeStringOrNull(llmDebug.baselineText),
+          rawCandidate: safeStringOrNull(llmDebug.rawCandidate),
+          decisionReason: decisionReason
+            ? {
+                source: safeString(decisionReason.source, "unknown"),
+                code: safeString(decisionReason.code, "unknown"),
+                summary: safeString(decisionReason.summary, ""),
+                detail: safeString(decisionReason.detail, ""),
+                flags: safeStringArray(decisionReason.flags),
+              }
+            : null,
         }
       : null,
     variants: rawVariants
@@ -171,6 +192,9 @@ export function normalizeChatFreshnessPayload(value: unknown): ChatFreshnessPayl
       createdCount: 0,
       updatedCount: 0,
       skippedCount: 0,
+      syncTrigger: null,
+      updatedNow: false,
+      syncError: null,
     };
   }
 
@@ -186,5 +210,8 @@ export function normalizeChatFreshnessPayload(value: unknown): ChatFreshnessPayl
     createdCount: safeNumberOrNull(value.createdCount) ?? 0,
     updatedCount: safeNumberOrNull(value.updatedCount) ?? 0,
     skippedCount: safeNumberOrNull(value.skippedCount) ?? 0,
+    syncTrigger: safeStringOrNull(value.syncTrigger),
+    updatedNow: safeBoolean(value.updatedNow),
+    syncError: safeStringOrNull(value.syncError),
   };
 }

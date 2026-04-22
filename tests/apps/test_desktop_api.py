@@ -8,7 +8,16 @@ from fastapi.testclient import TestClient
 from apps.desktop_api.app import create_app
 from apps.desktop_api.bridge import DesktopBridge
 from config.settings import Settings
-from fullaccess.models import FullAccessLoginResult, FullAccessLogoutResult, FullAccessStatusReport
+from fullaccess.models import (
+    FullAccessChatSummary,
+    FullAccessLoginResult,
+    FullAccessLogoutResult,
+    FullAccessStatusReport,
+    FullAccessSyncResult,
+)
+from services.operational_state import OperationalStateService
+from services.providers.models import LLMDecisionReason
+from services.reply_models import ReplyResult, ReplySuggestion
 from storage.database import bootstrap_database, build_database_runtime
 from storage.repositories import (
     ChatMemoryRepository,
@@ -57,7 +66,10 @@ def test_desktop_api_dashboard_chats_and_reply_preview(
             assert workspace_payload["chat"]["title"] == "Команда продукта"
             assert len(workspace_payload["messages"]) == 3
             assert workspace_payload["freshness"]["mode"] == "local"
+            assert workspace_payload["freshness"]["syncError"] is None
             assert workspace_payload["reply"]["suggestion"]["llmStatus"]["mode"] == "deterministic"
+            assert workspace_payload["reply"]["suggestion"]["llmDebug"]["baselineText"]
+            assert workspace_payload["reply"]["suggestion"]["replyOpportunityReason"]
             assert workspace_payload["reply"]["suggestion"]["variants"]
 
             reply = client.post(f"/api/chats/{seeded['chat_id']}/reply-preview")
@@ -67,6 +79,7 @@ def test_desktop_api_dashboard_chats_and_reply_preview(
             assert reply_payload["suggestion"]["focusReason"]
             assert reply_payload["suggestion"]["replyText"]
             assert reply_payload["suggestion"]["llmStatus"]["label"] == "Deterministic"
+            assert reply_payload["suggestion"]["llmDebug"]["rawCandidate"] is None
             assert reply_payload["suggestion"]["variants"][0]["label"] == "Основной"
             assert reply_payload["actions"]["copy"] is True
             assert reply_payload["actions"]["pasteToTelegram"] is False
@@ -98,6 +111,7 @@ def test_desktop_api_memory_digest_reminders_sources_and_fullaccess(
             assert digest_payload["target"]["label"] == "@digest_channel"
             assert digest_payload["generation"]["mode"] == "deterministic"
             assert digest_payload["generation"]["label"] == "Детерминированный"
+            assert digest_payload["generation"]["debug"]["baseline"]["summary_short"].startswith("За 24h")
 
             reminders = client.get("/api/reminders")
             assert reminders.status_code == 200
@@ -133,6 +147,84 @@ def test_desktop_api_memory_digest_reminders_sources_and_fullaccess(
             ops_payload = ops.json()
             assert "doctor" in ops_payload
             assert ops_payload["doctor"]["warnings"] is not None
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_desktop_api_reply_payload_includes_rejected_llm_candidate_debug(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, seeded = await _seed_runtime(monkeypatch, tmp_path)
+
+        class FakeReplyService:
+            async def build_reply(self, reference: str, *, use_provider_refinement: bool | None = None) -> ReplyResult:
+                return ReplyResult(
+                    kind="suggestion",
+                    chat_id=seeded["chat_id"],
+                    chat_title="Команда продукта",
+                    chat_reference=reference,
+                    source_sender_name="Анна",
+                    source_message_preview="Когда сможешь скинуть финальный файл по бюджету?",
+                    suggestion=ReplySuggestion(
+                        base_reply_text="Понял, посмотрю и вернусь.",
+                        reply_messages=("Понял, посмотрю и вернусь.",),
+                        final_reply_messages=("Понял, посмотрю и вернусь.",),
+                        style_profile_key="friend_explain",
+                        style_source="auto",
+                        style_notes=(),
+                        persona_applied=True,
+                        persona_notes=(),
+                        guardrail_flags=(),
+                        reason_short="Есть открытый вопрос.",
+                        risk_label="низкий",
+                        confidence=0.82,
+                        strategy="мягко ответить",
+                        source_message_id=3,
+                        chat_id=seeded["chat_id"],
+                        situation="question",
+                        source_message_preview="Анна: Когда сможешь скинуть финальный файл по бюджету?",
+                        focus_label="вопрос",
+                        focus_reason="Выбран последний незакрытый вопрос.",
+                        reply_opportunity_mode="follow_up_after_self",
+                        reply_opportunity_reason="Несмотря на последнее исходящее, в теме остался незакрытый хвост.",
+                        few_shot_found=False,
+                        few_shot_match_count=0,
+                        few_shot_notes=(),
+                        llm_refine_requested=True,
+                        llm_refine_applied=False,
+                        llm_refine_provider="openai_compatible",
+                        llm_refine_notes=("LLM-кандидат отклонён guardrails.",),
+                        llm_refine_guardrail_flags=("слишком_литературно",),
+                        llm_refine_baseline_messages=("Понял, посмотрю и вернусь.",),
+                        llm_refine_raw_candidate="В данном случае благодарю за терпение, завтра утром отправлю файл на 25 страниц!!!",
+                        llm_refine_decision_reason=LLMDecisionReason(
+                            source="guardrails",
+                            code="guardrails_rejected",
+                            summary="LLM-кандидат для reply отклонён guardrails.",
+                            detail="Сработали guardrails: слишком_литературно. Сохранён deterministic baseline.",
+                            flags=("слишком_литературно",),
+                        ),
+                    ),
+                )
+
+        monkeypatch.setattr(DesktopBridge, "_build_reply_service", lambda self, session: FakeReplyService())
+
+        app = create_app(settings, runtime=runtime)
+
+        with TestClient(app) as client:
+            reply = client.post(f"/api/chats/{seeded['chat_id']}/reply-preview")
+            assert reply.status_code == 200
+            payload = reply.json()
+            assert payload["suggestion"]["llmStatus"]["mode"] == "rejected_by_guardrails"
+            assert payload["suggestion"]["llmDebug"]["rawCandidate"].startswith("В данном случае благодарю")
+            assert payload["suggestion"]["llmDebug"]["baselineText"] == "Понял, посмотрю и вернусь."
+            assert payload["suggestion"]["llmDebug"]["decisionReason"]["source"] == "guardrails"
+            assert payload["suggestion"]["llmDebug"]["decisionReason"]["flags"] == ["слишком_литературно"]
+            assert payload["suggestion"]["replyOpportunityReason"].startswith("Несмотря на последнее исходящее")
 
         await runtime.dispose()
 
@@ -259,6 +351,222 @@ def test_desktop_api_fullaccess_auth_flow_endpoints(
     asyncio.run(run_assertions())
 
 
+def test_desktop_api_workspace_auto_refreshes_fullaccess_chat(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, _ = await _seed_runtime(monkeypatch, tmp_path)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            fullaccess_chat = await chats.upsert_chat(
+                telegram_chat_id=-100777,
+                title="Full-access live",
+                handle="fullaccess_live",
+                chat_type="group",
+                is_enabled=True,
+                category="fullaccess",
+                exclude_from_digest=True,
+            )
+            await messages.create_message(
+                chat_id=fullaccess_chat.id,
+                telegram_message_id=1,
+                sender_id=31,
+                sender_name="Ира",
+                direction="inbound",
+                source_adapter="fullaccess",
+                source_type="message",
+                sent_at=datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc),
+                raw_text="Есть новый хвост?",
+                normalized_text="Есть новый хвост?",
+            )
+            await session.commit()
+
+        class FakeFullAccessAuthService:
+            async def build_status_report(self) -> FullAccessStatusReport:
+                return FullAccessStatusReport(
+                    enabled=True,
+                    api_credentials_configured=True,
+                    phone_configured=True,
+                    session_path=tmp_path / "fullaccess.session",
+                    session_exists=True,
+                    authorized=True,
+                    telethon_available=True,
+                    requested_readonly=True,
+                    effective_readonly=True,
+                    sync_limit=50,
+                    pending_login=False,
+                    synced_chat_count=1,
+                    synced_message_count=10,
+                    ready_for_manual_sync=True,
+                    reason="Full-access готов.",
+                )
+
+        class FakeFullAccessSyncService:
+            def __init__(self, session) -> None:
+                self.session = session
+                self.calls = 0
+
+            async def sync_chat(self, reference: str, *, trigger: str = "manual") -> FullAccessSyncResult:
+                self.calls += 1
+                await MessageRepository(self.session).create_message(
+                    chat_id=fullaccess_chat.id,
+                    telegram_message_id=2,
+                    sender_id=31,
+                    sender_name="Ира",
+                    direction="inbound",
+                    source_adapter="fullaccess",
+                    source_type="message",
+                    sent_at=datetime(2026, 4, 22, 10, 1, tzinfo=timezone.utc),
+                    raw_text="Да, это свежий auto-sync хвост.",
+                    normalized_text="Да, это свежий auto-sync хвост.",
+                )
+                await OperationalStateService(SettingRepository(self.session)).record_fullaccess_chat_sync(
+                    local_chat_id=fullaccess_chat.id,
+                    telegram_chat_id=fullaccess_chat.telegram_chat_id,
+                    reference=reference,
+                    scanned_count=1,
+                    created_count=1,
+                    updated_count=0,
+                    skipped_count=0,
+                    trigger=trigger,
+                )
+                return FullAccessSyncResult(
+                    chat=FullAccessChatSummary(
+                        telegram_chat_id=fullaccess_chat.telegram_chat_id,
+                        title=fullaccess_chat.title,
+                        chat_type=fullaccess_chat.type,
+                        username=fullaccess_chat.handle,
+                    ),
+                    local_chat_id=fullaccess_chat.id,
+                    chat_created=False,
+                    scanned_count=1,
+                    created_count=1,
+                    updated_count=0,
+                    skipped_count=0,
+                )
+
+        fake_sync_service = None
+
+        def build_sync_service(self, session):
+            nonlocal fake_sync_service
+            fake_sync_service = FakeFullAccessSyncService(session)
+            return fake_sync_service
+
+        monkeypatch.setattr(
+            DesktopBridge,
+            "_build_fullaccess_auth_service",
+            lambda self, session: FakeFullAccessAuthService(),
+        )
+        monkeypatch.setattr(DesktopBridge, "_build_fullaccess_sync_service", build_sync_service)
+
+        app = create_app(settings, runtime=runtime)
+
+        with TestClient(app) as client:
+            workspace = client.get(f"/api/chats/{fullaccess_chat.id}/workspace")
+            assert workspace.status_code == 200
+            workspace_payload = workspace.json()
+            assert len(workspace_payload["messages"]) == 2
+            assert workspace_payload["messages"][-1]["text"] == "Да, это свежий auto-sync хвост."
+            assert workspace_payload["freshness"]["updatedNow"] is True
+            assert workspace_payload["freshness"]["syncTrigger"] == "auto"
+            assert workspace_payload["freshness"]["syncError"] is None
+            assert workspace_payload["freshness"]["label"] == "Хвост обновлён"
+
+        assert fake_sync_service is not None
+        assert fake_sync_service.calls == 1
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_desktop_api_workspace_keeps_shell_alive_when_auto_refresh_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, _ = await _seed_runtime(monkeypatch, tmp_path)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            fullaccess_chat = await chats.upsert_chat(
+                telegram_chat_id=-100778,
+                title="Full-access flaky",
+                handle="fullaccess_flaky",
+                chat_type="group",
+                is_enabled=True,
+                category="fullaccess",
+                exclude_from_digest=True,
+            )
+            await messages.create_message(
+                chat_id=fullaccess_chat.id,
+                telegram_message_id=1,
+                sender_id=41,
+                sender_name="Оля",
+                direction="inbound",
+                source_adapter="fullaccess",
+                source_type="message",
+                sent_at=datetime(2026, 4, 22, 11, 0, tzinfo=timezone.utc),
+                raw_text="Старый локальный хвост.",
+                normalized_text="Старый локальный хвост.",
+            )
+            await session.commit()
+
+        class FakeFullAccessAuthService:
+            async def build_status_report(self) -> FullAccessStatusReport:
+                return FullAccessStatusReport(
+                    enabled=True,
+                    api_credentials_configured=True,
+                    phone_configured=True,
+                    session_path=tmp_path / "fullaccess.session",
+                    session_exists=True,
+                    authorized=True,
+                    telethon_available=True,
+                    requested_readonly=True,
+                    effective_readonly=True,
+                    sync_limit=50,
+                    pending_login=False,
+                    synced_chat_count=1,
+                    synced_message_count=10,
+                    ready_for_manual_sync=True,
+                    reason="Full-access готов.",
+                )
+
+        class FailingFullAccessSyncService:
+            async def sync_chat(self, reference: str, *, trigger: str = "manual") -> FullAccessSyncResult:
+                raise ValueError("Telethon timeout while syncing active chat.")
+
+        monkeypatch.setattr(
+            DesktopBridge,
+            "_build_fullaccess_auth_service",
+            lambda self, session: FakeFullAccessAuthService(),
+        )
+        monkeypatch.setattr(
+            DesktopBridge,
+            "_build_fullaccess_sync_service",
+            lambda self, session: FailingFullAccessSyncService(),
+        )
+
+        app = create_app(settings, runtime=runtime)
+
+        with TestClient(app) as client:
+            workspace = client.get(f"/api/chats/{fullaccess_chat.id}/workspace")
+            assert workspace.status_code == 200
+            workspace_payload = workspace.json()
+            assert len(workspace_payload["messages"]) == 1
+            assert workspace_payload["messages"][0]["text"] == "Старый локальный хвост."
+            assert workspace_payload["freshness"]["mode"] == "attention"
+            assert workspace_payload["freshness"]["syncError"] == "Telethon timeout while syncing active chat."
+            assert "без падения shell" in workspace_payload["freshness"]["detail"]
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
 async def _seed_runtime(monkeypatch, tmp_path: Path):
     database_path = tmp_path / "desktop-api" / "astra.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
@@ -376,6 +684,16 @@ async def _seed_runtime(monkeypatch, tmp_path: Path):
                 "notes": [],
                 "flags": [],
                 "summary_short": "За 24h обсуждали бюджет и финальный файл.",
+                "debug": {
+                    "mode": "deterministic",
+                    "baseline": {
+                        "summary_short": "За 24h обсуждали бюджет и финальный файл.",
+                        "overview_lines": ["- Главная тема: бюджет."],
+                        "key_source_lines": ["- Команда продукта: Анна ждёт финальный файл и апдейт по бюджету."],
+                    },
+                    "raw_candidate": None,
+                    "decision_reason": None,
+                },
             },
         )
 

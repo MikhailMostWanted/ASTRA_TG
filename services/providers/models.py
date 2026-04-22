@@ -53,6 +53,15 @@ class ReplyRefinementCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class LLMDecisionReason:
+    source: str
+    code: str
+    summary: str
+    detail: str
+    flags: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class DigestImprovementCandidate:
     summary_short: str
     overview_lines: tuple[str, ...]
