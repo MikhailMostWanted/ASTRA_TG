@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import signal
+import subprocess
 import sys
 
 from apps.bot.app import run_bot
@@ -88,6 +90,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Дополнительно вывести JSON в stdout.",
     )
 
+    desktop_parser = subparsers.add_parser(
+        "desktop",
+        help="Запустить Tauri desktop в dev-режиме поверх локального desktop API.",
+    )
+    desktop_parser.add_argument(
+        "--api-url",
+        default="http://127.0.0.1:8765",
+        help="URL локального desktop API, который увидит frontend.",
+    )
+
+    desktop_api_parser = subparsers.add_parser(
+        "desktop-api",
+        help="Поднять локальный desktop bridge/API.",
+    )
+    desktop_api_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host для desktop API.",
+    )
+    desktop_api_parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Port для desktop API.",
+    )
+
     fullaccess_parser = subparsers.add_parser(
         "fullaccess",
         help="Безопасные локальные команды для experimental full-access.",
@@ -134,6 +162,10 @@ async def run_cli(args: argparse.Namespace) -> int:
         return await run_ops_command("backup")
     if args.command == "export":
         return await run_ops_command("export", stdout=args.stdout)
+    if args.command == "desktop-api":
+        return await _handle_desktop_api(host=args.host, port=args.port)
+    if args.command == "desktop":
+        return await _handle_desktop(api_url=args.api_url)
     if args.command == "fullaccess":
         return await run_fullaccess_command(
             args.fullaccess_command,
@@ -150,7 +182,14 @@ async def run_cli(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    return asyncio.run(run_cli(_parse_args()))
+    args = _parse_args()
+    if args.command == "desktop-api":
+        chdir_to_repository_root()
+        from apps.desktop_api.app import run_server
+
+        run_server(host=args.host, port=args.port)
+        return 0
+    return asyncio.run(run_cli(args))
 
 
 async def _handle_start(component: str | None) -> int:
@@ -226,6 +265,34 @@ async def _handle_logs(component: str | None, *, tail_lines: int) -> int:
         )
     )
     return 0
+
+
+async def _handle_desktop_api(*, host: str, port: int) -> int:
+    from apps.desktop_api.app import run_server
+
+    await asyncio.to_thread(run_server, host=host, port=port)
+    return 0
+
+
+async def _handle_desktop(*, api_url: str) -> int:
+    desktop_dir = get_repository_root() / "apps" / "desktop"
+    package_json = desktop_dir / "package.json"
+    if not package_json.exists():
+        raise ValueError(
+            f"Desktop app ещё не найден: {package_json}. Сначала добавь apps/desktop."
+        )
+
+    env = os.environ.copy()
+    env["ASTRA_DESKTOP_API_URL"] = api_url
+    env["VITE_ASTRA_DESKTOP_API_URL"] = api_url
+    env["ASTRA_DESKTOP_API_PYTHON"] = sys.executable
+    result = subprocess.run(
+        ["npm", "run", "desktop"],
+        cwd=str(desktop_dir),
+        env=env,
+        check=False,
+    )
+    return int(result.returncode)
 
 
 async def _run_managed_bot() -> None:

@@ -67,6 +67,10 @@ class ReplyExampleSearchCandidate:
 class ChatRepository:
     session: AsyncSession
 
+    async def get_by_id(self, chat_id: int) -> Chat | None:
+        result = await self.session.execute(select(Chat).where(Chat.id == chat_id))
+        return result.scalar_one_or_none()
+
     async def upsert_chat(
         self,
         *,
@@ -733,6 +737,17 @@ class ReplyExampleRepository:
 class DigestRepository:
     session: AsyncSession
 
+    async def get_digest(self, digest_id: int) -> Digest | None:
+        result = await self.session.execute(
+            select(Digest)
+            .options(
+                selectinload(Digest.items).selectinload(DigestItem.source_chat),
+                selectinload(Digest.items).selectinload(DigestItem.source_message),
+            )
+            .where(Digest.id == digest_id)
+        )
+        return result.scalar_one_or_none()
+
     async def create_digest(
         self,
         *,
@@ -785,11 +800,26 @@ class DigestRepository:
     async def get_last_digest(self) -> Digest | None:
         result = await self.session.execute(
             select(Digest)
-            .options(selectinload(Digest.items))
+            .options(
+                selectinload(Digest.items).selectinload(DigestItem.source_chat),
+                selectinload(Digest.items).selectinload(DigestItem.source_message),
+            )
             .order_by(desc(Digest.created_at), desc(Digest.id))
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def list_recent(self, *, limit: int = 10) -> list[Digest]:
+        result = await self.session.execute(
+            select(Digest)
+            .options(
+                selectinload(Digest.items).selectinload(DigestItem.source_chat),
+                selectinload(Digest.items).selectinload(DigestItem.source_message),
+            )
+            .order_by(desc(Digest.created_at), desc(Digest.id))
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
     async def mark_delivered(
         self,

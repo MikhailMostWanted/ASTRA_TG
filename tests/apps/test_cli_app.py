@@ -27,6 +27,15 @@ def test_cli_parser_supports_expected_commands() -> None:
     assert args.command == "export"
     assert args.stdout is True
 
+    args = parser.parse_args(["desktop"])
+    assert args.command == "desktop"
+    assert args.api_url == "http://127.0.0.1:8765"
+
+    args = parser.parse_args(["desktop-api", "--host", "0.0.0.0", "--port", "8877"])
+    assert args.command == "desktop-api"
+    assert args.host == "0.0.0.0"
+    assert args.port == 8877
+
     args = parser.parse_args(["fullaccess", "login"])
     assert args.command == "fullaccess"
     assert args.fullaccess_command == "login"
@@ -133,3 +142,55 @@ def test_doctor_command_handles_snapshot(monkeypatch, capsys, tmp_path: Path) ->
     assert "Astra CLI / Doctor" in output
     assert "База данных отвечает." in output
     assert "Следующая рекомендуемая команда: /checklist" in output
+
+
+def test_desktop_api_command_runs_server_in_thread(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(app_module, "chdir_to_repository_root", lambda: tmp_path)
+
+    from apps.desktop_api import app as desktop_app_module
+
+    calls: list[tuple[str, int]] = []
+
+    def fake_run_server(*, host: str, port: int) -> None:
+        calls.append((host, port))
+
+    monkeypatch.setattr(desktop_app_module, "run_server", fake_run_server)
+
+    exit_code = asyncio.run(
+        app_module.run_cli(
+            app_module.build_parser().parse_args(
+                ["desktop-api", "--host", "127.0.0.1", "--port", "8876"]
+            )
+        )
+    )
+
+    assert exit_code == 0
+    assert calls == [("127.0.0.1", 8876)]
+
+
+def test_main_runs_desktop_api_without_asyncio(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(app_module, "chdir_to_repository_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        app_module,
+        "_parse_args",
+        lambda: SimpleNamespace(command="desktop-api", host="127.0.0.1", port=8876),
+    )
+
+    from apps.desktop_api import app as desktop_app_module
+
+    calls: list[tuple[str, int]] = []
+
+    def fake_run_server(*, host: str, port: int) -> None:
+        calls.append((host, port))
+
+    monkeypatch.setattr(desktop_app_module, "run_server", fake_run_server)
+    monkeypatch.setattr(
+        app_module.asyncio,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("asyncio.run must not be used")),
+    )
+
+    exit_code = app_module.main()
+
+    assert exit_code == 0
+    assert calls == [("127.0.0.1", 8876)]

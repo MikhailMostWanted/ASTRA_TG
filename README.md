@@ -80,6 +80,48 @@ Runtime-файлы CLI:
 
 CLI сам переключается в корень репозитория, поэтому команды можно вызывать не только из каталога проекта.
 
+## Desktop app
+
+В репозитории появился первый desktop-слой для macOS:
+
+- `apps/desktop` — Tauri + React + TypeScript desktop frontend;
+- `apps/desktop_api` — тонкий локальный FastAPI bridge поверх уже существующих Python-сервисов;
+- desktop не заменяет Telegram-бота, а становится основной удобной панелью управления;
+- bot-first flow и текущая Python-логика остаются прежними.
+
+Что уже реально подключено в первой версии desktop:
+
+- dashboard со status cards, activity, warnings и quick actions;
+- chats screen со split-layout, сообщениями и live reply preview;
+- sources / sync;
+- full-access status и ручной local login flow;
+- memory, digest, reminders;
+- logs / ops basics.
+
+Для desktop dev-режима нужен установленный Node.js и Rust toolchain. Практически лучше держать Node LTS.
+
+Команды:
+
+```bash
+astratg desktop-api
+astratg desktop
+```
+
+Что делает каждая:
+
+- `astratg desktop-api` поднимает только локальный bridge на `http://127.0.0.1:8765`;
+- `astratg desktop` запускает Tauri desktop dev-режим и, если bridge ещё не поднят, стартует его автоматически;
+- frontend получает API URL через локальное окружение и не ходит напрямую по разрозненным Python-модулям.
+
+Если нужно раздельно:
+
+```bash
+astratg desktop-api --host 127.0.0.1 --port 8765
+cd apps/desktop
+npm install
+npm run build
+```
+
 ## Provider layer
 
 Deterministic режим остаётся основным и работает даже при полностью пустом LLM-конфиге.
@@ -144,10 +186,9 @@ FULLACCESS_SYNC_LIMIT=200
 Если Telegram после кода попросит пароль 2FA, безопасный локальный helper:
 
 ```bash
-python -m fullaccess.cli status
-python -m fullaccess.cli request-code
-python -m fullaccess.cli login --code 12345
-python -m fullaccess.cli logout
+astratg fullaccess status
+astratg fullaccess login --code 12345
+astratg fullaccess logout
 ```
 
 ## Основные команды
@@ -175,6 +216,8 @@ astratg doctor
 astratg logs --tail 50
 astratg backup
 astratg export
+astratg desktop-api
+astratg desktop
 ```
 
 Низкоуровневые entrypoints и ops-утилиты по-прежнему доступны напрямую:

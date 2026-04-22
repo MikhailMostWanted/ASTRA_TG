@@ -150,7 +150,7 @@ def test_fullaccess_login_command_rejects_code_in_bot(monkeypatch, tmp_path: Pat
         assert len(message.answers) == 1
         assert "Код нельзя отправлять в чат с ботом." in message.answers[0]
         assert "Войди локально через CLI." in message.answers[0]
-        assert "astra fullaccess login" in message.answers[0]
+        assert "astratg fullaccess login" in message.answers[0]
         assert "Обновить" in message.answers[0]
 
         await runtime.dispose()
