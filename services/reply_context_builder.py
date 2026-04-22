@@ -18,6 +18,7 @@ from services.reply_signal import (
     has_request_signal,
     has_resolution_signal,
     is_low_signal_text,
+    is_weak_reply_signal,
     pick_focus_label,
 )
 from storage.repositories import ChatMemoryRepository, MessageRepository, PersonMemoryRepository
@@ -109,6 +110,12 @@ class ReplyContextBuilder:
             focus_candidate=focus_candidate,
             pending_loops=pending_loops,
         )
+        focus_reason = self._build_focus_reason(
+            recent_messages=recent_messages,
+            focus_candidate=focus_candidate,
+            reply_opportunity_mode=reply_opportunity_mode,
+            reply_opportunity_reason=reply_opportunity_reason,
+        )
 
         return ReplyContext(
             chat=chat,
@@ -116,10 +123,7 @@ class ReplyContextBuilder:
             latest_message=latest_message,
             target_message=target_message,
             focus_label=focus_candidate.focus_label,
-            focus_reason=self._build_focus_reason(
-                recent_messages=recent_messages,
-                focus_candidate=focus_candidate,
-            ),
+            focus_reason=focus_reason,
             focus_score=focus_candidate.score,
             chat_memory=chat_memory,
             person_memory=person_memory,
@@ -165,14 +169,14 @@ class ReplyContextBuilder:
         request_signal = has_request_signal(text)
         open_loop_signal = has_open_loop_signal(text)
         emotional_signal = has_emotional_signal(text)
-        low_signal = is_low_signal_text(text)
+        low_signal = is_weak_reply_signal(text)
         token_count = len(tokenize_text(text))
         later_meaningful_inbound_count = len(
             [
                 later_message
                 for later_message in later_messages
                 if later_message.direction == "inbound"
-                and not is_low_signal_text(_pick_message_text(later_message))
+                and not is_weak_reply_signal(_pick_message_text(later_message))
             ]
         )
         later_low_signal_inbound_count = len(
@@ -180,7 +184,7 @@ class ReplyContextBuilder:
                 later_message
                 for later_message in later_messages
                 if later_message.direction == "inbound"
-                and is_low_signal_text(_pick_message_text(later_message))
+                and is_weak_reply_signal(_pick_message_text(later_message))
             ]
         )
         later_outbound_messages = [
@@ -239,6 +243,8 @@ class ReplyContextBuilder:
         *,
         recent_messages: tuple[Message, ...],
         focus_candidate: _ReplyFocusCandidate,
+        reply_opportunity_mode: str,
+        reply_opportunity_reason: str,
     ) -> str:
         later_inbound_messages = [
             message
@@ -248,14 +254,25 @@ class ReplyContextBuilder:
         later_low_signal = [
             message
             for message in later_inbound_messages
-            if is_low_signal_text(_pick_message_text(message))
+            if is_weak_reply_signal(_pick_message_text(message))
         ]
         later_meaningful_count = len(later_inbound_messages) - len(later_low_signal)
 
         if focus_candidate.is_low_signal:
             return (
-                "Сильного reply-trigger рядом нет: последнее входящее выглядит низкосигнальным, "
-                "поэтому стратегия «не отвечать» остаётся нормальным вариантом."
+                "Сильного повода для reply рядом нет: выбранная входящая реплика выглядит "
+                "слабым сигналом, поэтому «не отвечать» здесь нормально."
+            )
+
+        if reply_opportunity_mode == "hold":
+            if focus_candidate.focus_label == "продолжение темы":
+                return (
+                    "В свежем окне это самый заметный смысловой фрагмент, но сам по себе он не даёт "
+                    f"достаточного повода писать ещё раз. {reply_opportunity_reason}"
+                )
+            return (
+                "Это самый сильный триггер в свежем окне, но новый follow-up сейчас не нужен. "
+                f"{reply_opportunity_reason}"
             )
 
         if focus_candidate.later_outbound_has_follow_up_commitment:
@@ -277,7 +294,7 @@ class ReplyContextBuilder:
         if later_low_signal and later_meaningful_count == 0:
             return (
                 f"{focus_lead} Более позднее {_quote_focus_preview(later_low_signal[-1])} "
-                "понижено как low-signal."
+                "понижено как слабый сигнал."
             )
         if later_meaningful_count > 0:
             return (

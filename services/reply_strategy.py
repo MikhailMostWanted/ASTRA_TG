@@ -36,9 +36,19 @@ class ReplyStrategyResolver:
             classification=classification,
             few_shot_support=few_shot_support,
         )
+        focus_label, focus_reason = self._apply_decision_consistency(
+            context=context,
+            strategy=strategy,
+        )
         source_preview = _format_source_preview(context.target_message)
         alternative_action = None
         if strategy == "не отвечать":
+            reason_parts: list[str] = []
+            for part in (reason_short, context.reply_opportunity_reason):
+                if not part or part in reason_parts:
+                    continue
+                reason_parts.append(part)
+            reason_short = " ".join(reason_parts)
             alternative_action = (
                 "Сначала дождись новой реплики или собери факты, потом вернись коротким спокойным сообщением."
             )
@@ -49,12 +59,12 @@ class ReplyStrategyResolver:
             risk_label=risk_label,
             confidence=confidence,
             strategy=strategy,
-            source_message_id=context.target_message.telegram_message_id,
+            source_message_id=context.target_message.id,
             chat_id=context.chat.id,
             situation=classification.situation,
             source_message_preview=source_preview,
-            focus_label=context.focus_label,
-            focus_reason=context.focus_reason,
+            focus_label=focus_label,
+            focus_reason=focus_reason,
             few_shot_match_count=few_shot_support.match_count if few_shot_support else 0,
             few_shot_notes=few_shot_support.notes if few_shot_support else (),
             alternative_action=alternative_action,
@@ -222,6 +232,24 @@ class ReplyStrategyResolver:
             parts.append(few_shot_support.notes[0])
         return " ".join(parts[:3])
 
+    def _apply_decision_consistency(
+        self,
+        *,
+        context: ReplyContext,
+        strategy: str,
+    ) -> tuple[str, str]:
+        if strategy != "не отвечать":
+            return context.focus_label, context.focus_reason
+        if context.focus_label != "продолжение темы":
+            return context.focus_label, context.focus_reason
+        return (
+            "слабый триггер",
+            (
+                "В свежем окне не видно явного вопроса, просьбы или сильного незакрытого хвоста. "
+                f"{context.reply_opportunity_reason}"
+            ),
+        )
+
 
 def _build_topic_chunk(topic_hint: str | None) -> str:
     if not topic_hint:
@@ -231,8 +259,28 @@ def _build_topic_chunk(topic_hint: str | None) -> str:
 
 def _format_source_preview(message) -> str:
     sender = message.sender_name or "без имени"
-    return f"{sender}: {_pick_message_text(message)}"
+    cleaned_text = _strip_sender_prefix(_pick_message_text(message), sender)
+    return f"{sender}: {cleaned_text}" if cleaned_text else sender
 
 
 def _pick_message_text(message) -> str:
     return " ".join((message.normalized_text or message.raw_text or "").split()).strip()
+
+
+def _strip_sender_prefix(text: str, sender: str) -> str:
+    cleaned = " ".join(text.split()).strip()
+    normalized_sender = " ".join(str(sender).split()).strip()
+    if not cleaned or not normalized_sender:
+        return cleaned
+
+    prefixes = tuple(f"{normalized_sender}{delimiter}" for delimiter in (":", "-", "—", "–"))
+    while cleaned:
+        lowered = cleaned.casefold()
+        matched_prefix = next(
+            (prefix for prefix in prefixes if lowered.startswith(prefix.casefold())),
+            None,
+        )
+        if matched_prefix is None:
+            break
+        cleaned = cleaned[len(matched_prefix) :].lstrip(" :—–-\t")
+    return cleaned

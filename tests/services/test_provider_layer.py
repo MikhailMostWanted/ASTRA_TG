@@ -76,6 +76,36 @@ def test_reply_refinement_guardrails_accept_good_candidate() -> None:
     assert decision.flags == ()
 
 
+def test_reply_refinement_guardrails_accepts_contextual_candidate_even_if_baseline_is_thin() -> None:
+    guardrails = ReplyRefinementGuardrails()
+    profile = _build_profile()
+    persona_state = _build_persona_state()
+    baseline = ("понял",)
+    candidate = ReplyRefinementCandidate(
+        messages=(
+            "Понял. Проверю файл по бюджету и к вечеру вернусь коротким апдейтом.",
+        ),
+        raw_text="Понял. Проверю файл по бюджету и к вечеру вернусь коротким апдейтом.",
+        model_name="test-fast",
+    )
+
+    decision = guardrails.apply(
+        candidate=candidate,
+        baseline_messages=baseline,
+        allowed_context=(
+            "Анна ждёт финальный файл по бюджету.",
+            "Когда сможешь скинуть финальный файл по бюджету?",
+        ),
+        profile=profile,
+        persona_state=persona_state,
+    )
+
+    assert decision.used_fallback is False
+    assert decision.messages == candidate.messages
+    assert "слишком_длинно" not in decision.flags
+    assert "сильное_отклонение_от_baseline" not in decision.flags
+
+
 def test_reply_refinement_guardrails_reject_bad_candidate_and_fallback() -> None:
     guardrails = ReplyRefinementGuardrails()
     profile = _build_profile()
@@ -103,6 +133,33 @@ def test_reply_refinement_guardrails_reject_bad_candidate_and_fallback() -> None
     assert decision.used_fallback is True
     assert decision.messages == baseline
     assert "слишком_литературно" in decision.flags
+
+
+def test_reply_refinement_guardrails_still_reject_obvious_off_topic_candidate() -> None:
+    guardrails = ReplyRefinementGuardrails()
+    profile = _build_profile()
+    persona_state = _build_persona_state()
+    baseline = ("ну давай я к вечеру добью файл", "если что отдельно пну")
+    candidate = ReplyRefinementCandidate(
+        messages=("Давай вечером созвонимся про отпуск и билеты, там добьём отдельно.",),
+        raw_text="Давай вечером созвонимся про отпуск и билеты, там добьём отдельно.",
+        model_name="test-fast",
+    )
+
+    decision = guardrails.apply(
+        candidate=candidate,
+        baseline_messages=baseline,
+        allowed_context=(
+            "Анна ждёт финальный файл по бюджету.",
+            "Когда сможешь скинуть финальный файл по бюджету?",
+        ),
+        profile=profile,
+        persona_state=persona_state,
+    )
+
+    assert decision.used_fallback is True
+    assert decision.messages == baseline
+    assert "сильное_отклонение_от_baseline" in decision.flags
 
 
 def _build_profile() -> StyleProfileSnapshot:

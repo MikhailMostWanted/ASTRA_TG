@@ -23,7 +23,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { formatConfidence, formatDateTime, stringifyUnknown } from "@/lib/format";
 import { normalizeReplyPreviewPayload } from "@/lib/runtime-guards";
 import type { ChatFreshnessPayload, ReplyPreviewPayload } from "@/lib/types";
-import type { ChatWorkspaceState } from "@/stores/app-store";
+import { buildReplyDraftScopeKey, type ChatWorkspaceState } from "@/stores/app-store";
 import { cn } from "@/lib/utils";
 
 import { EmptyState } from "./EmptyState";
@@ -174,6 +174,31 @@ export function ReplyPanel({
     );
   }
 
+  const triggerPreview = buildTriggerPreview(
+    safeReply.sourceSenderName,
+    safeReply.sourceMessagePreview || suggestion.sourceMessagePreview,
+  );
+  const currentDraftScopeKey = buildReplyDraftScopeKey({
+    sourceMessageId: suggestion.sourceMessageId,
+    focusLabel: suggestion.focusLabel,
+    sourceMessagePreview: safeReply.sourceMessagePreview || suggestion.sourceMessagePreview,
+    replyOpportunityMode: suggestion.replyOpportunityMode,
+  });
+  const draftScopeMatches = Boolean(
+    workflowState?.draftText
+      && workflowState.draftScopeKey
+      && currentDraftScopeKey
+      && workflowState.draftScopeKey === currentDraftScopeKey,
+  );
+  const legacyDraftMatches = Boolean(
+    workflowState?.draftText
+      && !workflowState.draftScopeKey
+      && workflowState.draftSourceMessageId !== null
+      && workflowState.draftSourceMessageId === suggestion.sourceMessageId,
+  );
+  const hasActiveDraft = Boolean(workflowState?.draftText && (draftScopeMatches || legacyDraftMatches));
+  const hasStaleDraft = Boolean(workflowState?.draftText && !hasActiveDraft);
+
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/7 bg-white/[0.035]">
       <div className="border-b border-white/7 px-4 py-4">
@@ -281,13 +306,10 @@ export function ReplyPanel({
                 <div className="mt-2">{suggestion.replyOpportunityReason || "В контексте остался незакрытый хвост."}</div>
               </div>
             ) : null}
-            {safeReply.sourceMessagePreview ? (
+            {triggerPreview ? (
               <div className="mt-3 rounded-[18px] border border-white/8 bg-black/16 px-4 py-3 text-sm leading-6 text-slate-200">
                 <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Опорный триггер</div>
-                <div className="mt-2">
-                  {safeReply.sourceSenderName ? `${safeReply.sourceSenderName}: ` : ""}
-                  {safeReply.sourceMessagePreview}
-                </div>
+                <div className="mt-2">{triggerPreview}</div>
               </div>
             ) : null}
           </div>
@@ -378,25 +400,55 @@ export function ReplyPanel({
               Черновик и статус
             </div>
 
-            {workflowState?.draftText ? (
+            {hasActiveDraft ? (
               <div className="rounded-[18px] border border-amber-300/12 bg-amber-300/8 px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-sm font-medium text-amber-50">Локальный черновик сохранён</div>
                   <div className="text-xs text-amber-100/70">
-                    {workflowState.draftUpdatedAt ? formatDateTime(workflowState.draftUpdatedAt) : "сейчас"}
+                    {workflowState?.draftUpdatedAt ? formatDateTime(workflowState.draftUpdatedAt) : "сейчас"}
                   </div>
                 </div>
                 <div className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-100">
-                  {workflowState.draftText}
+                  {workflowState?.draftText}
                 </div>
                 <div className="mt-3 flex gap-2">
                   <Button
                     variant="outline"
                     className="border-white/8 bg-black/18 text-slate-100"
-                    onClick={() => onCopy(workflowState.draftText || "")}
+                    onClick={() => onCopy(workflowState?.draftText || "")}
                   >
                     <Copy data-icon="inline-start" />
                     Скопировать черновик
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="border-white/8 bg-black/18 text-slate-100"
+                    onClick={onClearDraft}
+                  >
+                    Очистить
+                  </Button>
+                </div>
+              </div>
+            ) : hasStaleDraft ? (
+              <div className="rounded-[18px] border border-amber-300/12 bg-amber-300/8 px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-medium text-amber-50">Черновик устарел для текущего фокуса</div>
+                  <div className="text-xs text-amber-100/70">
+                    {workflowState?.draftUpdatedAt ? formatDateTime(workflowState.draftUpdatedAt) : "сейчас"}
+                  </div>
+                </div>
+                <div className="mt-2 text-sm leading-6 text-slate-100">
+                  Текущий reply уже опирается на другой триггер или другой фокус, поэтому старый текст скрыт и не
+                  показывается как актуальный.
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="border-white/8 bg-black/18 text-slate-100"
+                    onClick={() => onCopy(workflowState?.draftText || "")}
+                  >
+                    <Copy data-icon="inline-start" />
+                    Скопировать старый черновик
                   </Button>
                   <Button
                     variant="outline"
@@ -513,6 +565,47 @@ export function ReplyPanel({
       </ScrollArea>
     </section>
   );
+}
+
+function buildTriggerPreview(senderName: string | null, preview: string | null): string | null {
+  const safePreview = compactWhitespace(preview);
+  const safeSender = compactWhitespace(senderName);
+  if (!safePreview && !safeSender) {
+    return null;
+  }
+  if (!safeSender) {
+    return safePreview;
+  }
+
+  const cleanedPreview = stripSenderPrefix(safePreview || "", safeSender);
+  return cleanedPreview ? `${safeSender}: ${cleanedPreview}` : safeSender;
+}
+
+function stripSenderPrefix(preview: string, senderName: string): string {
+  let cleaned = compactWhitespace(preview) || "";
+  const safeSender = compactWhitespace(senderName) || "";
+  if (!cleaned || !safeSender) {
+    return cleaned;
+  }
+
+  const prefixes = [`${safeSender}:`, `${safeSender} -`, `${safeSender} —`, `${safeSender} –`];
+  while (cleaned) {
+    const lowered = cleaned.toLocaleLowerCase();
+    const matchedPrefix = prefixes.find((prefix) => lowered.startsWith(prefix.toLocaleLowerCase()));
+    if (!matchedPrefix) {
+      break;
+    }
+    cleaned = cleaned.slice(matchedPrefix.length).trimStart().replace(/^[:—–-]\s*/, "");
+  }
+  return cleaned;
+}
+
+function compactWhitespace(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  return cleaned || null;
 }
 
 function ReplyPanelSkeleton() {

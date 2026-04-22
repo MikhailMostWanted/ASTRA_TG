@@ -8,9 +8,22 @@ export interface ChatWorkspaceState {
   seenMessageId: number | null;
   draftText: string | null;
   draftSourceMessageId: number | null;
+  draftFocusLabel: string | null;
+  draftScopeKey: string | null;
   draftUpdatedAt: string | null;
   sentSourceMessageId: number | null;
   sentAt: string | null;
+}
+
+export interface ReplyDraftScopeInput {
+  sourceMessageId: number | null;
+  focusLabel?: string | null;
+  sourceMessagePreview?: string | null;
+  replyOpportunityMode?: string | null;
+}
+
+export interface SaveReplyDraftInput extends ReplyDraftScopeInput {
+  text: string;
 }
 
 interface AppStoreState {
@@ -22,7 +35,7 @@ interface AppStoreState {
   setSelectedChatId: (chatId: number | null) => void;
   toggleFavoriteChat: (chatId: number) => void;
   markChatSeen: (chatId: number, messageId: number | null) => void;
-  saveReplyDraft: (chatId: number, text: string, sourceMessageId: number | null) => void;
+  saveReplyDraft: (chatId: number, draft: SaveReplyDraftInput) => void;
   markReplySent: (chatId: number, sourceMessageId: number | null) => void;
   clearReplyDraft: (chatId: number) => void;
   resetDesktopState: () => void;
@@ -34,12 +47,14 @@ type PersistedAppStoreState = Pick<
 >;
 
 export const APP_STORE_STORAGE_KEY = "astra-desktop-workspace";
-export const APP_STORE_VERSION = 2;
+export const APP_STORE_VERSION = 3;
 
 const emptyWorkspaceState: ChatWorkspaceState = {
   seenMessageId: null,
   draftText: null,
   draftSourceMessageId: null,
+  draftFocusLabel: null,
+  draftScopeKey: null,
   draftUpdatedAt: null,
   sentSourceMessageId: null,
   sentAt: null,
@@ -70,6 +85,8 @@ function sanitizeChatWorkspaceState(value: unknown): ChatWorkspaceState {
     seenMessageId: safeNumberOrNull(value.seenMessageId),
     draftText: safeStringOrNull(value.draftText),
     draftSourceMessageId: safeNumberOrNull(value.draftSourceMessageId),
+    draftFocusLabel: safeStringOrNull(value.draftFocusLabel),
+    draftScopeKey: safeStringOrNull(value.draftScopeKey),
     draftUpdatedAt: safeStringOrNull(value.draftUpdatedAt),
     sentSourceMessageId: safeNumberOrNull(value.sentSourceMessageId),
     sentAt: safeStringOrNull(value.sentAt),
@@ -115,6 +132,24 @@ export function sanitizePersistedAppState(value: unknown): PersistedAppStoreStat
   };
 }
 
+export function buildReplyDraftScopeKey(input: ReplyDraftScopeInput): string | null {
+  const sourceMessageId = input.sourceMessageId;
+  const focusLabel = safeStringOrNull(input.focusLabel)?.trim() || null;
+  const sourceMessagePreview = safeStringOrNull(input.sourceMessagePreview)?.trim() || null;
+  const replyOpportunityMode = safeStringOrNull(input.replyOpportunityMode)?.trim() || null;
+
+  if (sourceMessageId === null && !focusLabel && !sourceMessagePreview) {
+    return null;
+  }
+
+  return [
+    sourceMessageId ?? "none",
+    focusLabel ?? "none",
+    replyOpportunityMode ?? "none",
+    sourceMessagePreview ?? "none",
+  ].join("::");
+}
+
 export const useAppStore = create<AppStoreState>()(
   persist(
     (set) => ({
@@ -137,14 +172,16 @@ export const useAppStore = create<AppStoreState>()(
             },
           },
         })),
-      saveReplyDraft: (chatId, text, sourceMessageId) =>
+      saveReplyDraft: (chatId, draft) =>
         set((state) => ({
           chatWorkspace: {
             ...state.chatWorkspace,
             [chatId]: {
               ...getWorkspaceState(state, chatId),
-              draftText: text,
-              draftSourceMessageId: sourceMessageId,
+              draftText: draft.text,
+              draftSourceMessageId: draft.sourceMessageId,
+              draftFocusLabel: safeStringOrNull(draft.focusLabel),
+              draftScopeKey: buildReplyDraftScopeKey(draft),
               draftUpdatedAt: new Date().toISOString(),
             },
           },
@@ -168,6 +205,8 @@ export const useAppStore = create<AppStoreState>()(
               ...getWorkspaceState(state, chatId),
               draftText: null,
               draftSourceMessageId: null,
+              draftFocusLabel: null,
+              draftScopeKey: null,
               draftUpdatedAt: null,
             },
           },

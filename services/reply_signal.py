@@ -19,6 +19,20 @@ LOW_SIGNAL_MARKERS = {
     "хорошо.",
     "ясно",
 }
+REACTION_MARKERS = {
+    "класс",
+    "красиво",
+    "круто",
+    "логично",
+    "мило",
+    "норм",
+    "нормально",
+    "огонь",
+    "отлично",
+    "сильно",
+    "слаженно",
+    "супер",
+}
 QUESTION_WORDS = (
     "когда",
     "где",
@@ -134,6 +148,28 @@ def is_low_signal_text(text: str | None) -> bool:
     return len(tokens) <= 3 and all(token in LOW_SIGNAL_MARKERS for token in tokens)
 
 
+def is_reaction_text(text: str | None) -> bool:
+    normalized = normalize_reply_text(text)
+    if not normalized:
+        return False
+    if (
+        has_question_signal(normalized)
+        or has_request_signal(normalized)
+        or has_open_loop_signal(normalized)
+        or has_emotional_signal(normalized)
+    ):
+        return False
+
+    tokens = reply_tokens(normalized)
+    if not tokens or len(tokens) > 3:
+        return False
+    return all(token in REACTION_MARKERS or token in LOW_SIGNAL_MARKERS for token in tokens)
+
+
+def is_weak_reply_signal(text: str | None) -> bool:
+    return is_low_signal_text(text) or is_reaction_text(text)
+
+
 def has_question_signal(text: str | None) -> bool:
     normalized = normalize_reply_text(text)
     if not normalized:
@@ -186,6 +222,6 @@ def pick_focus_label(text: str | None) -> str:
         return "незакрытая тема"
     if has_emotional_signal(text):
         return "эмоциональный сигнал"
-    if is_low_signal_text(text):
+    if is_weak_reply_signal(text):
         return "низкий сигнал"
     return "продолжение темы"

@@ -9,7 +9,7 @@ from services.reply_signal import (
     has_open_loop_signal,
     has_question_signal,
     has_request_signal,
-    is_low_signal_text,
+    is_weak_reply_signal,
     reply_tokens,
 )
 
@@ -105,7 +105,7 @@ class ReplyClassifier:
         has_request = has_request_signal(normalized)
         has_open_loop_signal_text = has_open_loop_signal(normalized)
         has_tension = has_emotional_signal(normalized) or "напряж" in chat_state.casefold()
-        is_short_ack = is_low_signal_text(normalized)
+        is_short_ack = is_weak_reply_signal(normalized)
         has_small_talk = len(normalized) <= 48 and any(marker in lowered for marker in SMALL_TALK_MARKERS)
         needs_softness = has_tension or any(marker in lowered for marker in SOFT_REPLY_MARKERS)
         mentions_sensitive_pattern = "часто задаёт вопросы" in interaction_pattern.casefold()

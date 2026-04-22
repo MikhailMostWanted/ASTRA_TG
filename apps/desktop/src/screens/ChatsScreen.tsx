@@ -273,7 +273,16 @@ export function ChatsScreen() {
           if (selectedChatId === null) {
             return;
           }
-          saveReplyDraft(selectedChatId, text, sourceMessageId);
+          saveReplyDraft(selectedChatId, {
+            text,
+            sourceMessageId,
+            focusLabel: replyPayload?.suggestion?.focusLabel ?? null,
+            sourceMessagePreview:
+              replyPayload?.sourceMessagePreview
+              || replyPayload?.suggestion?.sourceMessagePreview
+              || null,
+            replyOpportunityMode: replyPayload?.suggestion?.replyOpportunityMode ?? null,
+          });
           toast.success("Черновик сохранён локально.");
         }}
         onMarkSent={(sourceMessageId) => {

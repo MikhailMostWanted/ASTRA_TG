@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildReplyDraftScopeKey,
   resetPersistedDesktopState,
   sanitizePersistedAppState,
   useAppStore,
@@ -18,6 +19,8 @@ describe("app-store persistence", () => {
             seenMessageId: "bad",
             draftText: "Черновик",
             draftSourceMessageId: 201,
+            draftFocusLabel: "вопрос",
+            draftScopeKey: "201::вопрос::direct_reply::Когда вернёшься?",
             draftUpdatedAt: "2026-04-22T10:00:00.000Z",
             sentSourceMessageId: null,
             sentAt: null,
@@ -34,6 +37,8 @@ describe("app-store persistence", () => {
           seenMessageId: null,
           draftText: "Черновик",
           draftSourceMessageId: 201,
+          draftFocusLabel: "вопрос",
+          draftScopeKey: "201::вопрос::direct_reply::Когда вернёшься?",
           draftUpdatedAt: "2026-04-22T10:00:00.000Z",
           sentSourceMessageId: null,
           sentAt: null,
@@ -52,6 +57,8 @@ describe("app-store persistence", () => {
           seenMessageId: 501,
           draftText: "Нужно ответить",
           draftSourceMessageId: 501,
+          draftFocusLabel: "вопрос",
+          draftScopeKey: "501::вопрос::direct_reply::Когда файл?",
           draftUpdatedAt: "2026-04-22T12:00:00.000Z",
           sentSourceMessageId: null,
           sentAt: null,
@@ -68,5 +75,46 @@ describe("app-store persistence", () => {
     expect(state.favoriteChatIds).toEqual([]);
     expect(state.chatWorkspace).toEqual({});
     expect(localStorage.getItem("astra-desktop-workspace")).toBeNull();
+  });
+
+  it("scopes drafts by chat and reply focus", () => {
+    useAppStore.getState().resetDesktopState();
+
+    const store = useAppStore.getState();
+    store.saveReplyDraft(88, {
+      text: "Черновик по бюджету",
+      sourceMessageId: 501,
+      focusLabel: "вопрос",
+      sourceMessagePreview: "Когда сможешь скинуть файл?",
+      replyOpportunityMode: "direct_reply",
+    });
+    store.saveReplyDraft(99, {
+      text: "Другой чат",
+      sourceMessageId: 701,
+      focusLabel: "просьба",
+      sourceMessagePreview: "Скинь, пожалуйста, итог.",
+      replyOpportunityMode: "follow_up_after_self",
+    });
+
+    const state = useAppStore.getState();
+    expect(state.chatWorkspace[88]?.draftText).toBe("Черновик по бюджету");
+    expect(state.chatWorkspace[99]?.draftText).toBe("Другой чат");
+    expect(state.chatWorkspace[88]?.draftScopeKey).toBe(
+      buildReplyDraftScopeKey({
+        sourceMessageId: 501,
+        focusLabel: "вопрос",
+        sourceMessagePreview: "Когда сможешь скинуть файл?",
+        replyOpportunityMode: "direct_reply",
+      }),
+    );
+    expect(state.chatWorkspace[99]?.draftScopeKey).toBe(
+      buildReplyDraftScopeKey({
+        sourceMessageId: 701,
+        focusLabel: "просьба",
+        sourceMessagePreview: "Скинь, пожалуйста, итог.",
+        replyOpportunityMode: "follow_up_after_self",
+      }),
+    );
+    expect(state.chatWorkspace[88]?.draftScopeKey).not.toBe(state.chatWorkspace[99]?.draftScopeKey);
   });
 });

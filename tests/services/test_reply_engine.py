@@ -632,6 +632,88 @@ def test_reply_context_prefers_latest_meaningful_trigger_over_low_signal_tail(
     asyncio.run(run_assertions())
 
 
+def test_reply_context_demotes_short_reaction_trigger_in_favor_of_real_question(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "reply-focus-short-reaction" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        reply_context_module = importlib.import_module("services.reply_context_builder")
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            chat_memory_repo = ChatMemoryRepository(session)
+            person_memory_repo = PersonMemoryRepository(session)
+
+            chat = await chats.upsert_chat(
+                telegram_chat_id=-100556,
+                title="Короткая реакция",
+                handle="short_reaction",
+                chat_type="group",
+                is_enabled=True,
+            )
+            await session.commit()
+
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=1,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc),
+                raw_text="Смотрю задачу.",
+                normalized_text="Смотрю задачу.",
+            )
+            meaningful = await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=2,
+                sender_id=11,
+                sender_name="Настенька💗",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 10, 2, tzinfo=timezone.utc),
+                raw_text="Когда сможешь прислать финальный файл?",
+                normalized_text="Когда сможешь прислать финальный файл?",
+            )
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=3,
+                sender_id=11,
+                sender_name="Настенька💗",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 10, 3, tzinfo=timezone.utc),
+                raw_text="Красиво слаженно",
+                normalized_text="Красиво слаженно",
+            )
+            await session.commit()
+
+            context = await reply_context_module.ReplyContextBuilder(
+                message_repository=messages,
+                chat_memory_repository=chat_memory_repo,
+                person_memory_repository=person_memory_repo,
+            ).build(chat)
+
+            assert not isinstance(context, reply_context_module.ReplyContextIssue)
+            assert context.target_message.id == meaningful.id
+            assert context.focus_label == "вопрос"
+            assert "слабый сигнал" in context.focus_reason.lower()
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
 def test_reply_llm_handler_falls_back_to_deterministic_reply_when_provider_unavailable(
     monkeypatch,
     tmp_path: Path,
@@ -1084,7 +1166,7 @@ def test_reply_engine_prefers_question_over_later_low_signal_message(
                 "Когда сможешь прислать файл по бюджету?"
             )
             assert focus_result.suggestion.focus_label == "вопрос"
-            assert "low-signal" in focus_result.suggestion.focus_reason
+            assert "слабый сигнал" in focus_result.suggestion.focus_reason.lower()
             assert focus_result.suggestion.strategy != "не отвечать"
 
             day_result = await service.build_reply("@day_question")
@@ -1099,6 +1181,131 @@ def test_reply_engine_prefers_question_over_later_low_signal_message(
             assert no_trigger_result.suggestion.focus_label == "низкий сигнал"
             assert no_trigger_result.suggestion.strategy == "не отвечать"
             assert no_trigger_result.suggestion.alternative_action is not None
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_reply_engine_relabels_generic_focus_when_strategy_is_no_reply(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "reply-focus-consistency" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        reply_engine_module = importlib.import_module("services.reply_engine")
+        reply_context_module = importlib.import_module("services.reply_context_builder")
+        reply_classifier_module = importlib.import_module("services.reply_classifier")
+        reply_strategy_module = importlib.import_module("services.reply_strategy")
+        style_adapter_module = importlib.import_module("services.style_adapter")
+        style_selector_module = importlib.import_module("services.style_selector")
+        persona_adapter_module = importlib.import_module("services.persona_adapter")
+        persona_core_module = importlib.import_module("services.persona_core")
+        persona_guardrails_module = importlib.import_module("services.persona_guardrails")
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            chat_memory_repo = ChatMemoryRepository(session)
+            person_memory_repo = PersonMemoryRepository(session)
+            settings_repo = SettingRepository(session)
+
+            chat = await chats.upsert_chat(
+                telegram_chat_id=-100323,
+                title="Консистентность reply",
+                handle="focus_consistency",
+                chat_type="group",
+                is_enabled=True,
+            )
+            await session.commit()
+
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=1,
+                sender_id=19,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 22, 11, 0, tzinfo=timezone.utc),
+                raw_text="По бюджету тогда идём по старой схеме.",
+                normalized_text="По бюджету тогда идём по старой схеме.",
+            )
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=2,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 22, 11, 2, tzinfo=timezone.utc),
+                raw_text="Готово, уже добавил это в таблицу.",
+                normalized_text="Готово, уже добавил это в таблицу.",
+            )
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=3,
+                sender_id=19,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 22, 11, 3, tzinfo=timezone.utc),
+                raw_text="ок",
+                normalized_text="ок",
+            )
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=4,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 22, 11, 4, tzinfo=timezone.utc),
+                raw_text="Готово, уже добавил это в таблицу.",
+                normalized_text="Готово, уже добавил это в таблицу.",
+            )
+            await session.commit()
+
+            service = reply_engine_module.ReplyEngineService(
+                chat_repository=chats,
+                message_repository=messages,
+                chat_memory_repository=chat_memory_repo,
+                person_memory_repository=person_memory_repo,
+                context_builder=reply_context_module.ReplyContextBuilder(
+                    message_repository=messages,
+                    chat_memory_repository=chat_memory_repo,
+                    person_memory_repository=person_memory_repo,
+                ),
+                classifier=reply_classifier_module.ReplyClassifier(),
+                strategy_resolver=reply_strategy_module.ReplyStrategyResolver(),
+                style_selector=style_selector_module.StyleSelectorService(
+                    style_profile_repository=StyleProfileRepository(session),
+                    chat_style_override_repository=ChatStyleOverrideRepository(session),
+                    chat_memory_repository=chat_memory_repo,
+                    person_memory_repository=person_memory_repo,
+                ),
+                style_adapter=style_adapter_module.StyleAdapter(),
+                persona_core_service=persona_core_module.PersonaCoreService(settings_repo),
+                persona_adapter=persona_adapter_module.PersonaAdapter(),
+                persona_guardrails=persona_guardrails_module.PersonaGuardrails(),
+            )
+
+            result = await service.build_reply("@focus_consistency")
+
+            assert result.kind == "suggestion"
+            assert result.suggestion is not None
+            assert result.suggestion.strategy == "не отвечать"
+            assert result.suggestion.focus_label == "слабый триггер"
+            assert "не видно явного вопроса" in result.suggestion.focus_reason.lower()
+            assert "явного незакрытого повода" in result.suggestion.reason_short.lower()
 
         await runtime.dispose()
 

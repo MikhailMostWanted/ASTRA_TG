@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Iterable
 
 from services.persona_core import PersonaState
@@ -24,6 +24,15 @@ BOT_PATTERNS = (
     "обращайся если будут вопросы",
     "я всегда готов помочь",
 )
+GENERIC_REPLY_WORDS = {
+    "давай",
+    "если",
+    "потом",
+    "сейчас",
+    "просто",
+    "тогда",
+    "отдельно",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,18 +88,33 @@ class ReplyRefinementGuardrails:
         flags: list[str] = []
         if _has_forbidden_factual_novelty(normalized, allowed_context, baseline):
             flags.append("новые_факты")
-        if _too_far_from_baseline(normalized, baseline):
+        if _too_far_from_baseline(normalized, baseline, allowed_context):
             flags.append("сильное_отклонение_от_baseline")
 
+        guardrails = persona_state.guardrails
+        if guardrails is not None:
+            guardrails = _build_reply_guardrail_config(
+                guardrails,
+                baseline_messages=baseline,
+                allowed_context=allowed_context,
+            )
         persona_decision = self.persona_guardrails.apply(
             proposed_messages=normalized,
             fallback_messages=baseline,
             profile=profile,
             persona_core=persona_state.core,
-            guardrails=persona_state.guardrails,
+            guardrails=guardrails,
         )
         combined_flags = tuple(dict.fromkeys([*flags, *persona_decision.flags]))
-        hard_flags = {"новые_факты", "сильное_отклонение_от_baseline"}
+        hard_flags = {
+            "новые_факты",
+            "сильное_отклонение_от_baseline",
+            "слишком_литературно",
+            "слишком_ботски",
+            "слишком_грубо",
+            "анти_паттерн",
+            "слишком_длинно",
+        }
         if persona_decision.used_fallback or any(flag in hard_flags for flag in combined_flags):
             return ReplyRefinementDecision(
                 messages=baseline,
@@ -257,13 +281,19 @@ def _normalize_text(value: object) -> str:
 def _too_far_from_baseline(
     candidate_messages: tuple[str, ...],
     baseline_messages: tuple[str, ...],
+    allowed_context: tuple[str, ...],
 ) -> bool:
     baseline_words = _meaningful_words("\n".join(baseline_messages))
     candidate_words = _meaningful_words("\n".join(candidate_messages))
     if not baseline_words or not candidate_words:
         return False
-    overlap = len(baseline_words & candidate_words) / max(1, len(candidate_words))
-    return overlap < 0.3
+    if len(baseline_words) < 2:
+        return False
+
+    baseline_overlap = len(baseline_words & candidate_words) / max(1, len(candidate_words))
+    context_words = _meaningful_words("\n".join(allowed_context))
+    context_overlap = len(context_words & candidate_words) / max(1, len(candidate_words))
+    return baseline_overlap < 0.2 and context_overlap < 0.24
 
 
 def _has_forbidden_factual_novelty(
@@ -292,4 +322,40 @@ def _meaningful_words(text: str) -> set[str]:
         chunk.casefold().strip(".,!?;:-()[]{}\"'")
         for chunk in text.split()
     }
-    return {word for word in words if len(word) >= 4}
+    return {
+        word
+        for word in words
+        if len(word) >= 4 and word not in GENERIC_REPLY_WORDS
+    }
+
+
+def _build_reply_guardrail_config(
+    guardrails,
+    *,
+    baseline_messages: tuple[str, ...],
+    allowed_context: tuple[str, ...],
+):
+    baseline_lengths = [len(message) for message in baseline_messages if message]
+    context_lengths = [len(item) for item in allowed_context if item]
+    max_context_length = max(context_lengths, default=0)
+    average_baseline_length = (
+        sum(baseline_lengths) / len(baseline_lengths)
+        if baseline_lengths
+        else 0
+    )
+    max_baseline_length = max(baseline_lengths, default=0)
+
+    return replace(
+        guardrails,
+        max_messages=max(guardrails.max_messages, len(baseline_messages) + 1),
+        max_message_length=max(
+            guardrails.max_message_length + 28,
+            max_baseline_length + 32,
+            min(180, max_context_length + 20),
+        ),
+        max_average_message_length=max(
+            guardrails.max_average_message_length + 14,
+            int(average_baseline_length + 24),
+            min(120, int(max_context_length * 0.7)),
+        ),
+    )
