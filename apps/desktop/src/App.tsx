@@ -219,6 +219,7 @@ function AppContent() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
           transition={{ duration: 0.22, ease: "easeOut" }}
+          className="h-full min-h-0"
         >
           <Suspense fallback={<LoadingState />}>
             {activeScreen === "dashboard" ? <DashboardScreen /> : null}

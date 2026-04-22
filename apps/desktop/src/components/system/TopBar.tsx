@@ -24,7 +24,7 @@ export function TopBar({
   menuTrigger,
 }: TopBarProps) {
   return (
-    <header className="sticky top-0 z-20 flex flex-wrap items-start justify-between gap-4 border-b border-white/6 bg-[rgba(4,8,17,0.72)] px-4 py-4 backdrop-blur-2xl sm:px-6">
+    <header className="z-20 flex shrink-0 flex-wrap items-start justify-between gap-4 border-b border-white/6 bg-[rgba(4,8,17,0.92)] px-4 py-4 backdrop-blur-2xl sm:px-5">
       <div className="flex min-w-0 items-start gap-3">
         {menuTrigger}
         <div className="flex min-w-0 flex-col gap-1">
@@ -52,7 +52,7 @@ export function TopBar({
             <TooltipContent side="bottom">{repositoryRoot}</TooltipContent>
           </Tooltip>
         ) : null}
-        <Button variant="outline" onClick={onRefreshAll}>
+        <Button variant="outline" className="border-white/8 bg-black/18 text-slate-100" onClick={onRefreshAll}>
           <RefreshCw data-icon="inline-start" />
           Обновить всё
         </Button>

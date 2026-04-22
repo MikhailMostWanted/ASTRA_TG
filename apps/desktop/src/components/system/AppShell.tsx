@@ -42,11 +42,11 @@ export function AppShell({
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
-    <div className="relative min-h-screen overflow-hidden px-3 py-3 sm:px-4 sm:py-4">
+    <div className="relative h-dvh overflow-hidden px-3 py-3 sm:px-4 sm:py-4">
       <div className="pointer-events-none absolute inset-x-16 top-0 h-52 rounded-full bg-cyan-300/8 blur-3xl" />
       <div className="pointer-events-none absolute right-0 top-1/3 h-64 w-64 rounded-full bg-amber-200/6 blur-3xl" />
 
-      <div className="relative mx-auto grid min-h-[calc(100vh-1.5rem)] max-w-[1760px] grid-cols-1 gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
+      <div className="relative mx-auto grid h-full max-w-[1760px] grid-cols-1 gap-4 xl:grid-cols-[292px_minmax(0,1fr)]">
         {!isMobile ? (
           <Sidebar
             items={navigationItems}
@@ -57,7 +57,7 @@ export function AppShell({
           />
         ) : null}
 
-        <div className="overflow-hidden rounded-[32px] border border-white/8 bg-[rgba(5,10,19,0.72)] shadow-[0_35px_120px_rgba(2,6,17,0.65)] backdrop-blur-2xl">
+        <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-[32px] border border-white/8 bg-[rgba(5,10,19,0.78)] shadow-[0_35px_120px_rgba(2,6,17,0.65)] backdrop-blur-2xl">
           <TopBar
             title={title}
             description={description}
@@ -92,7 +92,7 @@ export function AppShell({
               ) : null
             }
           />
-          <main className="min-h-[calc(100vh-10rem)] px-4 py-4 sm:px-6 sm:py-5">{children}</main>
+          <main className="min-h-0 overflow-hidden px-4 pb-4 sm:px-5 sm:pb-5">{children}</main>
         </div>
       </div>
     </div>

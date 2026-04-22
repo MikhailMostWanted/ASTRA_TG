@@ -74,7 +74,7 @@ class FullAccessAuthService:
                     reason_parts.append("Experimental full-access готов к ручному чтению и синхронизации.")
                 elif pending_state is not None:
                     reason_parts.append(
-                        f"Код уже запрошен. Заверши вход локально через {LOCAL_LOGIN_COMMAND}."
+                        "Код уже запрошен. Заверши вход в Astra Desktop на экране Full-access."
                     )
                 elif session_exists:
                     reason_parts.append("Локальная сессия найдена, но пользователь не авторизован.")
@@ -82,7 +82,8 @@ class FullAccessAuthService:
                     reason_parts.append("Нужно задать FULLACCESS_PHONE, чтобы запросить код входа.")
                 else:
                     reason_parts.append(
-                        f"Код можно запросить через /fullaccess_login, а завершить вход локально через {LOCAL_LOGIN_COMMAND}."
+                        "Код можно запросить и завершить прямо в Astra Desktop. "
+                        f"CLI остаётся резервным fallback: {LOCAL_LOGIN_COMMAND}."
                     )
 
         return FullAccessStatusReport(
@@ -142,13 +143,14 @@ class FullAccessAuthService:
     ) -> FullAccessLoginResult:
         normalized_code = code.strip()
         if not normalized_code:
-            raise ValueError("Код Telegram пустой. Запусти локальный вход и введи код в консоли.")
+            raise ValueError("Код Telegram пустой. Запроси код и введи его на экране Full-access.")
 
         config = await self._require_login_prerequisites()
         pending_state = await self._load_pending_auth()
         if pending_state is None:
             raise ValueError(
-                f"Нет активного запроса кода. Сначала запроси его через /fullaccess_login или {LOCAL_LOGIN_COMMAND}."
+                "Нет активного запроса кода. Сначала нажми «Запросить код» в Astra Desktop "
+                f"или используй fallback {LOCAL_LOGIN_COMMAND}."
             )
 
         client = self.client_factory(config)

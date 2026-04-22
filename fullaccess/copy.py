@@ -6,7 +6,7 @@ LOCAL_LOGIN_COMMAND = "astratg fullaccess login"
 
 def local_login_instruction_lines() -> tuple[str, ...]:
     return (
-        "Открой терминал.",
-        f"Запусти: {LOCAL_LOGIN_COMMAND}",
-        "После входа вернись в бота и нажми «Обновить».",
+        "Открой Astra Desktop и перейди во вкладку «Full-access».",
+        "Запроси код прямо в интерфейсе и введи его там же.",
+        f"CLI остаётся только резервным fallback: {LOCAL_LOGIN_COMMAND}.",
     )

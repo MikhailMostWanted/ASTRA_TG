@@ -15,6 +15,7 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { useAppStore } from "@/stores/app-store";
@@ -147,7 +148,8 @@ export function DashboardScreen() {
   };
 
   return (
-    <div className="flex flex-col gap-5">
+    <ScrollArea className="h-full min-h-0">
+      <div className="flex flex-col gap-5 pr-2">
       <SectionCard
         title="Операционный обзор"
         description="Здесь видно, в каком состоянии Astra, что уже готово и какой следующий полезный шаг лучше сделать."
@@ -314,6 +316,7 @@ export function DashboardScreen() {
           ))}
         </div>
       </SectionCard>
-    </div>
+      </div>
+    </ScrollArea>
   );
 }

@@ -10,6 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -98,7 +99,8 @@ export function LogsScreen() {
   const ops = opsQuery.data;
 
   return (
-    <div className="flex flex-col gap-5">
+    <ScrollArea className="h-full min-h-0">
+      <div className="flex flex-col gap-5 pr-2">
       <SectionCard
         title="Ops panel"
         description="Сервисные операции собраны в нормальный интерфейс: без терминальной помойки, но с быстрым доступом к деталям."
@@ -258,6 +260,7 @@ export function LogsScreen() {
           )}
         </div>
       </SectionCard>
-    </div>
+      </div>
+    </ScrollArea>
   );
 }

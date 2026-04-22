@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
 import { formatDateTime, stringifyUnknown } from "@/lib/format";
 
@@ -52,7 +53,8 @@ export function MemoryScreen() {
   const memory = memoryQuery.data;
 
   return (
-    <div className="flex flex-col gap-5">
+    <ScrollArea className="h-full min-h-0">
+      <div className="flex flex-col gap-5 pr-2">
       <SectionCard
         title="Memory layer"
         description="Память собирает короткие рабочие карты по чатам и людям, чтобы reply не опирался только на последние сообщения."
@@ -130,6 +132,7 @@ export function MemoryScreen() {
           ))}
         </div>
       )}
-    </div>
+      </div>
+    </ScrollArea>
   );
 }

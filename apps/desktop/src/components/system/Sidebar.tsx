@@ -3,6 +3,7 @@ import { Bot, Sparkles } from "lucide-react";
 import { motion } from "framer-motion";
 
 import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { formatDateTime } from "@/lib/format";
 import type { HealthPayload, ScreenId } from "@/lib/types";
@@ -27,7 +28,7 @@ export function Sidebar({
   onClose,
 }: SidebarProps) {
   return (
-    <aside className="flex h-full w-full flex-col rounded-[30px] border border-white/8 bg-black/20 px-4 py-4 backdrop-blur-2xl">
+    <aside className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[30px] border border-white/8 bg-black/24 px-4 py-4 backdrop-blur-2xl">
       <div className="flex items-center justify-between gap-3 px-2">
         <div className="flex items-center gap-3">
           <div className="flex size-11 items-center justify-center rounded-[18px] bg-gradient-to-br from-cyan-300/30 via-cyan-400/12 to-amber-200/15 text-cyan-100 shadow-[0_0_40px_rgba(34,211,238,0.08)]">
@@ -52,47 +53,51 @@ export function Sidebar({
 
       <Separator className="my-4 bg-white/8" />
 
-      <nav className="flex flex-1 flex-col gap-1.5">
-        {items.map((item) => {
-          const isActive = item.id === activeScreen;
+      <ScrollArea className="min-h-0 flex-1">
+        <nav className="flex flex-col gap-1.5 pr-2">
+          {items.map((item) => {
+            const isActive = item.id === activeScreen;
 
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className={cn(
-                "group relative overflow-hidden rounded-[22px] px-3 py-3 text-left transition-colors",
-                isActive ? "text-white" : "text-slate-300 hover:bg-white/[0.045] hover:text-white",
-              )}
-              onClick={() => {
-                startTransition(() => onSelectScreen(item.id));
-                onClose?.();
-              }}
-            >
-              {isActive ? (
-                <motion.div
-                  layoutId="astra-sidebar-active"
-                  className="absolute inset-0 rounded-[22px] border border-cyan-300/10 bg-gradient-to-br from-cyan-300/12 via-white/[0.045] to-white/[0.02] shadow-[0_10px_35px_rgba(17,24,39,0.25)]"
-                />
-              ) : null}
-              <div className="relative flex items-start gap-3">
-                <div
-                  className={cn(
-                    "mt-0.5 flex size-10 items-center justify-center rounded-2xl border border-white/8 bg-white/[0.03]",
-                    isActive && "border-cyan-300/12 bg-cyan-400/10 text-cyan-100",
-                  )}
-                >
-                  <item.icon />
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className={cn(
+                  "group relative overflow-hidden rounded-[22px] px-3 py-3 text-left transition-all active:translate-y-px",
+                  isActive
+                    ? "text-white"
+                    : "text-slate-300 hover:bg-white/[0.045] hover:text-white active:bg-white/[0.08]",
+                )}
+                onClick={() => {
+                  startTransition(() => onSelectScreen(item.id));
+                  onClose?.();
+                }}
+              >
+                {isActive ? (
+                  <motion.div
+                    layoutId="astra-sidebar-active"
+                    className="absolute inset-0 rounded-[22px] border border-cyan-300/10 bg-gradient-to-br from-cyan-300/12 via-white/[0.045] to-white/[0.02] shadow-[0_10px_35px_rgba(17,24,39,0.25)]"
+                  />
+                ) : null}
+                <div className="relative flex items-start gap-3">
+                  <div
+                    className={cn(
+                      "mt-0.5 flex size-10 items-center justify-center rounded-2xl border border-white/8 bg-white/[0.03]",
+                      isActive && "border-cyan-300/12 bg-cyan-400/10 text-cyan-100",
+                    )}
+                  >
+                    <item.icon />
+                  </div>
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <div className="text-sm font-medium tracking-tight">{item.label}</div>
+                    <div className="text-xs leading-5 text-slate-400">{item.description}</div>
+                  </div>
                 </div>
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <div className="text-sm font-medium tracking-tight">{item.label}</div>
-                  <div className="text-xs leading-5 text-slate-400">{item.description}</div>
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </nav>
+              </button>
+            );
+          })}
+        </nav>
+      </ScrollArea>
 
       <Separator className="my-4 bg-white/8" />
 

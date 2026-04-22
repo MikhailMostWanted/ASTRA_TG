@@ -57,6 +57,7 @@ class FakeFullAccessClient:
         self.history = history or {}
         self.requested_login_phones: list[str] = []
         self.completed_codes: list[str] = []
+        self.history_requests: list[tuple[str, int, int | None]] = []
         self.logged_out = False
 
     async def is_authorized(self) -> bool:
@@ -91,9 +92,16 @@ class FakeFullAccessClient:
         reference: str,
         *,
         limit: int,
+        min_message_id: int | None = None,
     ) -> tuple[FullAccessChatSummary, list[FullAccessRemoteMessage]]:
         chat, messages = self.history[reference]
-        return chat, messages[:limit]
+        self.history_requests.append((reference, limit, min_message_id))
+        filtered_messages = [
+            message
+            for message in messages
+            if min_message_id is None or message.telegram_message_id > min_message_id
+        ]
+        return chat, filtered_messages[:limit]
 
 
 def test_fullaccess_status_command_reports_disabled_mode(monkeypatch, tmp_path: Path) -> None:
@@ -190,7 +198,7 @@ def test_fullaccess_status_forces_readonly_barrier(monkeypatch, tmp_path: Path) 
     asyncio.run(run_assertions())
 
 
-def test_fullaccess_sync_writes_into_existing_message_store_and_deduplicates(
+def test_fullaccess_sync_uses_recent_cursor_and_appends_new_messages(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -263,6 +271,21 @@ def test_fullaccess_sync_writes_into_existing_message_store_and_deduplicates(
                 entities_json=None,
                 source_type="message",
             ),
+            FullAccessRemoteMessage(
+                telegram_message_id=13,
+                sender_id=101,
+                sender_name="Анна",
+                direction="inbound",
+                sent_at=datetime(2026, 4, 21, 8, 12, tzinfo=timezone.utc),
+                raw_text="Супер, тогда жду сегодня до 19:00.",
+                normalized_text="Супер, тогда жду сегодня до 19:00.",
+                reply_to_telegram_message_id=12,
+                forward_info=None,
+                has_media=False,
+                media_type=None,
+                entities_json=None,
+                source_type="message",
+            ),
         ]
 
         fake_client = FakeFullAccessClient(
@@ -286,6 +309,7 @@ def test_fullaccess_sync_writes_into_existing_message_store_and_deduplicates(
             assert first_result.updated_count == 0
             assert first_result.skipped_count == 0
             assert first_result.chat_created is True
+            assert fake_client.history_requests[0] == ("@product_team", 10, None)
 
             stored_chat = await ChatRepository(session).get_by_telegram_chat_id(remote_chat.telegram_chat_id)
             assert stored_chat is not None
@@ -304,17 +328,18 @@ def test_fullaccess_sync_writes_into_existing_message_store_and_deduplicates(
             second_result = await service.sync_chat("@product_team")
             await session.commit()
 
-            assert second_result.scanned_count == 2
-            assert second_result.created_count == 0
-            assert second_result.updated_count == 1
-            assert second_result.skipped_count == 1
+            assert second_result.scanned_count == 1
+            assert second_result.created_count == 1
+            assert second_result.updated_count == 0
+            assert second_result.skipped_count == 0
+            assert fake_client.history_requests[1] == ("@product_team", 10, 12)
 
             stored_messages = await MessageRepository(session).get_messages_for_chat(
                 chat_id=stored_chat.id,
                 ascending=True,
             )
-            assert len(stored_messages) == 2
-            assert stored_messages[-1].raw_text == "К вечеру добью и скину итоговый файл."
+            assert [message.telegram_message_id for message in stored_messages] == [11, 12, 13]
+            assert stored_messages[-1].raw_text == "Супер, тогда жду сегодня до 19:00."
 
         await runtime.dispose()
 

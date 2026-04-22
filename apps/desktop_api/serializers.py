@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from apps.cli.processes import ProcessState
+from fullaccess.cache import avatar_base_path, find_cached_variant, media_preview_base_path
 from fullaccess.models import FullAccessChatSummary, FullAccessStatusReport, FullAccessSyncResult
 from models import Chat, ChatMemory, Digest, DigestItem, Message, Reminder, Task
 from services.reply_models import ReplyResult
@@ -64,6 +66,7 @@ def serialize_chat(
     last_message: Message | None,
     memory: ChatMemory | None = None,
     is_digest_target: bool = False,
+    session_file: Path | None = None,
 ) -> dict[str, Any]:
     last_source_adapter = last_message.source_adapter if last_message is not None else None
     if chat.category == "fullaccess" or last_source_adapter == "fullaccess":
@@ -90,6 +93,10 @@ def serialize_chat(
         "isDigestTarget": is_digest_target,
         "messageCount": message_count,
         "lastMessageAt": serialize_datetime(last_message.sent_at if last_message is not None else None),
+        "lastMessageId": last_message.id if last_message is not None else None,
+        "lastTelegramMessageId": (
+            last_message.telegram_message_id if last_message is not None else None
+        ),
         "lastMessagePreview": message_preview(
             last_message.raw_text if last_message is not None else None,
             fallback="Сообщений пока нет",
@@ -97,6 +104,7 @@ def serialize_chat(
         "lastDirection": last_message.direction if last_message is not None else None,
         "lastSourceAdapter": last_source_adapter,
         "lastSenderName": last_message.sender_name if last_message is not None else None,
+        "avatarUrl": _build_avatar_url(session_file, chat.telegram_chat_id),
         "syncStatus": sync_status,
         "memory": (
             {
@@ -113,7 +121,12 @@ def serialize_chat(
     }
 
 
-def serialize_message(message: Message) -> dict[str, Any]:
+def serialize_message(
+    message: Message,
+    *,
+    session_file: Path | None = None,
+    telegram_chat_id: int | None = None,
+) -> dict[str, Any]:
     return {
         "id": message.id,
         "telegramMessageId": message.telegram_message_id,
@@ -129,6 +142,11 @@ def serialize_message(message: Message) -> dict[str, Any]:
         "replyToMessageId": message.reply_to_message_id,
         "hasMedia": message.has_media,
         "mediaType": message.media_type,
+        "mediaPreviewUrl": _build_media_preview_url(
+            session_file,
+            telegram_chat_id=telegram_chat_id,
+            telegram_message_id=message.telegram_message_id,
+        ),
         "forwardInfo": message.forward_info,
         "entities": message.entities_json,
         "preview": message_preview(message.raw_text),
@@ -204,19 +222,28 @@ def serialize_fullaccess_status(report: FullAccessStatusReport) -> dict[str, Any
     }
 
 
-def serialize_fullaccess_chat(chat: FullAccessChatSummary) -> dict[str, Any]:
+def serialize_fullaccess_chat(
+    chat: FullAccessChatSummary,
+    *,
+    session_file: Path | None = None,
+) -> dict[str, Any]:
     return {
         "telegramChatId": chat.telegram_chat_id,
         "title": chat.title,
         "chatType": chat.chat_type,
         "username": chat.username,
         "reference": chat.reference,
+        "avatarUrl": _build_avatar_url(session_file, chat.telegram_chat_id),
     }
 
 
-def serialize_fullaccess_sync_result(result: FullAccessSyncResult) -> dict[str, Any]:
+def serialize_fullaccess_sync_result(
+    result: FullAccessSyncResult,
+    *,
+    session_file: Path | None = None,
+) -> dict[str, Any]:
     return {
-        "chat": serialize_fullaccess_chat(result.chat),
+        "chat": serialize_fullaccess_chat(result.chat, session_file=session_file),
         "localChatId": result.local_chat_id,
         "chatCreated": result.chat_created,
         "scannedCount": result.scanned_count,
@@ -288,3 +315,39 @@ def serialize_reminder(reminder: Reminder) -> dict[str, Any]:
         "createdAt": serialize_datetime(reminder.created_at),
         "updatedAt": serialize_datetime(reminder.updated_at),
     }
+
+
+def _build_avatar_url(session_file: Path | None, telegram_chat_id: int) -> str | None:
+    if session_file is None or telegram_chat_id == 0:
+        return None
+
+    cached = find_cached_variant(avatar_base_path(session_file, telegram_chat_id))
+    if cached is None:
+        return None
+    version = int(cached.stat().st_mtime)
+    return f"/api/media/avatars/{telegram_chat_id}?v={version}"
+
+
+def _build_media_preview_url(
+    session_file: Path | None,
+    *,
+    telegram_chat_id: int | None,
+    telegram_message_id: int | None,
+) -> str | None:
+    if session_file is None or telegram_chat_id is None or telegram_message_id is None:
+        return None
+
+    cached = find_cached_variant(
+        media_preview_base_path(
+            session_file,
+            telegram_chat_id=telegram_chat_id,
+            telegram_message_id=telegram_message_id,
+        )
+    )
+    if cached is None:
+        return None
+    version = int(cached.stat().st_mtime)
+    return (
+        f"/api/media/messages/{telegram_chat_id}/{telegram_message_id}"
+        f"?v={version}"
+    )

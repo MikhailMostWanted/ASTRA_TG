@@ -6,7 +6,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from apps.desktop_api.app import create_app
+from apps.desktop_api.bridge import DesktopBridge
 from config.settings import Settings
+from fullaccess.models import FullAccessLoginResult, FullAccessLogoutResult, FullAccessStatusReport
 from storage.database import bootstrap_database, build_database_runtime
 from storage.repositories import (
     ChatMemoryRepository,
@@ -138,6 +140,107 @@ def test_desktop_api_lifecycle_writes_and_removes_pid_file(monkeypatch, tmp_path
             assert pid_path.read_text(encoding="utf-8").strip() == str(os.getpid())
 
         assert pid_path.exists() is False
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_desktop_api_fullaccess_auth_flow_endpoints(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, _ = await _seed_runtime(monkeypatch, tmp_path)
+
+        class FakeFullAccessAuthService:
+            def __init__(self) -> None:
+                self.completed_payloads: list[tuple[str, str | None]] = []
+                self.request_code_calls = 0
+                self.logout_calls = 0
+
+            async def build_status_report(self) -> FullAccessStatusReport:
+                return FullAccessStatusReport(
+                    enabled=True,
+                    api_credentials_configured=True,
+                    phone_configured=True,
+                    session_path=tmp_path / "fullaccess.session",
+                    session_exists=True,
+                    authorized=False,
+                    telethon_available=True,
+                    requested_readonly=True,
+                    effective_readonly=True,
+                    sync_limit=50,
+                    pending_login=True,
+                    synced_chat_count=3,
+                    synced_message_count=48,
+                    ready_for_manual_sync=False,
+                    reason="Код уже запрошен. Заверши вход в Astra Desktop на экране Full-access.",
+                )
+
+            async def begin_login(self) -> FullAccessLoginResult:
+                self.request_code_calls += 1
+                return FullAccessLoginResult(
+                    kind="code_requested",
+                    phone="+79990000000",
+                    instructions=("Открой Full-access в Astra Desktop.", "Введи код здесь."),
+                )
+
+            async def complete_login(self, code: str, *, password_callback=None) -> FullAccessLoginResult:
+                password = password_callback() if password_callback is not None else None
+                self.completed_payloads.append((code, password or None))
+                return FullAccessLoginResult(
+                    kind="authorized",
+                    phone="+79990000000",
+                )
+
+            async def logout(self) -> FullAccessLogoutResult:
+                self.logout_calls += 1
+                return FullAccessLogoutResult(
+                    session_removed=True,
+                    pending_auth_cleared=True,
+                )
+
+        fake_service = FakeFullAccessAuthService()
+        monkeypatch.setattr(
+            DesktopBridge,
+            "_build_fullaccess_auth_service",
+            lambda self, session: fake_service,
+        )
+
+        app = create_app(settings, runtime=runtime)
+
+        with TestClient(app) as client:
+            overview = client.get("/api/fullaccess")
+            assert overview.status_code == 200
+            overview_payload = overview.json()
+            assert overview_payload["status"]["pendingLogin"] is True
+            assert overview_payload["status"]["reason"].startswith("Код уже запрошен")
+
+            request_code = client.post("/api/fullaccess/request-code")
+            assert request_code.status_code == 200
+            request_payload = request_code.json()
+            assert request_payload["kind"] == "code_requested"
+            assert request_payload["phone"] == "+79990000000"
+
+            login = client.post(
+                "/api/fullaccess/login",
+                json={"code": "24680", "password": "secret-2fa"},
+            )
+            assert login.status_code == 200
+            login_payload = login.json()
+            assert login_payload["kind"] == "authorized"
+            assert login_payload["phone"] == "+79990000000"
+
+            logout = client.post("/api/fullaccess/logout")
+            assert logout.status_code == 200
+            assert logout.json() == {
+                "sessionRemoved": True,
+                "pendingAuthCleared": True,
+            }
+
+        assert fake_service.request_code_calls == 1
+        assert fake_service.completed_payloads == [("24680", "secret-2fa")]
+        assert fake_service.logout_calls == 1
         await runtime.dispose()
 
     asyncio.run(run_assertions())

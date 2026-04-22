@@ -358,6 +358,16 @@ class MessageRepository:
         result = await self.session.execute(select(func.max(Message.sent_at)))
         return result.scalar_one_or_none()
 
+    async def get_latest_telegram_message_id(self, *, chat_id: int) -> int | None:
+        result = await self.session.execute(
+            select(Message.telegram_message_id)
+            .where(Message.chat_id == chat_id)
+            .order_by(desc(Message.telegram_message_id), desc(Message.id))
+            .limit(1)
+        )
+        value = result.scalar_one_or_none()
+        return int(value) if value is not None else None
+
     async def get_messages_for_chat(
         self,
         *,

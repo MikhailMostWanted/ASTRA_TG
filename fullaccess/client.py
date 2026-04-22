@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
+from fullaccess.cache import (
+    avatar_base_path,
+    clear_cached_variants,
+    find_cached_variant,
+    media_preview_base_path,
+)
 from fullaccess.copy import LOCAL_LOGIN_COMMAND
 from fullaccess.models import FullAccessChatSummary, FullAccessConfig, FullAccessRemoteMessage
 from services.message_normalizer import normalize_text
@@ -50,6 +56,7 @@ class FullAccessClientProtocol(Protocol):
         reference: str,
         *,
         limit: int,
+        min_message_id: int | None = None,
     ) -> tuple[FullAccessChatSummary, list[FullAccessRemoteMessage]]: ...
 
 
@@ -87,10 +94,12 @@ class _TelethonClientProtocol(Protocol):
         entity: object,
         *,
         limit: int,
-        reverse: bool = False,
+        min_id: int | None = None,
     ) -> AsyncIterator[object]: ...
 
     async def get_entity(self, target: int | str) -> object: ...
+    async def download_profile_photo(self, entity: object, file: str | None = None) -> object: ...
+    async def download_media(self, message: object, file: str | None = None) -> object: ...
 
     async def connect(self) -> object: ...
 
@@ -174,7 +183,14 @@ class TelethonFullAccessClient:
         async with self._open_client() as client:
             dialogs: list[FullAccessChatSummary] = []
             async for dialog in client.iter_dialogs(limit=limit):
-                dialogs.append(_build_chat_summary(dialog.entity))
+                summary = _build_chat_summary(dialog.entity)
+                await _cache_profile_photo(
+                    client,
+                    entity=dialog.entity,
+                    config=self.config,
+                    telegram_chat_id=summary.telegram_chat_id,
+                )
+                dialogs.append(summary)
             return dialogs
 
     async def fetch_history(
@@ -182,13 +198,32 @@ class TelethonFullAccessClient:
         reference: str,
         *,
         limit: int,
+        min_message_id: int | None = None,
     ) -> tuple[FullAccessChatSummary, list[FullAccessRemoteMessage]]:
         async with self._open_client() as client:
             entity = await _resolve_entity(client, reference)
             chat = _build_chat_summary(entity)
+            await _cache_profile_photo(
+                client,
+                entity=entity,
+                config=self.config,
+                telegram_chat_id=chat.telegram_chat_id,
+            )
             messages: list[FullAccessRemoteMessage] = []
-            async for message in client.iter_messages(entity, limit=limit, reverse=True):
-                messages.append(_build_remote_message(message))
+            iter_kwargs: dict[str, int] = {"limit": limit}
+            if min_message_id is not None:
+                iter_kwargs["min_id"] = min_message_id
+            async for message in client.iter_messages(entity, **iter_kwargs):
+                remote_message = _build_remote_message(message)
+                await _cache_message_preview(
+                    client,
+                    message=message,
+                    config=self.config,
+                    telegram_chat_id=chat.telegram_chat_id,
+                    remote_message=remote_message,
+                )
+                messages.append(remote_message)
+            messages.reverse()
             return chat, messages
 
     @asynccontextmanager
@@ -284,6 +319,57 @@ def _build_remote_message(message: object) -> FullAccessRemoteMessage:
         entities_json=entities_payload,
         source_type="channel_post" if bool(getattr(message, "post", False)) else "message",
     )
+
+
+async def _cache_profile_photo(
+    client: _TelethonClientProtocol,
+    *,
+    entity: object,
+    config: FullAccessConfig,
+    telegram_chat_id: int,
+) -> None:
+    if telegram_chat_id == 0:
+        return
+
+    base_path = avatar_base_path(config.session_path, telegram_chat_id)
+    if find_cached_variant(base_path) is not None:
+        return
+
+    base_path.parent.mkdir(parents=True, exist_ok=True)
+    clear_cached_variants(base_path)
+    try:
+        await client.download_profile_photo(entity, file=str(base_path))
+    except Exception:  # pragma: no cover - depends on Telethon runtime
+        clear_cached_variants(base_path)
+
+
+async def _cache_message_preview(
+    client: _TelethonClientProtocol,
+    *,
+    message: object,
+    config: FullAccessConfig,
+    telegram_chat_id: int,
+    remote_message: FullAccessRemoteMessage,
+) -> None:
+    if remote_message.telegram_message_id <= 0:
+        return
+    if remote_message.media_type not in {"photo", "messagemediaphoto", "sticker", "messagemediadocument"}:
+        return
+
+    base_path = media_preview_base_path(
+        config.session_path,
+        telegram_chat_id=telegram_chat_id,
+        telegram_message_id=remote_message.telegram_message_id,
+    )
+    if find_cached_variant(base_path) is not None:
+        return
+
+    base_path.parent.mkdir(parents=True, exist_ok=True)
+    clear_cached_variants(base_path)
+    try:
+        await client.download_media(message, file=str(base_path))
+    except Exception:  # pragma: no cover - depends on Telethon runtime
+        clear_cached_variants(base_path)
 
 
 def _resolve_entity_title(entity: object | None) -> str:

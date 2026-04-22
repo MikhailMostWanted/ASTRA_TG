@@ -98,10 +98,13 @@ export interface ChatItem {
   isDigestTarget: boolean;
   messageCount: number;
   lastMessageAt: string | null;
+  lastMessageId: number | null;
+  lastTelegramMessageId: number | null;
   lastMessagePreview: string;
   lastDirection: string | null;
   lastSourceAdapter: string | null;
   lastSenderName: string | null;
+  avatarUrl: string | null;
   syncStatus: "fullaccess" | "local" | "empty";
   memory: ChatMemorySummary | null;
   favorite: boolean;
@@ -110,6 +113,7 @@ export interface ChatItem {
 export interface ChatsPayload {
   items: ChatItem[];
   count: number;
+  refreshedAt: string | null;
   filters: {
     active: string;
     sort: string;
@@ -132,6 +136,7 @@ export interface MessageItem {
   replyToMessageId: number | null;
   hasMedia: boolean;
   mediaType: string | null;
+  mediaPreviewUrl: string | null;
   forwardInfo: Record<string, unknown> | null;
   entities: unknown[] | null;
   preview: string;
@@ -140,6 +145,7 @@ export interface MessageItem {
 export interface ChatMessagesPayload {
   chat: ChatItem;
   messages: MessageItem[];
+  refreshedAt: string | null;
 }
 
 export interface ReplySuggestion {
@@ -235,6 +241,7 @@ export interface FullAccessChat {
   chatType: string;
   username: string | null;
   reference: string;
+  avatarUrl: string | null;
 }
 
 export interface FullAccessChatsPayload {

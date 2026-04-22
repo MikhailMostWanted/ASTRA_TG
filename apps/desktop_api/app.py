@@ -8,10 +8,12 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from apps.cli.desktop import DESKTOP_API_PID_PATH
 from config.settings import Settings
+from fullaccess.cache import avatar_base_path, find_cached_variant, media_preview_base_path
 from storage.database import bootstrap_database, build_database_runtime
 
 from .bridge import DesktopBridge
@@ -101,6 +103,31 @@ def create_app(
             "name": "astra-desktop-api",
             "version": "0.1.0",
         }
+
+    @app.get("/api/media/avatars/{telegram_chat_id}")
+    async def media_avatar(telegram_chat_id: int):
+        cached = find_cached_variant(
+            avatar_base_path(effective_settings.fullaccess_session_file, telegram_chat_id)
+        )
+        if cached is None:
+            raise HTTPException(status_code=404, detail="Аватар пока не кеширован.")
+        return FileResponse(cached)
+
+    @app.get("/api/media/messages/{telegram_chat_id}/{telegram_message_id}")
+    async def media_message_preview(
+        telegram_chat_id: int,
+        telegram_message_id: int,
+    ):
+        cached = find_cached_variant(
+            media_preview_base_path(
+                effective_settings.fullaccess_session_file,
+                telegram_chat_id=telegram_chat_id,
+                telegram_message_id=telegram_message_id,
+            )
+        )
+        if cached is None:
+            raise HTTPException(status_code=404, detail="Preview для этого медиа пока не кеширован.")
+        return FileResponse(cached)
 
     @app.get("/api/dashboard")
     async def dashboard() -> dict[str, Any]:

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
 import { formatDateTime, formatConfidence } from "@/lib/format";
 
@@ -60,7 +61,8 @@ export function RemindersScreen() {
   const reminders = remindersQuery.data;
 
   return (
-    <div className="flex flex-col gap-5">
+    <ScrollArea className="h-full min-h-0">
+      <div className="flex flex-col gap-5 pr-2">
       <SectionCard
         title="Напоминания и задачи"
         description="Здесь видно, какие open loops уже замечены, что подтверждено и что скоро нужно вернуть в фокус."
@@ -170,6 +172,7 @@ export function RemindersScreen() {
           </div>
         </SectionCard>
       </div>
-    </div>
+      </div>
+    </ScrollArea>
   );
 }

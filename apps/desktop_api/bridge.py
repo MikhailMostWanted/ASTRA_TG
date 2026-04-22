@@ -203,6 +203,7 @@ class DesktopBridge:
                         last_message=last_message,
                         memory=memory_map.get(chat.id),
                         is_digest_target=digest_target.chat_id == chat.telegram_chat_id,
+                        session_file=self.settings.fullaccess_session_file,
                     )
                 )
 
@@ -243,6 +244,7 @@ class DesktopBridge:
             "items": items,
             "count": len(items),
             "filters": {"active": filter_key, "sort": sort_key, "search": search or ""},
+            "refreshedAt": serialize_datetime(datetime.now(timezone.utc)),
         }
 
     async def get_chat_messages(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
@@ -260,8 +262,17 @@ class DesktopBridge:
                     chat,
                     message_count=await message_repository.count_messages_for_chat(chat_id=chat.id),
                     last_message=recent_desc[0] if recent_desc else None,
+                    session_file=self.settings.fullaccess_session_file,
                 ),
-                "messages": [serialize_message(message) for message in messages],
+                "messages": [
+                    serialize_message(
+                        message,
+                        session_file=self.settings.fullaccess_session_file,
+                        telegram_chat_id=chat.telegram_chat_id,
+                    )
+                    for message in messages
+                ],
+                "refreshedAt": serialize_datetime(datetime.now(timezone.utc)),
             }
 
     async def get_reply_preview(
@@ -337,6 +348,7 @@ class DesktopBridge:
                     result.chat,
                     message_count=await MessageRepository(session).count_messages_for_chat(chat_id=result.chat.id),
                     last_message=await _load_last_message(MessageRepository(session), result.chat.id),
+                    session_file=self.settings.fullaccess_session_file,
                 ),
             }
 
@@ -362,6 +374,7 @@ class DesktopBridge:
                     updated_chat,
                     message_count=await MessageRepository(session).count_messages_for_chat(chat_id=chat_id),
                     last_message=await _load_last_message(MessageRepository(session), chat_id),
+                    session_file=self.settings.fullaccess_session_file,
                 ),
             }
 
@@ -374,7 +387,10 @@ class DesktopBridge:
 
             result = await self._build_fullaccess_sync_service(session).sync_chat(build_chat_reference(chat))
             await session.commit()
-            return serialize_fullaccess_sync_result(result)
+            return serialize_fullaccess_sync_result(
+                result,
+                session_file=self.settings.fullaccess_session_file,
+            )
 
     async def get_fullaccess_overview(self) -> dict[str, Any]:
         async with self.runtime.session_factory() as session:
@@ -431,7 +447,13 @@ class DesktopBridge:
         async with self.runtime.session_factory() as session:
             result = await self._build_fullaccess_sync_service(session).list_chats(limit=limit)
             return {
-                "items": [serialize_fullaccess_chat(chat) for chat in result.chats],
+                "items": [
+                    serialize_fullaccess_chat(
+                        chat,
+                        session_file=self.settings.fullaccess_session_file,
+                    )
+                    for chat in result.chats
+                ],
                 "truncated": result.truncated,
                 "returnedCount": result.returned_count,
             }
@@ -440,7 +462,10 @@ class DesktopBridge:
         async with self.runtime.session_factory() as session:
             result = await self._build_fullaccess_sync_service(session).sync_chat(reference)
             await session.commit()
-            return serialize_fullaccess_sync_result(result)
+            return serialize_fullaccess_sync_result(
+                result,
+                session_file=self.settings.fullaccess_session_file,
+            )
 
     async def get_memory_overview(self, *, limit: int = 20) -> dict[str, Any]:
         async with self.runtime.session_factory() as session:

@@ -48,6 +48,12 @@ class FullAccessSyncService:
 
     async def sync_chat(self, reference: str) -> FullAccessSyncResult:
         config = await self._require_read_ready_config()
+        existing_chat = await self.chat_repository.find_chat_by_handle_or_telegram_id(reference)
+        latest_local_message_id = (
+            await self.message_repository.get_latest_telegram_message_id(chat_id=existing_chat.id)
+            if existing_chat is not None
+            else None
+        )
         log_event(
             LOGGER,
             20,
@@ -55,10 +61,12 @@ class FullAccessSyncService:
             "Начат ручной full-access sync.",
             reference=reference,
             sync_limit=config.sync_limit,
+            latest_local_message_id=latest_local_message_id,
         )
         chat_summary, remote_messages = await self.client_factory(config).fetch_history(
             reference,
             limit=config.sync_limit,
+            min_message_id=latest_local_message_id,
         )
         local_chat, chat_created = await self._upsert_chat(chat_summary)
 
@@ -174,10 +182,14 @@ class FullAccessSyncService:
         if not authorized:
             await _record_fullaccess_error_if_possible(
                 self.setting_repository,
-                f"Пользовательская session не авторизована. Сначала выполни локальный вход: {LOCAL_LOGIN_COMMAND}."
+                "Пользовательская session не авторизована. "
+                "Сначала заверши вход на экране Full-access в Astra Desktop "
+                f"или используй fallback {LOCAL_LOGIN_COMMAND}."
             )
             raise ValueError(
-                f"Пользовательская session не авторизована. Сначала выполни локальный вход: {LOCAL_LOGIN_COMMAND}."
+                "Пользовательская session не авторизована. "
+                "Сначала заверши вход на экране Full-access в Astra Desktop "
+                f"или используй fallback {LOCAL_LOGIN_COMMAND}."
             )
         return config
 
