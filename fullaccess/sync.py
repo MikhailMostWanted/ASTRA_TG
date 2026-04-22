@@ -120,7 +120,17 @@ class FullAccessSyncService:
                 updated_count += 1
 
         if self.setting_repository is not None:
-            await OperationalStateService(self.setting_repository).record_fullaccess_sync(
+            operational_state = OperationalStateService(self.setting_repository)
+            await operational_state.record_fullaccess_sync(
+                reference=reference,
+                scanned_count=scanned_count,
+                created_count=created_count,
+                updated_count=updated_count,
+                skipped_count=skipped_count,
+            )
+            await operational_state.record_fullaccess_chat_sync(
+                local_chat_id=local_chat.id,
+                telegram_chat_id=chat_summary.telegram_chat_id,
                 reference=reference,
                 scanned_count=scanned_count,
                 created_count=created_count,

@@ -434,6 +434,100 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
     asyncio.run(run_assertions())
 
 
+def test_reply_context_prefers_latest_meaningful_trigger_over_low_signal_tail(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "reply-focus-fresh-context" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        reply_context_module = importlib.import_module("services.reply_context_builder")
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            chat_memory_repo = ChatMemoryRepository(session)
+            person_memory_repo = PersonMemoryRepository(session)
+
+            chat = await chats.upsert_chat(
+                telegram_chat_id=-100555,
+                title="Свежий хвост",
+                handle="fresh_tail",
+                chat_type="group",
+                is_enabled=True,
+            )
+            await session.commit()
+
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=1,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc),
+                raw_text="Смотрю задачу.",
+                normalized_text="Смотрю задачу.",
+            )
+            meaningful = await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=2,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 9, 2, tzinfo=timezone.utc),
+                raw_text="Когда сможешь прислать финальный файл?",
+                normalized_text="Когда сможешь прислать финальный файл?",
+            )
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=3,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 9, 3, tzinfo=timezone.utc),
+                raw_text="ок",
+                normalized_text="ок",
+            )
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=4,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 9, 4, tzinfo=timezone.utc),
+                raw_text="?",
+                normalized_text="?",
+            )
+            await session.commit()
+
+            context = await reply_context_module.ReplyContextBuilder(
+                message_repository=messages,
+                chat_memory_repository=chat_memory_repo,
+                person_memory_repository=person_memory_repo,
+            ).build(chat)
+
+            assert not isinstance(context, reply_context_module.ReplyContextIssue)
+            assert context.target_message.id == meaningful.id
+            assert context.focus_label == "вопрос"
+            assert "сигнал слабее" in context.focus_reason.lower()
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
 def test_reply_llm_handler_falls_back_to_deterministic_reply_when_provider_unavailable(
     monkeypatch,
     tmp_path: Path,

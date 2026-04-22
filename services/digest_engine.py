@@ -63,10 +63,11 @@ class DigestEngineService:
         window_argument: str | None,
         *,
         now=None,
-        use_provider_improvement: bool = False,
+        use_provider_improvement: bool | None = None,
     ) -> DigestExecutionPlan:
         window = parse_digest_window(window_argument, now=now)
         target = await DigestTargetService(self.setting_repository).get_target()
+        should_try_provider = await self._should_use_provider_improvement(use_provider_improvement)
         log_event(
             LOGGER,
             20,
@@ -74,7 +75,7 @@ class DigestEngineService:
             "Начата ручная сборка digest.",
             window=window.label,
             target_configured=target.is_configured,
-            llm_requested=use_provider_improvement,
+            llm_requested=should_try_provider,
         )
         message_counts = await self.message_repository.count_messages_by_digest_chat(
             window_start=window.start,
@@ -93,6 +94,16 @@ class DigestEngineService:
                 window=window.label,
             )
             rendered = self.formatter.format_empty_window(window_label=window.label)
+            await self._record_generation_meta(
+                digest_id=None,
+                window_label=window.label,
+                llm_requested=should_try_provider,
+                llm_applied=False,
+                llm_provider=None,
+                llm_notes=(),
+                llm_flags=(),
+                summary_short=f"За {window.label} по активным digest-источникам сообщений не найдено.",
+            )
             return DigestExecutionPlan(
                 window=window,
                 target=target,
@@ -114,7 +125,7 @@ class DigestEngineService:
         llm_notes: tuple[str, ...] = ()
         llm_flags: tuple[str, ...] = ()
         llm_provider_name: str | None = None
-        if use_provider_improvement and self.digest_refiner is not None:
+        if should_try_provider and self.digest_refiner is not None:
             refinement = await self.digest_refiner.refine(build_result)
             llm_requested = refinement.requested
             llm_applied = refinement.applied
@@ -139,6 +150,16 @@ class DigestEngineService:
             summary_long=rendered.full_text,
             items=build_result.to_digest_items(),
         )
+        await self._record_generation_meta(
+            digest_id=digest.id,
+            window_label=window.label,
+            llm_requested=llm_requested,
+            llm_applied=llm_applied,
+            llm_provider=llm_provider_name,
+            llm_notes=llm_notes,
+            llm_flags=llm_flags,
+            summary_short=build_result.summary_short,
+        )
         log_event(
             LOGGER,
             20,
@@ -162,6 +183,55 @@ class DigestEngineService:
             llm_refine_provider=llm_provider_name,
             llm_refine_notes=llm_notes,
             llm_refine_guardrail_flags=llm_flags,
+        )
+
+    async def _should_use_provider_improvement(
+        self,
+        use_provider_improvement: bool | None,
+    ) -> bool:
+        if use_provider_improvement is not None:
+            return use_provider_improvement
+        if self.digest_refiner is None:
+            return False
+        status = await self.digest_refiner.provider_manager.get_status()
+        return bool(status.digest_refine_available)
+
+    async def _record_generation_meta(
+        self,
+        *,
+        digest_id: int | None,
+        window_label: str,
+        llm_requested: bool,
+        llm_applied: bool,
+        llm_provider: str | None,
+        llm_notes: tuple[str, ...],
+        llm_flags: tuple[str, ...],
+        summary_short: str,
+    ) -> None:
+        mode = "deterministic"
+        label = "Детерминированный"
+        if llm_applied:
+            mode = "llm_refine"
+            label = "LLM refine"
+        elif llm_requested:
+            mode = "fallback"
+            label = "Fallback на deterministic"
+
+        await self.setting_repository.set_value(
+            key="digest.last_run_meta",
+            value_json={
+                "digest_id": digest_id,
+                "window": window_label,
+                "mode": mode,
+                "label": label,
+                "llm_requested": llm_requested,
+                "llm_applied": llm_applied,
+                "provider": llm_provider,
+                "notes": list(llm_notes),
+                "flags": list(llm_flags),
+                "summary_short": summary_short,
+            },
+            value_text=None,
         )
 
 

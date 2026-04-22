@@ -82,7 +82,10 @@ export function FullAccessScreen() {
         setCode("");
         setPassword("");
       }
-      await queryClient.invalidateQueries();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["fullaccess"] }),
+        queryClient.invalidateQueries({ queryKey: ["fullaccess-chats"] }),
+      ]);
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Не удалось завершить вход.");
@@ -93,7 +96,12 @@ export function FullAccessScreen() {
     mutationFn: api.logoutFullaccess,
     onSuccess: async () => {
       toast.success("Локальная full-access session очищена.");
-      await queryClient.invalidateQueries();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["fullaccess"] }),
+        queryClient.invalidateQueries({ queryKey: ["fullaccess-chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["sources"] }),
+      ]);
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Не удалось выйти из full-access.");
@@ -105,7 +113,13 @@ export function FullAccessScreen() {
     onSuccess: async (payload) => {
       toast.success(`Синхронизирован чат ${payload.chat.title}.`);
       setManualReference("");
-      await queryClient.invalidateQueries();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["fullaccess"] }),
+        queryClient.invalidateQueries({ queryKey: ["fullaccess-chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["sources"] }),
+        queryClient.invalidateQueries({ queryKey: ["chat-workspace"] }),
+      ]);
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Не удалось синхронизировать чат.");

@@ -11,6 +11,7 @@ from fullaccess.client import (
     FullAccessClientFactory,
     FullAccessPasswordRequiredError,
     build_fullaccess_client,
+    close_managed_fullaccess_clients,
     telethon_is_available,
 )
 from fullaccess.copy import LOCAL_LOGIN_COMMAND, local_login_instruction_lines
@@ -40,7 +41,7 @@ class FullAccessAuthService:
     async def build_status_report(self) -> FullAccessStatusReport:
         config = FullAccessConfig.from_settings(self.settings)
         pending_state = await self._load_pending_auth()
-        session_exists = config.session_path.exists()
+        session_exists = config.uses_session_string or config.session_path.exists()
         synced_chat_count = await self.message_repository.count_distinct_chats_by_source_adapter(
             "fullaccess"
         )
@@ -65,6 +66,10 @@ class FullAccessAuthService:
                 "Telethon не установлен. Установи optional dependency: pip install -e '.[fullaccess]'."
             )
         else:
+            if config.uses_session_string:
+                reason_parts.append(
+                    "Используется session string runtime: он устойчивее file-based session и не требует отдельного session-файла."
+                )
             try:
                 authorized = await self.client_factory(config).is_authorized()
             except (RuntimeError, ValueError) as error:
@@ -75,6 +80,10 @@ class FullAccessAuthService:
                 elif pending_state is not None:
                     reason_parts.append(
                         "Код уже запрошен. Заверши вход в Astra Desktop на экране Full-access."
+                    )
+                elif config.uses_session_string:
+                    reason_parts.append(
+                        "Session string задана, но авторизация не подтверждается. Обнови FULLACCESS_SESSION_STRING."
                     )
                 elif session_exists:
                     reason_parts.append("Локальная сессия найдена, но пользователь не авторизован.")
@@ -194,8 +203,11 @@ class FullAccessAuthService:
                 await self.client_factory(config).logout()
             except ValueError:
                 pass
+            finally:
+                if self.client_factory is build_fullaccess_client:
+                    await close_managed_fullaccess_clients()
 
-        session_removed = _delete_session_file(config.session_path)
+        session_removed = False if config.uses_session_string else _delete_session_file(config.session_path)
         return FullAccessLogoutResult(
             session_removed=session_removed,
             pending_auth_cleared=pending_auth_cleared,
@@ -219,6 +231,14 @@ class FullAccessAuthService:
             )
             raise ValueError(
                 "Telethon не установлен. Установи optional dependency: pip install -e '.[fullaccess]'."
+            )
+        if config.uses_session_string:
+            await self._record_fullaccess_error(
+                "FULLACCESS_SESSION_STRING уже управляет локальной user-session. Обнови её извне, если нужна новая авторизация."
+            )
+            raise ValueError(
+                "FULLACCESS_SESSION_STRING уже управляет локальной user-session. "
+                "Чтобы пройти новый логин через Desktop, убери session string и используй file-based session."
             )
         if not config.phone_configured:
             await self._record_fullaccess_error("Сначала задай FULLACCESS_PHONE для запроса кода.")

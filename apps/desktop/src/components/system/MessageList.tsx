@@ -15,7 +15,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDateTime, formatRelativeTime, initials } from "@/lib/format";
 import { safeArray } from "@/lib/runtime-guards";
-import type { ChatItem, MessageItem } from "@/lib/types";
+import type { ChatFreshnessPayload, ChatItem, MessageItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { EmptyState } from "./EmptyState";
@@ -28,6 +28,7 @@ interface MessageListProps {
   refreshing?: boolean;
   fullaccessReady?: boolean;
   lastUpdatedAt?: string | null;
+  freshness?: ChatFreshnessPayload | null;
   errorMessage?: string | null;
   onRefresh: () => void;
   onSyncChat: () => void;
@@ -40,6 +41,7 @@ export function MessageList({
   refreshing = false,
   fullaccessReady = false,
   lastUpdatedAt = null,
+  freshness = null,
   errorMessage = null,
   onRefresh,
   onSyncChat,
@@ -112,6 +114,7 @@ export function MessageList({
               <span>Последнее сообщение {formatRelativeTime(chat.lastMessageAt)}</span>
               <span>UI обновлён {lastUpdatedAt ? formatDateTime(lastUpdatedAt) : "только открылся"}</span>
               <span>{formatDateTime(chat.lastMessageAt)} • {chat.messageCount} сообщений</span>
+              {freshness ? <span>{freshness.label}</span> : null}
             </div>
           </div>
 

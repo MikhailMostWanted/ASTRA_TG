@@ -148,6 +148,20 @@ export interface ChatMessagesPayload {
   refreshedAt: string | null;
 }
 
+export interface ChatFreshnessPayload {
+  mode: "local" | "fresh" | "aging" | "stale" | "missing" | "attention" | string;
+  label: string;
+  detail: string;
+  isStale: boolean;
+  fullaccessReady: boolean;
+  canManualSync: boolean;
+  lastSyncAt: string | null;
+  reference: string | null;
+  createdCount: number;
+  updatedCount: number;
+  skippedCount: number;
+}
+
 export interface ReplySuggestion {
   baseReplyText: string | null;
   replyMessages: string[];
@@ -178,6 +192,18 @@ export interface ReplySuggestion {
   llmRefineProvider: string | null;
   llmRefineNotes: string[];
   llmRefineGuardrailFlags: string[];
+  llmStatus: {
+    mode: "deterministic" | "llm_refine" | "fallback" | string;
+    label: string;
+    provider: string | null;
+    detail: string | null;
+  } | null;
+  variants: Array<{
+    id: string;
+    label: string;
+    description: string;
+    text: string;
+  }>;
 }
 
 export interface ReplyPreviewPayload {
@@ -197,6 +223,14 @@ export interface ReplyPreviewPayload {
     variants: Record<string, boolean>;
     disabledReason: string | null;
   };
+}
+
+export interface ChatWorkspacePayload {
+  chat: ChatItem;
+  messages: MessageItem[];
+  reply: ReplyPreviewPayload;
+  freshness: ChatFreshnessPayload;
+  refreshedAt: string | null;
 }
 
 export interface SourcesPayload {
@@ -337,6 +371,18 @@ export interface DigestOverviewPayload {
   };
   latest: DigestRecord | null;
   recentRuns: DigestRecord[];
+  generation: {
+    digest_id: number | null;
+    window: string;
+    mode: "deterministic" | "llm_refine" | "fallback" | string;
+    label: string;
+    llm_requested: boolean;
+    llm_applied: boolean;
+    provider: string | null;
+    notes: string[];
+    flags: string[];
+    summary_short: string | null;
+  } | null;
 }
 
 export interface DigestRunPayload {

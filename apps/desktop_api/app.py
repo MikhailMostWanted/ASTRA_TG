@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from apps.cli.desktop import DESKTOP_API_PID_PATH
 from config.settings import Settings
 from fullaccess.cache import avatar_base_path, find_cached_variant, media_preview_base_path
+from fullaccess.client import close_managed_fullaccess_clients
 from storage.database import bootstrap_database, build_database_runtime
 
 from .bridge import DesktopBridge
@@ -44,7 +45,7 @@ class MemoryRebuildRequest(BaseModel):
 
 class DigestRunRequest(BaseModel):
     window: str | None = None
-    use_provider_improvement: bool = False
+    use_provider_improvement: bool | None = None
 
 
 class DigestTargetRequest(BaseModel):
@@ -80,6 +81,7 @@ def create_app(
             yield
         finally:
             pid_path.unlink(missing_ok=True)
+            await close_managed_fullaccess_clients()
             if owned_runtime:
                 await effective_runtime.dispose()
 
@@ -158,10 +160,17 @@ def create_app(
     ) -> dict[str, Any]:
         return await _call_with_lookup(app, lambda: _bridge(app).get_chat_messages(chat_id, limit=limit))
 
+    @app.get("/api/chats/{chat_id}/workspace")
+    async def chat_workspace(
+        chat_id: int,
+        limit: int = Query(default=80, ge=10, le=200),
+    ) -> dict[str, Any]:
+        return await _call_with_lookup(app, lambda: _bridge(app).get_chat_workspace(chat_id, limit=limit))
+
     @app.post("/api/chats/{chat_id}/reply-preview")
     async def reply_preview(
         chat_id: int,
-        use_provider_refinement: bool = False,
+        use_provider_refinement: bool | None = None,
     ) -> dict[str, Any]:
         return await _call_with_lookup(
             app,

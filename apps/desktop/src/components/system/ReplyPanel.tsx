@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   CheckCheck,
   Copy,
+  DatabaseZap,
   LoaderCircle,
   RefreshCcw,
   Send,
@@ -18,7 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatConfidence, formatDateTime, stringifyUnknown } from "@/lib/format";
 import { normalizeReplyPreviewPayload } from "@/lib/runtime-guards";
-import type { ReplyPreviewPayload } from "@/lib/types";
+import type { ChatFreshnessPayload, ReplyPreviewPayload } from "@/lib/types";
 import type { ChatWorkspaceState } from "@/stores/app-store";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +28,7 @@ import { WarningState } from "./WarningState";
 
 interface ReplyPanelProps {
   reply: ReplyPreviewPayload | null;
+  freshness?: ChatFreshnessPayload | null;
   workflowState: ChatWorkspaceState | null;
   loading?: boolean;
   refreshing?: boolean;
@@ -40,6 +42,7 @@ interface ReplyPanelProps {
 
 export function ReplyPanel({
   reply,
+  freshness = null,
   workflowState,
   loading = false,
   refreshing = false,
@@ -57,6 +60,10 @@ export function ReplyPanel({
       return [];
     }
 
+    if (suggestion.variants.length > 0) {
+      return suggestion.variants;
+    }
+
     return Array.from(
       new Set(
         [
@@ -66,7 +73,14 @@ export function ReplyPanel({
           suggestion.baseReplyText,
         ].filter((item): item is string => Boolean(item && item.trim())),
       ),
-    ).slice(0, 3);
+    )
+      .slice(0, 3)
+      .map((text, index) => ({
+        id: `fallback-${index}`,
+        label: `Вариант ${index + 1}`,
+        description: "Рабочий текст ответа.",
+        text,
+      }));
   }, [suggestion]);
 
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -75,7 +89,8 @@ export function ReplyPanel({
     setSelectedIndex(0);
   }, [suggestion?.sourceMessageId, suggestion?.replyText]);
 
-  const selectedReply = replyOptions[selectedIndex] || "";
+  const selectedReply = replyOptions[selectedIndex]?.text || "";
+  const selectedVariant = replyOptions[selectedIndex] || null;
   const sendDisabledReason =
     "Прямая отправка через Desktop пока отключена: current full-access слой остаётся read-only. Черновик и локальная отметка работают честно.";
 
@@ -191,11 +206,50 @@ export function ReplyPanel({
           <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
             few-shot {suggestion.fewShotFound ? suggestion.fewShotMatchCount : 0}
           </Badge>
+          <Badge
+            variant="outline"
+            className={cn(
+              "border-0 ring-1",
+              suggestion.llmStatus?.mode === "llm_refine"
+                ? "bg-emerald-300/12 text-emerald-100 ring-emerald-300/15"
+                : suggestion.llmStatus?.mode === "fallback"
+                  ? "bg-amber-300/12 text-amber-100 ring-amber-300/15"
+                  : "bg-white/7 text-slate-200 ring-white/10",
+            )}
+          >
+            LLM {suggestion.llmStatus?.label || "Deterministic"}
+          </Badge>
         </div>
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-4 px-4 py-4">
+          {freshness ? (
+            <div
+              className={cn(
+                "rounded-[22px] border p-4",
+                freshness.isStale
+                  ? "border-amber-300/16 bg-amber-300/8"
+                  : "border-emerald-300/14 bg-emerald-300/8",
+              )}
+            >
+              <div className="mb-2 flex items-center gap-2 text-sm font-medium text-white">
+                <DatabaseZap />
+                {freshness.label}
+              </div>
+              <div className="text-sm leading-6 text-slate-200">{freshness.detail}</div>
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-300">
+                {freshness.lastSyncAt ? <span>sync {formatDateTime(freshness.lastSyncAt)}</span> : null}
+                {freshness.reference ? <span>{freshness.reference}</span> : null}
+                {freshness.canManualSync ? (
+                  <span>
+                    +{freshness.createdCount} новых • {freshness.updatedCount} обновлено
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
           <div className="rounded-[22px] border border-cyan-300/10 bg-cyan-400/8 p-4">
             <div className="mb-2 flex items-center gap-2 text-sm font-medium text-cyan-100">
               <Sparkles />
@@ -228,7 +282,7 @@ export function ReplyPanel({
             <div className="flex flex-col gap-3">
               {replyOptions.map((item, index) => (
                 <button
-                  key={item}
+                  key={item.id}
                   type="button"
                   className={cn(
                     "rounded-[20px] border px-4 py-4 text-left transition-all active:translate-y-px hover:border-cyan-300/12 hover:bg-cyan-400/6",
@@ -239,14 +293,17 @@ export function ReplyPanel({
                   onClick={() => setSelectedIndex(index)}
                 >
                   <div className="mb-2 flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-white">Вариант {index + 1}</div>
+                    <div className="text-sm font-medium text-white">{item.label}</div>
                     {selectedIndex === index ? (
                       <Badge variant="outline" className="border-0 bg-cyan-400/12 text-cyan-100 ring-1 ring-cyan-300/15">
                         выбран
                       </Badge>
                     ) : null}
                   </div>
-                  <div className="whitespace-pre-wrap text-sm leading-6 text-slate-100">{item}</div>
+                  {item.description ? (
+                    <div className="mb-2 text-xs leading-5 text-slate-400">{item.description}</div>
+                  ) : null}
+                  <div className="whitespace-pre-wrap text-sm leading-6 text-slate-100">{item.text}</div>
                 </button>
               ))}
             </div>
@@ -353,12 +410,17 @@ export function ReplyPanel({
 
             <div className="flex flex-col gap-3 text-sm leading-6 text-slate-300">
               <div>Стратегия: {suggestion.strategy || "deterministic"}</div>
+              {selectedVariant ? <div>Выбранный вариант: {selectedVariant.label}</div> : null}
               <div>Style profile: {suggestion.styleProfileKey || "без профиля"}</div>
               <div>Persona: {suggestion.personaApplied ? "применена" : "не применялась"}</div>
               <div>
                 Few-shot: {suggestion.fewShotFound ? `найдено ${suggestion.fewShotMatchCount}` : "не использовались"}
               </div>
-              <div>LLM refine: {suggestion.llmRefineApplied ? suggestion.llmRefineProvider || "да" : "нет"}</div>
+              <div>
+                LLM: {suggestion.llmStatus?.label || "Deterministic"}
+                {suggestion.llmStatus?.provider ? ` • ${suggestion.llmStatus.provider}` : ""}
+              </div>
+              {suggestion.llmStatus?.detail ? <div>LLM detail: {suggestion.llmStatus.detail}</div> : null}
               {suggestion.styleNotes.length > 0 ? (
                 <div>Style notes: {suggestion.styleNotes.join(" • ")}</div>
               ) : null}

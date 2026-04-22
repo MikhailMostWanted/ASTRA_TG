@@ -37,12 +37,14 @@ export function DigestScreen() {
     mutationFn: (window: string) =>
       api.runDigest({
         window,
-        use_provider_improvement: false,
       }),
     onSuccess: async (payload) => {
       setLastRun(payload);
       toast.success(payload.summaryShort || "Дайджест собран.");
-      await queryClient.invalidateQueries();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["digest"] }),
+        queryClient.invalidateQueries({ queryKey: ["sources"] }),
+      ]);
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Не удалось запустить дайджест.");
@@ -59,7 +61,7 @@ export function DigestScreen() {
       toast.success(payload.message);
       setTargetReference("");
       setTargetLabel("");
-      await queryClient.invalidateQueries();
+      await queryClient.invalidateQueries({ queryKey: ["digest"] });
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Не удалось обновить target.");
@@ -93,6 +95,18 @@ export function DigestScreen() {
   const latestItems = safeArray(latest?.items);
   const recentRuns = safeArray(digest.recentRuns);
   const previewChunks = safeArray(lastRun?.previewChunks);
+  const generation = lastRun
+    ? {
+        mode: lastRun.llmRefineApplied ? "llm_refine" : lastRun.llmRefineRequested ? "fallback" : "deterministic",
+        label: lastRun.llmRefineApplied
+          ? "LLM refine"
+          : lastRun.llmRefineRequested
+            ? "Fallback"
+            : "Deterministic",
+        provider: lastRun.llmRefineProvider,
+        notes: lastRun.llmRefineNotes,
+      }
+    : digest.generation;
 
   return (
     <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1.08fr)_360px]">
@@ -132,7 +146,11 @@ export function DigestScreen() {
             <MiniDigestStat
               label="Последний запуск"
               value={latest ? "есть" : "ещё не было"}
-              note={formatDateTime(latest?.createdAt || null)}
+              note={
+                generation
+                  ? `${generation.label}${generation.provider ? ` • ${generation.provider}` : ""}`
+                  : formatDateTime(latest?.createdAt || null)
+              }
               icon={<Newspaper className="size-4" />}
             />
             <MiniDigestStat
@@ -150,9 +168,25 @@ export function DigestScreen() {
               <div className="rounded-[24px] border border-white/7 bg-black/16 p-4">
                 <div className="flex items-center justify-between gap-4">
                   <div className="text-sm font-medium text-white">Последний сохранённый digest</div>
-                  <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-                    {formatDateTime(latest.createdAt)}
-                  </Badge>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
+                      {formatDateTime(latest.createdAt)}
+                    </Badge>
+                    {generation ? (
+                      <Badge
+                        variant="outline"
+                        className={
+                          generation.mode === "llm_refine"
+                            ? "border-0 bg-emerald-300/12 text-emerald-100 ring-1 ring-emerald-300/15"
+                            : generation.mode === "fallback"
+                              ? "border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15"
+                              : "border-0 bg-white/7 text-slate-200 ring-1 ring-white/10"
+                        }
+                      >
+                        {generation.label}
+                      </Badge>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="mt-4 text-2xl font-semibold tracking-tight text-white">
                   {latest.summaryShort || "Короткой сводки пока нет"}
@@ -160,6 +194,9 @@ export function DigestScreen() {
                 <div className="mt-3 text-sm leading-7 text-slate-300">
                   {latest.summaryLong || "Подробная сводка пока не сохранена."}
                 </div>
+                {generation?.notes?.length ? (
+                  <div className="mt-3 text-sm leading-6 text-slate-400">{generation.notes.join(" • ")}</div>
+                ) : null}
 
                 <div className="mt-4 flex flex-col gap-3">
                   {latestItems.map((item) => (

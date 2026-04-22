@@ -1,4 +1,4 @@
-import { startTransition, useDeferredValue, useEffect, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -11,8 +11,7 @@ import { extractErrorMessage, safeArray } from "@/lib/runtime-guards";
 import { useAppStore } from "@/stores/app-store";
 
 const CHAT_POLL_MS = 7_000;
-const MESSAGE_POLL_MS = 6_000;
-const REPLY_POLL_MS = 8_000;
+const WORKSPACE_POLL_MS = 8_000;
 const AUTO_SYNC_MS = 30_000;
 
 export function ChatsScreen() {
@@ -42,6 +41,7 @@ export function ChatsScreen() {
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState("activity");
   const deferredSearch = useDeferredValue(search);
+  const initialSyncedChatsRef = useRef<Set<number>>(new Set());
 
   const chatsQuery = useQuery({
     queryKey: ["chats", deferredSearch, filter, sort],
@@ -79,18 +79,11 @@ export function ChatsScreen() {
   const selectedChatWorkspace = selectedChatId !== null ? chatWorkspace[selectedChatId] || null : null;
   const fullaccessReady = Boolean(fullaccessQuery.data?.status.readyForManualSync);
 
-  const messagesQuery = useQuery({
-    queryKey: ["chat-messages", selectedChatId],
-    queryFn: () => api.chatMessages(selectedChatId as number, 60),
+  const workspaceQuery = useQuery({
+    queryKey: ["chat-workspace", selectedChatId],
+    queryFn: () => api.chatWorkspace(selectedChatId as number, 60),
     enabled: selectedChatId !== null,
-    refetchInterval: MESSAGE_POLL_MS,
-  });
-
-  const replyQuery = useQuery({
-    queryKey: ["reply-preview", selectedChatId],
-    queryFn: () => api.replyPreview(selectedChatId as number),
-    enabled: selectedChatId !== null,
-    refetchInterval: REPLY_POLL_MS,
+    refetchInterval: WORKSPACE_POLL_MS,
   });
 
   const syncChatMutation = useMutation({
@@ -111,16 +104,17 @@ export function ChatsScreen() {
       }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["chats"] }),
-        queryClient.invalidateQueries({ queryKey: ["chat-messages", payload.localChatId] }),
-        queryClient.invalidateQueries({ queryKey: ["reply-preview", payload.localChatId] }),
+        queryClient.invalidateQueries({ queryKey: ["chat-workspace", payload.localChatId] }),
+        queryClient.invalidateQueries({ queryKey: ["fullaccess"] }),
       ]);
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Не удалось синхронизировать выбранный чат.");
     },
   });
-  const messageItems = safeArray(messagesQuery.data?.messages);
-  const replyPayload = replyQuery.data ?? null;
+  const messageItems = safeArray(workspaceQuery.data?.messages);
+  const replyPayload = workspaceQuery.data?.reply ?? null;
+  const freshness = workspaceQuery.data?.freshness ?? null;
 
   useEffect(() => {
     const lastMessage = messageItems.length > 0 ? messageItems[messageItems.length - 1] : null;
@@ -129,6 +123,23 @@ export function ChatsScreen() {
     }
     markChatSeen(selectedChatId, lastMessage.id);
   }, [messageItems, markChatSeen, selectedChatId]);
+
+  useEffect(() => {
+    if (!selectedChat || selectedChat.syncStatus !== "fullaccess" || !fullaccessReady) {
+      return;
+    }
+
+    if (initialSyncedChatsRef.current.has(selectedChat.id) || syncChatMutation.isPending) {
+      return;
+    }
+
+    initialSyncedChatsRef.current.add(selectedChat.id);
+    syncChatMutation.mutate({
+      chatId: selectedChat.id,
+      chatTitle: selectedChat.title,
+      silent: true,
+    });
+  }, [fullaccessReady, selectedChat, syncChatMutation]);
 
   useEffect(() => {
     if (!selectedChat || selectedChat.syncStatus !== "fullaccess" || !fullaccessReady) {
@@ -162,8 +173,7 @@ export function ChatsScreen() {
 
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["chats"] }),
-      queryClient.invalidateQueries({ queryKey: ["chat-messages", selectedChatId] }),
-      queryClient.invalidateQueries({ queryKey: ["reply-preview", selectedChatId] }),
+      queryClient.invalidateQueries({ queryKey: ["chat-workspace", selectedChatId] }),
     ]);
     toast.success("Контекст обновлён.");
   };
@@ -216,13 +226,14 @@ export function ChatsScreen() {
       <MessageList
         chat={selectedChat}
         messages={messageItems}
-        loading={messagesQuery.isLoading}
-        refreshing={messagesQuery.isFetching || syncChatMutation.isPending}
+        loading={workspaceQuery.isLoading}
+        refreshing={workspaceQuery.isFetching || syncChatMutation.isPending}
         fullaccessReady={fullaccessReady}
-        lastUpdatedAt={messagesQuery.data?.refreshedAt || chatsQuery.data?.refreshedAt || null}
+        lastUpdatedAt={workspaceQuery.data?.refreshedAt || chatsQuery.data?.refreshedAt || null}
+        freshness={freshness}
         errorMessage={
-          messagesQuery.isError
-            ? extractErrorMessage(messagesQuery.error, "Не удалось загрузить ленту сообщений.")
+          workspaceQuery.isError
+            ? extractErrorMessage(workspaceQuery.error, "Не удалось загрузить рабочий контекст чата.")
             : null
         }
         onRefresh={() => {
@@ -241,12 +252,13 @@ export function ChatsScreen() {
 
       <ReplyPanel
         reply={replyPayload}
+        freshness={freshness}
         workflowState={selectedChatWorkspace}
-        loading={replyQuery.isLoading}
-        refreshing={replyQuery.isFetching || syncChatMutation.isPending}
+        loading={workspaceQuery.isLoading}
+        refreshing={workspaceQuery.isFetching || syncChatMutation.isPending}
         errorMessage={
-          replyQuery.isError
-            ? extractErrorMessage(replyQuery.error, "Не удалось собрать reply preview.")
+          workspaceQuery.isError
+            ? extractErrorMessage(workspaceQuery.error, "Не удалось собрать reply preview.")
             : null
         }
         onRefresh={() => {

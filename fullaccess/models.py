@@ -14,6 +14,7 @@ class FullAccessConfig:
     api_id: int | None
     api_hash: str | None
     session_path: Path
+    session_string: str | None
     phone: str | None
     requested_readonly: bool
     effective_readonly: bool
@@ -26,6 +27,7 @@ class FullAccessConfig:
             api_id=settings.fullaccess_api_id,
             api_hash=settings.fullaccess_api_hash,
             session_path=settings.fullaccess_session_file,
+            session_string=settings.fullaccess_session_string,
             phone=settings.fullaccess_phone,
             requested_readonly=settings.fullaccess_readonly,
             effective_readonly=True,
@@ -39,6 +41,10 @@ class FullAccessConfig:
     @property
     def phone_configured(self) -> bool:
         return bool(self.phone and self.phone.strip())
+
+    @property
+    def uses_session_string(self) -> bool:
+        return bool(self.session_string and self.session_string.strip())
 
 
 @dataclass(frozen=True, slots=True)

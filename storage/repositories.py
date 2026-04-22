@@ -354,6 +354,40 @@ class MessageRepository:
             for chat_id, message_count in result.all()
         }
 
+    async def get_last_messages_by_chat(
+        self,
+        *,
+        chat_ids: Sequence[int],
+    ) -> dict[int, Message]:
+        normalized_chat_ids = [int(chat_id) for chat_id in chat_ids]
+        if not normalized_chat_ids:
+            return {}
+
+        ranked_messages = (
+            select(
+                Message.id.label("message_id"),
+                Message.chat_id.label("chat_id"),
+                func.row_number()
+                .over(
+                    partition_by=Message.chat_id,
+                    order_by=(desc(Message.sent_at), desc(Message.id)),
+                )
+                .label("row_number"),
+            )
+            .where(Message.chat_id.in_(normalized_chat_ids))
+            .subquery()
+        )
+        result = await self.session.execute(
+            select(Message)
+            .join(ranked_messages, ranked_messages.c.message_id == Message.id)
+            .where(ranked_messages.c.row_number == 1)
+        )
+        messages = list(result.scalars().all())
+        return {
+            message.chat_id: message
+            for message in messages
+        }
+
     async def get_last_message_timestamp(self) -> datetime | None:
         result = await self.session.execute(select(func.max(Message.sent_at)))
         return result.scalar_one_or_none()

@@ -10,6 +10,7 @@ from aiogram.filters.command import CommandObject
 from config.settings import Settings
 from fullaccess.auth import FullAccessAuthService
 from fullaccess.models import FullAccessChatSummary, FullAccessRemoteMessage
+from services.operational_state import OperationalStateService
 from services.status_summary import BotStatusService
 from storage.database import bootstrap_database, build_database_runtime
 from storage.repositories import (
@@ -298,6 +299,7 @@ def test_fullaccess_sync_uses_recent_cursor_and_appends_new_messages(
                 settings=Settings(),
                 chat_repository=ChatRepository(session),
                 message_repository=MessageRepository(session),
+                setting_repository=SettingRepository(session),
                 client_factory=lambda _config: fake_client,
             )
 
@@ -340,6 +342,48 @@ def test_fullaccess_sync_uses_recent_cursor_and_appends_new_messages(
             )
             assert [message.telegram_message_id for message in stored_messages] == [11, 12, 13]
             assert stored_messages[-1].raw_text == "Супер, тогда жду сегодня до 19:00."
+
+            sync_snapshot = await OperationalStateService(SettingRepository(session)).get_fullaccess_chat_sync(
+                stored_chat.id
+            )
+            assert sync_snapshot is not None
+            assert sync_snapshot.payload["reference"] == "@product_team"
+            assert sync_snapshot.payload["local_chat_id"] == stored_chat.id
+            assert sync_snapshot.payload["created_count"] == 1
+            assert sync_snapshot.payload["updated_count"] == 0
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_fullaccess_status_supports_session_string_mode(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "fullaccess-session-string" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+        monkeypatch.setenv("FULLACCESS_ENABLED", "true")
+        monkeypatch.setenv("FULLACCESS_API_ID", "12345")
+        monkeypatch.setenv("FULLACCESS_API_HASH", "hash")
+        monkeypatch.setenv("FULLACCESS_SESSION_STRING", "session-string-token")
+        monkeypatch.delenv("FULLACCESS_PHONE", raising=False)
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        fake_client = FakeFullAccessClient(authorized=True)
+        async with runtime.session_factory() as session:
+            service = FullAccessAuthService(
+                settings=Settings(),
+                setting_repository=SettingRepository(session),
+                message_repository=MessageRepository(session),
+                client_factory=lambda _config: fake_client,
+            )
+            report = await service.build_status_report()
+
+            assert report.session_exists is True
+            assert report.authorized is True
+            assert report.ready_for_manual_sync is True
+            assert "session string runtime" in report.reason.lower()
 
         await runtime.dispose()
 

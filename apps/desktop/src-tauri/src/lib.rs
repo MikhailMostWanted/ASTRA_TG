@@ -105,6 +105,24 @@ fn prepare_desktop_launch(state: State<'_, DesktopRuntimeState>) -> Result<Deskt
         });
     }
 
+    if owned_bridge_is_running(&state) {
+        append_launcher_log(&config.log_path, "owned bridge already launching; waiting");
+        if wait_for_bridge(&config, Duration::from_secs(14)) {
+            append_launcher_log(&config.log_path, "owned bridge became healthy while waiting");
+            return Ok(DesktopLaunchStatus {
+                api_url: config.api_url.clone(),
+                repo_root: config.repo_root.clone(),
+                config_path: config_path.display().to_string(),
+                log_path: config.log_path.clone(),
+                status: String::from("started"),
+                detail: String::from("Bridge уже запускался этим окном и успел подняться."),
+                owned_bridge: true,
+            });
+        }
+        stop_owned_bridge(&state);
+        append_launcher_log(&config.log_path, "owned bridge stayed unhealthy; restarting spawn flow");
+    }
+
     if let Some(pid) = read_pid(Path::new(&config.pid_path)) {
         if pid_exists(pid) && wait_for_bridge(&config, Duration::from_secs(4)) {
             append_launcher_log(
@@ -302,6 +320,22 @@ fn stop_owned_bridge(state: &State<'_, DesktopRuntimeState>) {
             let _ = child.wait();
         }
     }
+}
+
+fn owned_bridge_is_running(state: &State<'_, DesktopRuntimeState>) -> bool {
+    if let Ok(mut owned) = state.owned_bridge.lock() {
+        if let Some(child) = owned.as_mut() {
+            return match child.try_wait() {
+                Ok(None) => true,
+                Ok(Some(_)) => {
+                    *owned = None;
+                    false
+                }
+                Err(_) => false,
+            };
+        }
+    }
+    false
 }
 
 fn append_launcher_log(log_path: &str, message: &str) {

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from threading import Lock
 from typing import Any, Protocol, cast
 
 from fullaccess.cache import (
@@ -72,6 +75,8 @@ class _TelethonDialogProtocol(Protocol):
 
 
 class _TelethonClientProtocol(Protocol):
+    def is_connected(self) -> bool: ...
+
     async def is_user_authorized(self) -> bool: ...
 
     async def send_code_request(self, phone: str) -> _TelethonSentCodeProtocol: ...
@@ -107,7 +112,195 @@ class _TelethonClientProtocol(Protocol):
 
 
 def build_fullaccess_client(config: FullAccessConfig) -> FullAccessClientProtocol:
-    return TelethonFullAccessClient(config)
+    return RuntimeBackedFullAccessClient(
+        config=config,
+        runtime=_get_managed_runtime(config),
+    )
+
+
+_MANAGED_RUNTIMES: dict[str, "ManagedTelethonRuntime"] = {}
+_MANAGED_RUNTIMES_GUARD = Lock()
+
+
+@dataclass(slots=True)
+class ManagedTelethonRuntime:
+    config: FullAccessConfig
+    _client: _TelethonClientProtocol | None = field(default=None, init=False, repr=False)
+    _lock: asyncio.Lock = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._lock = asyncio.Lock()
+
+    async def run(self, operation):
+        async with self._lock:
+            client = await self._ensure_client()
+            try:
+                return await operation(client)
+            except Exception:
+                await self._disconnect_client()
+                raise
+
+    async def close(self) -> None:
+        async with self._lock:
+            await self._disconnect_client()
+
+    async def _ensure_client(self) -> _TelethonClientProtocol:
+        if not telethon_is_available():
+            raise RuntimeError(
+                "Telethon не установлен. Установи optional dependency: pip install -e '.[fullaccess]'"
+            )
+
+        api_id = self.config.api_id
+        api_hash = self.config.api_hash
+        if api_id is None or api_hash is None:
+            raise RuntimeError("FULLACCESS_API_ID/FULLACCESS_API_HASH не настроены.")
+
+        if self._client is None:
+            self._client = _build_telethon_client(self.config)
+
+        if not self._client.is_connected():
+            await self._client.connect()
+        return self._client
+
+    async def _disconnect_client(self) -> None:
+        if self._client is None:
+            return
+
+        try:
+            if self._client.is_connected():
+                await self._client.disconnect()
+        finally:
+            self._client = None
+
+
+@dataclass(slots=True)
+class RuntimeBackedFullAccessClient:
+    config: FullAccessConfig
+    runtime: ManagedTelethonRuntime
+
+    async def is_authorized(self) -> bool:
+        return await self.runtime.run(_is_user_authorized)
+
+    async def request_login_code(self, phone: str) -> str:
+        async def _request(client: _TelethonClientProtocol) -> str:
+            try:
+                sent_code = await client.send_code_request(phone)
+            except Exception as error:  # pragma: no cover - depends on Telethon runtime
+                raise ValueError(f"Не удалось запросить код Telegram: {error}") from error
+            return str(sent_code.phone_code_hash)
+
+        return await self.runtime.run(_request)
+
+    async def complete_login(
+        self,
+        *,
+        phone: str,
+        code: str,
+        phone_code_hash: str,
+        password: str | None = None,
+    ) -> bool:
+        try:
+            from telethon.errors import (
+                ApiIdInvalidError,
+                PhoneCodeExpiredError,
+                PhoneCodeInvalidError,
+                SessionPasswordNeededError,
+            )
+        except ImportError as error:  # pragma: no cover - defensive
+            raise RuntimeError("Telethon не установлен.") from error
+
+        async def _complete(client: _TelethonClientProtocol) -> bool:
+            try:
+                await client.sign_in(
+                    phone=phone,
+                    code=code,
+                    phone_code_hash=phone_code_hash,
+                )
+            except SessionPasswordNeededError as error:
+                if password is None:
+                    raise FullAccessPasswordRequiredError from error
+                await client.sign_in(password=password)
+            except PhoneCodeInvalidError as error:
+                raise ValueError(
+                    "Код Telegram не подошёл. Проверь код и попробуй ещё раз."
+                ) from error
+            except PhoneCodeExpiredError as error:
+                raise ValueError(
+                    f"Код Telegram уже истёк. Запусти {LOCAL_LOGIN_COMMAND} ещё раз и запроси новый код."
+                ) from error
+            except ApiIdInvalidError as error:
+                raise ValueError(
+                    "Telegram отклонил FULLACCESS_API_ID/FULLACCESS_API_HASH."
+                ) from error
+            except Exception as error:  # pragma: no cover - depends on Telethon runtime
+                raise ValueError(f"Не удалось завершить авторизацию: {error}") from error
+
+            return bool(await client.is_user_authorized())
+
+        return await self.runtime.run(_complete)
+
+    async def logout(self) -> bool:
+        async def _logout(client: _TelethonClientProtocol) -> bool:
+            try:
+                return bool(await client.log_out())
+            except Exception as error:  # pragma: no cover - depends on Telethon runtime
+                raise ValueError(f"Не удалось завершить logout: {error}") from error
+
+        try:
+            return await self.runtime.run(_logout)
+        finally:
+            await self.runtime.close()
+
+    async def list_chats(self, *, limit: int) -> list[FullAccessChatSummary]:
+        async def _list(client: _TelethonClientProtocol) -> list[FullAccessChatSummary]:
+            dialogs: list[FullAccessChatSummary] = []
+            async for dialog in client.iter_dialogs(limit=limit):
+                summary = _build_chat_summary(dialog.entity)
+                await _cache_profile_photo(
+                    client,
+                    entity=dialog.entity,
+                    config=self.config,
+                    telegram_chat_id=summary.telegram_chat_id,
+                )
+                dialogs.append(summary)
+            return dialogs
+
+        return await self.runtime.run(_list)
+
+    async def fetch_history(
+        self,
+        reference: str,
+        *,
+        limit: int,
+        min_message_id: int | None = None,
+    ) -> tuple[FullAccessChatSummary, list[FullAccessRemoteMessage]]:
+        async def _fetch(client: _TelethonClientProtocol) -> tuple[FullAccessChatSummary, list[FullAccessRemoteMessage]]:
+            entity = await _resolve_entity(client, reference)
+            chat = _build_chat_summary(entity)
+            await _cache_profile_photo(
+                client,
+                entity=entity,
+                config=self.config,
+                telegram_chat_id=chat.telegram_chat_id,
+            )
+            messages: list[FullAccessRemoteMessage] = []
+            iter_kwargs: dict[str, int] = {"limit": limit}
+            if min_message_id is not None:
+                iter_kwargs["min_id"] = min_message_id
+            async for message in client.iter_messages(entity, **iter_kwargs):
+                remote_message = _build_remote_message(message)
+                await _cache_message_preview(
+                    client,
+                    message=message,
+                    config=self.config,
+                    telegram_chat_id=chat.telegram_chat_id,
+                    remote_message=remote_message,
+                )
+                messages.append(remote_message)
+            messages.reverse()
+            return chat, messages
+
+        return await self.runtime.run(_fetch)
 
 
 @dataclass(slots=True)
@@ -233,27 +426,71 @@ class TelethonFullAccessClient:
                 "Telethon не установлен. Установи optional dependency: pip install -e '.[fullaccess]'"
             )
 
-        from telethon import TelegramClient
-
         api_id = self.config.api_id
         api_hash = self.config.api_hash
         if api_id is None or api_hash is None:
             raise RuntimeError("FULLACCESS_API_ID/FULLACCESS_API_HASH не настроены.")
-
-        self.config.session_path.parent.mkdir(parents=True, exist_ok=True)
-        client = cast(
-            _TelethonClientProtocol,
-            TelegramClient(
-                str(self.config.session_path),
-                api_id,
-                api_hash,
-            ),
-        )
+        client = _build_telethon_client(self.config)
         await client.connect()
         try:
             yield client
         finally:
             await client.disconnect()
+
+
+def _get_managed_runtime(config: FullAccessConfig) -> ManagedTelethonRuntime:
+    key = _build_runtime_key(config)
+    with _MANAGED_RUNTIMES_GUARD:
+        runtime = _MANAGED_RUNTIMES.get(key)
+        if runtime is None:
+            runtime = ManagedTelethonRuntime(config=config)
+            _MANAGED_RUNTIMES[key] = runtime
+        return runtime
+
+
+async def close_managed_fullaccess_clients() -> None:
+    with _MANAGED_RUNTIMES_GUARD:
+        runtimes = list(_MANAGED_RUNTIMES.values())
+        _MANAGED_RUNTIMES.clear()
+
+    for runtime in runtimes:
+        await runtime.close()
+
+
+async def _is_user_authorized(client: _TelethonClientProtocol) -> bool:
+    return bool(await client.is_user_authorized())
+
+
+def _build_runtime_key(config: FullAccessConfig) -> str:
+    if config.uses_session_string:
+        digest = hashlib.sha256((config.session_string or "").encode("utf-8")).hexdigest()[:12]
+        session_key = f"string:{digest}"
+    else:
+        session_key = f"file:{config.session_path.expanduser().resolve()}"
+    return f"{config.api_id}:{session_key}"
+
+
+def _build_telethon_client(config: FullAccessConfig) -> _TelethonClientProtocol:
+    from telethon import TelegramClient
+    from telethon.sessions import StringSession
+
+    api_id = config.api_id
+    api_hash = config.api_hash
+    if api_id is None or api_hash is None:
+        raise RuntimeError("FULLACCESS_API_ID/FULLACCESS_API_HASH не настроены.")
+
+    if config.uses_session_string:
+        session = StringSession(config.session_string)
+        return cast(
+            _TelethonClientProtocol,
+            TelegramClient(session, api_id, api_hash),
+        )
+
+    config.session_path.parent.mkdir(parents=True, exist_ok=True)
+    return cast(
+        _TelethonClientProtocol,
+        TelegramClient(str(config.session_path), api_id, api_hash),
+    )
 
 
 async def _resolve_entity(client: _TelethonClientProtocol, reference: str) -> object:

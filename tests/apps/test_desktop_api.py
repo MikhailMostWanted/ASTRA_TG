@@ -51,12 +51,23 @@ def test_desktop_api_dashboard_chats_and_reply_preview(
             assert len(messages_payload["messages"]) == 3
             assert messages_payload["messages"][-1]["preview"].startswith("Когда сможешь")
 
+            workspace = client.get(f"/api/chats/{seeded['chat_id']}/workspace")
+            assert workspace.status_code == 200
+            workspace_payload = workspace.json()
+            assert workspace_payload["chat"]["title"] == "Команда продукта"
+            assert len(workspace_payload["messages"]) == 3
+            assert workspace_payload["freshness"]["mode"] == "local"
+            assert workspace_payload["reply"]["suggestion"]["llmStatus"]["mode"] == "deterministic"
+            assert workspace_payload["reply"]["suggestion"]["variants"]
+
             reply = client.post(f"/api/chats/{seeded['chat_id']}/reply-preview")
             assert reply.status_code == 200
             reply_payload = reply.json()
             assert reply_payload["kind"] == "suggestion"
             assert reply_payload["suggestion"]["focusReason"]
             assert reply_payload["suggestion"]["replyText"]
+            assert reply_payload["suggestion"]["llmStatus"]["label"] == "Deterministic"
+            assert reply_payload["suggestion"]["variants"][0]["label"] == "Основной"
             assert reply_payload["actions"]["copy"] is True
             assert reply_payload["actions"]["pasteToTelegram"] is False
 
@@ -85,6 +96,8 @@ def test_desktop_api_memory_digest_reminders_sources_and_fullaccess(
             digest_payload = digest.json()
             assert digest_payload["latest"]["summaryShort"].startswith("За 24h")
             assert digest_payload["target"]["label"] == "@digest_channel"
+            assert digest_payload["generation"]["mode"] == "deterministic"
+            assert digest_payload["generation"]["label"] == "Детерминированный"
 
             reminders = client.get("/api/reminders")
             assert reminders.status_code == 200
@@ -334,7 +347,6 @@ async def _seed_runtime(monkeypatch, tmp_path: Path):
         await settings_repo.set_value(key="digest.target.chat_id", value_text="-100999")
         await settings_repo.set_value(key="digest.target.label", value_text="@digest_channel")
         await settings_repo.set_value(key="digest.target.type", value_text="channel")
-
         digest = await digests.create_digest(
             chat_id=None,
             window_start=datetime(2026, 4, 20, 0, 0, tzinfo=timezone.utc),
@@ -350,6 +362,21 @@ async def _seed_runtime(monkeypatch, tmp_path: Path):
                     "sort_order": 0,
                 }
             ],
+        )
+        await settings_repo.set_value(
+            key="digest.last_run_meta",
+            value_json={
+                "digest_id": digest.id,
+                "window": "24h",
+                "mode": "deterministic",
+                "label": "Детерминированный",
+                "llm_requested": False,
+                "llm_applied": False,
+                "provider": None,
+                "notes": [],
+                "flags": [],
+                "summary_short": "За 24h обсуждали бюджет и финальный файл.",
+            },
         )
 
         task = await tasks.create_task(

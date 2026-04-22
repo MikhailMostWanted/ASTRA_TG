@@ -32,6 +32,8 @@ SNAPSHOT_KEY_MAP = {
     "fullaccess_sync": "ops.fullaccess.last_sync",
 }
 
+FULLACCESS_CHAT_SYNC_PREFIX = "ops.fullaccess.chat_sync."
+
 
 @dataclass(frozen=True, slots=True)
 class OperationalEvent:
@@ -149,6 +151,34 @@ class OperationalStateService:
                 "skipped_count": skipped_count,
             },
         )
+
+    async def record_fullaccess_chat_sync(
+        self,
+        *,
+        local_chat_id: int,
+        telegram_chat_id: int,
+        reference: str,
+        scanned_count: int,
+        created_count: int,
+        updated_count: int,
+        skipped_count: int,
+    ) -> None:
+        await self._store_json(
+            f"{FULLACCESS_CHAT_SYNC_PREFIX}{local_chat_id}",
+            {
+                "timestamp": _serialize_timestamp(None),
+                "local_chat_id": local_chat_id,
+                "telegram_chat_id": telegram_chat_id,
+                "reference": reference,
+                "scanned_count": scanned_count,
+                "created_count": created_count,
+                "updated_count": updated_count,
+                "skipped_count": skipped_count,
+            },
+        )
+
+    async def get_fullaccess_chat_sync(self, local_chat_id: int) -> OperationalEvent | None:
+        return await self.get_snapshot(f"{FULLACCESS_CHAT_SYNC_PREFIX}{local_chat_id}")
 
     async def get_named_snapshot(self, name: str) -> OperationalEvent | None:
         key = SNAPSHOT_KEY_MAP[name]

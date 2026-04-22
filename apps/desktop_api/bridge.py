@@ -28,6 +28,7 @@ from services.digest_formatter import DigestFormatter
 from services.digest_target import DigestTargetService
 from services.memory_builder import MemoryService
 from services.memory_formatter import MemoryFormatter
+from services.operational_state import OperationalStateService
 from services.operational_tools import OperationalBackupService, OperationalExportService
 from services.people_memory_builder import PeopleMemoryBuilder
 from services.persona_adapter import PersonaAdapter
@@ -187,6 +188,9 @@ class DesktopBridge:
 
             chats = await chat_repository.list_chats()
             counts = await message_repository.count_messages_by_chat()
+            last_messages = await message_repository.get_last_messages_by_chat(
+                chat_ids=[chat.id for chat in chats]
+            )
             memory_map = {
                 item.chat_id: item
                 for item in await chat_memory_repository.list_chat_memory(limit=max(100, len(chats) or 1))
@@ -195,7 +199,7 @@ class DesktopBridge:
 
             items: list[dict[str, Any]] = []
             for chat in chats:
-                last_message = await _load_last_message(message_repository, chat.id)
+                last_message = last_messages.get(chat.id)
                 items.append(
                     serialize_chat(
                         chat,
@@ -247,6 +251,48 @@ class DesktopBridge:
             "refreshedAt": serialize_datetime(datetime.now(timezone.utc)),
         }
 
+    async def get_chat_workspace(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
+        async with self.runtime.session_factory() as session:
+            chat_repository = ChatRepository(session)
+            message_repository = MessageRepository(session)
+            setting_repository = SettingRepository(session)
+            chat = await chat_repository.get_by_id(chat_id)
+            if chat is None:
+                raise LookupError("Чат не найден.")
+
+            recent_desc = await message_repository.get_recent_messages(chat_id=chat.id, limit=max(1, limit))
+            messages = list(reversed(recent_desc))
+            last_message = recent_desc[0] if recent_desc else None
+            message_count = await message_repository.count_messages_for_chat(chat_id=chat.id)
+            reply_payload = serialize_reply_result(
+                await self._build_reply_service(session).build_reply(build_chat_reference(chat))
+            )
+            freshness = await self._build_chat_freshness(
+                session,
+                chat=chat,
+                last_message=last_message,
+            )
+
+            return {
+                "chat": serialize_chat(
+                    chat,
+                    message_count=message_count,
+                    last_message=last_message,
+                    session_file=self.settings.fullaccess_session_file,
+                ),
+                "messages": [
+                    serialize_message(
+                        message,
+                        session_file=self.settings.fullaccess_session_file,
+                        telegram_chat_id=chat.telegram_chat_id,
+                    )
+                    for message in messages
+                ],
+                "reply": self._decorate_reply_payload(reply_payload),
+                "freshness": freshness,
+                "refreshedAt": serialize_datetime(datetime.now(timezone.utc)),
+            }
+
     async def get_chat_messages(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
         async with self.runtime.session_factory() as session:
             chat_repository = ChatRepository(session)
@@ -279,7 +325,7 @@ class DesktopBridge:
         self,
         chat_id: int,
         *,
-        use_provider_refinement: bool = False,
+        use_provider_refinement: bool | None = None,
     ) -> dict[str, Any]:
         async with self.runtime.session_factory() as session:
             chat_repository = ChatRepository(session)
@@ -292,24 +338,7 @@ class DesktopBridge:
                 build_chat_reference(chat),
                 use_provider_refinement=use_provider_refinement,
             )
-            payload = serialize_reply_result(result)
-            payload["actions"] = {
-                "copy": True,
-                "refresh": True,
-                "pasteToTelegram": False,
-                "markSent": False,
-                "variants": {
-                    "short": False,
-                    "normal": True,
-                    "softer": False,
-                    "harder": False,
-                    "myStyle": False,
-                },
-                "disabledReason": (
-                    "Параметрические варианты ответа и отметка «отправлено» вынесены в следующий этап."
-                ),
-            }
-            return payload
+            return self._decorate_reply_payload(serialize_reply_result(result))
 
     async def list_sources(self) -> dict[str, Any]:
         chats = await self.list_chats(sort_key="title")
@@ -521,6 +550,7 @@ class DesktopBridge:
             digest_repository = DigestRepository(session)
             recent = await digest_repository.list_recent(limit=limit)
             target = await DigestTargetService(setting_repository).get_target()
+            generation_meta = await setting_repository.get_value("digest.last_run_meta")
             return {
                 "target": {
                     "chatId": target.chat_id,
@@ -529,13 +559,14 @@ class DesktopBridge:
                 },
                 "latest": serialize_digest(recent[0]) if recent else None,
                 "recentRuns": [serialize_digest(item) for item in recent],
+                "generation": generation_meta if isinstance(generation_meta, dict) else None,
             }
 
     async def run_digest(
         self,
         *,
         window: str | None = DEFAULT_DIGEST_WINDOW,
-        use_provider_improvement: bool = False,
+        use_provider_improvement: bool | None = None,
     ) -> dict[str, Any]:
         async with self.runtime.session_factory() as session:
             service = self._build_digest_service(session)
@@ -892,6 +923,98 @@ class DesktopBridge:
             extractor=ReminderExtractor(),
             formatter=ReminderFormatter(),
         )
+
+    def _decorate_reply_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        payload["actions"] = {
+            "copy": True,
+            "refresh": True,
+            "pasteToTelegram": False,
+            "markSent": False,
+            "variants": {
+                "short": False,
+                "normal": True,
+                "softer": False,
+                "harder": False,
+                "myStyle": False,
+            },
+            "disabledReason": (
+                "Параметрические варианты ответа и отметка «отправлено» вынесены в следующий этап."
+            ),
+        }
+        return payload
+
+    async def _build_chat_freshness(self, session, *, chat, last_message) -> dict[str, Any]:
+        is_fullaccess_chat = chat.category == "fullaccess" or (
+            last_message is not None and last_message.source_adapter == "fullaccess"
+        )
+        if not is_fullaccess_chat:
+            return {
+                "mode": "local",
+                "label": "Локальный контекст",
+                "detail": "Этот чат питается локальным message store без full-access sync.",
+                "isStale": False,
+                "fullaccessReady": False,
+                "canManualSync": False,
+                "lastSyncAt": None,
+                "reference": build_chat_reference(chat),
+                "createdCount": 0,
+                "updatedCount": 0,
+                "skippedCount": 0,
+            }
+
+        setting_repository = SettingRepository(session)
+        status = await self._build_fullaccess_auth_service(session).build_status_report()
+        sync_event = await OperationalStateService(setting_repository).get_fullaccess_chat_sync(chat.id)
+        sync_payload = sync_event.payload if sync_event is not None else {}
+        last_sync_at = sync_event.timestamp
+
+        mode = "fresh"
+        label = "Контекст свежий"
+        is_stale = False
+        detail = "Последний full-access sync был недавно, reply строится по свежему хвосту."
+
+        if not status.ready_for_manual_sync:
+            mode = "attention"
+            label = "Full-access требует внимания"
+            is_stale = True
+            detail = status.reason or "Full-access сейчас не готов."
+        elif sync_event is None or last_sync_at is None:
+            mode = "missing"
+            label = "Нужна первая синхронизация"
+            is_stale = True
+            detail = "Для этого чата ещё нет успешного full-access sync, свежий хвост не подтверждён."
+        else:
+            age_seconds = max(
+                0,
+                int((datetime.now(timezone.utc) - last_sync_at).total_seconds()),
+            )
+            if age_seconds > 180:
+                mode = "stale"
+                label = "Контекст может устареть"
+                is_stale = True
+                detail = "Последний full-access sync был давно, лучше освежить чат перед ответом."
+            elif age_seconds > 60:
+                mode = "aging"
+                label = "Контекст скоро состарится"
+                detail = "Свежий хвост уже подтягивался, но лучше держать sync под рукой."
+
+        return {
+            "mode": mode,
+            "label": label,
+            "detail": detail,
+            "isStale": is_stale,
+            "fullaccessReady": status.ready_for_manual_sync,
+            "canManualSync": status.ready_for_manual_sync,
+            "lastSyncAt": serialize_datetime(last_sync_at),
+            "reference": (
+                str(sync_payload.get("reference"))
+                if sync_payload.get("reference") is not None
+                else build_chat_reference(chat)
+            ),
+            "createdCount": int(sync_payload.get("created_count") or 0),
+            "updatedCount": int(sync_payload.get("updated_count") or 0),
+            "skippedCount": int(sync_payload.get("skipped_count") or 0),
+        }
 
     @asynccontextmanager
     async def _telegram_resolver(self) -> AsyncIterator[TelegramChatResolver | None]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any
 
 from apps.cli.processes import ProcessState
@@ -198,6 +199,8 @@ def serialize_reply_result(result: ReplyResult) -> dict[str, Any]:
         "llmRefineProvider": suggestion.llm_refine_provider,
         "llmRefineNotes": list(suggestion.llm_refine_notes),
         "llmRefineGuardrailFlags": list(suggestion.llm_refine_guardrail_flags),
+        "llmStatus": _serialize_reply_llm_status(suggestion),
+        "variants": _build_reply_variants(suggestion),
     }
     return payload
 
@@ -351,3 +354,90 @@ def _build_media_preview_url(
         f"/api/media/messages/{telegram_chat_id}/{telegram_message_id}"
         f"?v={version}"
     )
+
+
+def _serialize_reply_llm_status(suggestion) -> dict[str, Any]:
+    if suggestion.llm_refine_applied:
+        return {
+            "mode": "llm_refine",
+            "label": "LLM refine",
+            "provider": suggestion.llm_refine_provider,
+            "detail": (
+                suggestion.llm_refine_notes[0]
+                if suggestion.llm_refine_notes
+                else "Финальный текст был мягко улучшен моделью."
+            ),
+        }
+    if suggestion.llm_refine_requested:
+        return {
+            "mode": "fallback",
+            "label": "Fallback",
+            "provider": suggestion.llm_refine_provider,
+            "detail": (
+                suggestion.llm_refine_notes[0]
+                if suggestion.llm_refine_notes
+                else "Модель не дала пригодный результат, оставлен deterministic baseline."
+            ),
+        }
+    return {
+        "mode": "deterministic",
+        "label": "Deterministic",
+        "provider": None,
+        "detail": "Ответ собран локальным deterministic pipeline без внешнего refine.",
+    }
+
+
+def _build_reply_variants(suggestion) -> list[dict[str, Any]]:
+    primary_text = suggestion.reply_text.strip() if suggestion.reply_text else ""
+    styled_text = "\n".join(item for item in suggestion.reply_messages if item.strip()).strip()
+    baseline_text = (suggestion.base_reply_text or "").strip()
+    concise_text = _build_concise_variant_text(suggestion)
+
+    candidates = [
+        ("primary", "Основной", "Рекомендуемый вариант для отправки.", primary_text),
+        ("concise", "Короче", "Более прямой и короткий ответ.", concise_text),
+        (
+            "baseline",
+            "Базовый",
+            "Более спокойный deterministic вариант без лишней полировки.",
+            styled_text or baseline_text,
+        ),
+    ]
+
+    variants: list[dict[str, Any]] = []
+    seen_texts: set[str] = set()
+    for variant_id, label, description, text in candidates:
+        cleaned = text.strip()
+        if not cleaned or cleaned in seen_texts:
+            continue
+        variants.append(
+            {
+                "id": variant_id,
+                "label": label,
+                "description": description,
+                "text": cleaned,
+            }
+        )
+        seen_texts.add(cleaned)
+        if len(variants) >= 3:
+            break
+    return variants
+
+
+def _build_concise_variant_text(suggestion) -> str:
+    final_messages = tuple(item.strip() for item in suggestion.final_reply_messages if item.strip())
+    if len(final_messages) >= 2:
+        return final_messages[0]
+
+    full_text = suggestion.reply_text.strip() if suggestion.reply_text else ""
+    if not full_text:
+        return ""
+
+    sentences = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+", full_text)
+        if part.strip()
+    ]
+    if len(sentences) >= 2:
+        return sentences[0]
+    return full_text

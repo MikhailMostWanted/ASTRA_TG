@@ -50,15 +50,16 @@ class ReplyEngineService:
         self,
         reference: str,
         *,
-        use_provider_refinement: bool = False,
+        use_provider_refinement: bool | None = None,
     ) -> ReplyResult:
+        should_try_provider = await self._should_use_provider_refinement(use_provider_refinement)
         log_event(
             LOGGER,
             20,
             "reply.build.started",
             "Начата сборка reply.",
             reference=reference,
-            llm_requested=use_provider_refinement,
+            llm_requested=should_try_provider,
         )
         chat = await self.chat_repository.find_chat_by_handle_or_telegram_id(reference)
         if chat is None:
@@ -160,7 +161,7 @@ class ReplyEngineService:
         llm_notes: tuple[str, ...] = ()
         llm_flags: tuple[str, ...] = ()
         llm_provider_name: str | None = None
-        if use_provider_refinement and self.reply_refiner is not None:
+        if should_try_provider and self.reply_refiner is not None:
             refinement = await self.reply_refiner.refine(
                 context=context_or_issue,
                 style_selection=style_selection,
@@ -230,6 +231,17 @@ class ReplyEngineService:
             source_sender_name=context_or_issue.target_message.sender_name,
             source_message_preview=draft.source_message_preview,
         )
+
+    async def _should_use_provider_refinement(
+        self,
+        use_provider_refinement: bool | None,
+    ) -> bool:
+        if use_provider_refinement is not None:
+            return use_provider_refinement
+        if self.reply_refiner is None:
+            return False
+        status = await self.reply_refiner.provider_manager.get_status()
+        return bool(status.reply_refine_available)
 
 
 def _build_chat_reference(chat: Chat) -> str:

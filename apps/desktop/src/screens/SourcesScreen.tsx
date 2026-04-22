@@ -51,7 +51,12 @@ export function SourcesScreen() {
     onSuccess: async (_, variables) => {
       const message = variables.type === "sync" ? `Источник «${variables.title}» синхронизирован.` : "Источник обновлён.";
       toast.success(message);
-      await queryClient.invalidateQueries();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["sources"] }),
+        queryClient.invalidateQueries({ queryKey: ["chats"] }),
+        queryClient.invalidateQueries({ queryKey: ["chat-workspace"] }),
+        queryClient.invalidateQueries({ queryKey: ["fullaccess"] }),
+      ]);
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Не удалось обновить источник.");
@@ -69,7 +74,10 @@ export function SourcesScreen() {
       toast.success(payload.message);
       setReference("");
       setTitle("");
-      await queryClient.invalidateQueries();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["sources"] }),
+        queryClient.invalidateQueries({ queryKey: ["chats"] }),
+      ]);
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Не удалось добавить источник.");

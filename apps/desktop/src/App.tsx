@@ -70,6 +70,8 @@ type TauriInvokeWindow = Window & {
   };
 };
 
+let desktopLaunchPromise: Promise<DesktopLaunchStatus> | null = null;
+
 async function prepareDesktopLaunch(): Promise<DesktopLaunchStatus> {
   if (typeof window !== "undefined") {
     const tauriWindow = window as TauriInvokeWindow;
@@ -87,6 +89,16 @@ async function prepareDesktopLaunch(): Promise<DesktopLaunchStatus> {
     detail: "Desktop dev-режим использует уже заданный локальный API URL.",
     ownedBridge: false,
   };
+}
+
+function prepareDesktopLaunchOnce(): Promise<DesktopLaunchStatus> {
+  if (desktopLaunchPromise === null) {
+    desktopLaunchPromise = prepareDesktopLaunch().catch((error) => {
+      desktopLaunchPromise = null;
+      throw error;
+    });
+  }
+  return desktopLaunchPromise;
 }
 
 function DesktopSplash({
@@ -279,7 +291,7 @@ function App() {
       setBootstrapState({ kind: "loading" });
 
       try {
-        const status = await prepareDesktopLaunch();
+        const status = await prepareDesktopLaunchOnce();
         setApiUrl(status.apiUrl);
         if (!active) {
           return;

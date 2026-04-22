@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     fullaccess_api_id: int | None = None
     fullaccess_api_hash: str | None = None
     fullaccess_session_path: str = "./var/fullaccess.session"
+    fullaccess_session_string: str | None = None
     fullaccess_phone: str | None = None
     fullaccess_readonly: bool = True
     fullaccess_sync_limit: int = 200

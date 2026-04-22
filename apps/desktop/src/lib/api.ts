@@ -1,5 +1,6 @@
 import type {
   ChatMessagesPayload,
+  ChatWorkspacePayload,
   ChatsPayload,
   DashboardPayload,
   DigestOverviewPayload,
@@ -103,10 +104,17 @@ export const api = {
     ),
   chatMessages: (chatId: number, limit = 80) =>
     request<ChatMessagesPayload>(withQuery(`/api/chats/${chatId}/messages`, { limit })),
-  replyPreview: (chatId: number, useProviderRefinement = false) =>
+  chatWorkspace: (chatId: number, limit = 80) =>
+    request<ChatWorkspacePayload>(withQuery(`/api/chats/${chatId}/workspace`, { limit })),
+  replyPreview: (chatId: number, useProviderRefinement?: boolean) =>
     request<ReplyPreviewPayload>(
       withQuery(`/api/chats/${chatId}/reply-preview`, {
-        use_provider_refinement: useProviderRefinement ? "true" : undefined,
+        use_provider_refinement:
+          typeof useProviderRefinement === "boolean"
+            ? useProviderRefinement
+              ? "true"
+              : "false"
+            : undefined,
       }),
       { method: "POST" },
     ),

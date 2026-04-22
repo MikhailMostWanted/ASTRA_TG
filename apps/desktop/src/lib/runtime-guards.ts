@@ -1,4 +1,4 @@
-import type { ReplyPreviewPayload, ReplySuggestion, ScreenId } from "@/lib/types";
+import type { ChatFreshnessPayload, ReplyPreviewPayload, ReplySuggestion, ScreenId } from "@/lib/types";
 
 const SCREEN_IDS: ScreenId[] = [
   "dashboard",
@@ -68,6 +68,9 @@ export function normalizeReplySuggestion(value: unknown): ReplySuggestion | null
     return null;
   }
 
+  const llmStatus = isPlainObject(value.llmStatus) ? value.llmStatus : null;
+  const rawVariants = Array.isArray(value.variants) ? value.variants : [];
+
   return {
     baseReplyText: safeStringOrNull(value.baseReplyText),
     replyMessages: safeStringArray(value.replyMessages),
@@ -98,6 +101,32 @@ export function normalizeReplySuggestion(value: unknown): ReplySuggestion | null
     llmRefineProvider: safeStringOrNull(value.llmRefineProvider),
     llmRefineNotes: safeStringArray(value.llmRefineNotes),
     llmRefineGuardrailFlags: safeStringArray(value.llmRefineGuardrailFlags),
+    llmStatus: llmStatus
+      ? {
+          mode: safeString(llmStatus.mode, "deterministic"),
+          label: safeString(llmStatus.label, "Deterministic"),
+          provider: safeStringOrNull(llmStatus.provider),
+          detail: safeStringOrNull(llmStatus.detail),
+        }
+      : null,
+    variants: rawVariants
+      .map((item) => {
+        if (!isPlainObject(item)) {
+          return null;
+        }
+        return {
+          id: safeString(item.id, "variant"),
+          label: safeString(item.label, "Вариант"),
+          description: safeString(item.description, ""),
+          text: safeString(item.text, ""),
+        };
+      })
+      .filter(
+        (
+          item,
+        ): item is { id: string; label: string; description: string; text: string } =>
+          Boolean(item && item.text.trim()),
+      ),
   };
 }
 
@@ -125,5 +154,37 @@ export function normalizeReplyPreviewPayload(value: unknown): ReplyPreviewPayloa
       variants: safeRecord<boolean>(actions.variants),
       disabledReason: safeStringOrNull(actions.disabledReason),
     },
+  };
+}
+
+export function normalizeChatFreshnessPayload(value: unknown): ChatFreshnessPayload {
+  if (!isPlainObject(value)) {
+    return {
+      mode: "local",
+      label: "Статус недоступен",
+      detail: "Bridge не вернул понятный статус свежести.",
+      isStale: false,
+      fullaccessReady: false,
+      canManualSync: false,
+      lastSyncAt: null,
+      reference: null,
+      createdCount: 0,
+      updatedCount: 0,
+      skippedCount: 0,
+    };
+  }
+
+  return {
+    mode: safeString(value.mode, "local"),
+    label: safeString(value.label, "Статус недоступен"),
+    detail: safeString(value.detail, "Статус свежести недоступен."),
+    isStale: safeBoolean(value.isStale),
+    fullaccessReady: safeBoolean(value.fullaccessReady),
+    canManualSync: safeBoolean(value.canManualSync),
+    lastSyncAt: safeStringOrNull(value.lastSyncAt),
+    reference: safeStringOrNull(value.reference),
+    createdCount: safeNumberOrNull(value.createdCount) ?? 0,
+    updatedCount: safeNumberOrNull(value.updatedCount) ?? 0,
+    skippedCount: safeNumberOrNull(value.skippedCount) ?? 0,
   };
 }
