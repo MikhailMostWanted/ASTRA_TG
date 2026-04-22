@@ -1,7 +1,24 @@
-# Tauri + React + Typescript
+# Astra Desktop
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Локальный macOS desktop-клиент для Astra поверх Tauri + React + TypeScript.
 
-## Recommended IDE Setup
+Быстрые команды из корня репозитория:
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+astratg desktop
+astratg desktop-build
+astratg desktop-install
+astratg desktop-open
+astratg desktop-stop
+```
+
+Где лежит `.app`:
+
+- локальная сборка: `var/desktop/Astra Desktop.app`
+- установленное приложение: `~/Applications/Astra Desktop.app`
+
+Для пересборки иконок:
+
+```bash
+./apps/desktop/scripts/generate-macos-icons.sh
+```

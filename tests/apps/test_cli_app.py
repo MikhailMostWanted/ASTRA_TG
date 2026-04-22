@@ -31,6 +31,21 @@ def test_cli_parser_supports_expected_commands() -> None:
     assert args.command == "desktop"
     assert args.api_url == "http://127.0.0.1:8765"
 
+    args = parser.parse_args(["desktop-build"])
+    assert args.command == "desktop-build"
+    assert args.api_url == "http://127.0.0.1:8765"
+
+    args = parser.parse_args(["desktop-open"])
+    assert args.command == "desktop-open"
+    assert args.api_url == "http://127.0.0.1:8765"
+
+    args = parser.parse_args(["desktop-install"])
+    assert args.command == "desktop-install"
+    assert args.api_url == "http://127.0.0.1:8765"
+
+    args = parser.parse_args(["desktop-stop"])
+    assert args.command == "desktop-stop"
+
     args = parser.parse_args(["desktop-api", "--host", "0.0.0.0", "--port", "8877"])
     assert args.command == "desktop-api"
     assert args.host == "0.0.0.0"
@@ -166,6 +181,143 @@ def test_desktop_api_command_runs_server_in_thread(monkeypatch, tmp_path: Path) 
 
     assert exit_code == 0
     assert calls == [("127.0.0.1", 8876)]
+
+
+def test_desktop_command_prepares_launcher_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(app_module, "chdir_to_repository_root", lambda: tmp_path)
+    monkeypatch.setattr(app_module, "get_repository_root", lambda: tmp_path)
+
+    desktop_dir = tmp_path / "apps" / "desktop"
+    desktop_dir.mkdir(parents=True)
+    (desktop_dir / "package.json").write_text('{"name":"astra-desktop"}', encoding="utf-8")
+
+    launcher_calls: list[dict[str, str]] = []
+    subprocess_calls: list[dict[str, object]] = []
+
+    def fake_ensure_launcher_config(*, python_executable: str, api_url: str):
+        launcher_calls.append(
+            {
+                "python_executable": python_executable,
+                "api_url": api_url,
+            }
+        )
+        return SimpleNamespace(), tmp_path / "launcher.json"
+
+    def fake_subprocess_run(command, *, cwd, env, check):
+        subprocess_calls.append(
+            {
+                "command": command,
+                "cwd": cwd,
+                "env": env,
+                "check": check,
+            }
+        )
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(app_module, "ensure_launcher_config", fake_ensure_launcher_config)
+    monkeypatch.setattr(app_module.subprocess, "run", fake_subprocess_run)
+
+    exit_code = asyncio.run(
+        app_module.run_cli(
+            app_module.build_parser().parse_args(["desktop", "--api-url", "http://127.0.0.1:8876"])
+        )
+    )
+
+    assert exit_code == 0
+    assert launcher_calls == [
+        {
+            "python_executable": app_module.sys.executable,
+            "api_url": "http://127.0.0.1:8876",
+        }
+    ]
+    assert subprocess_calls == [
+        {
+            "command": ["npm", "run", "desktop"],
+            "cwd": str(desktop_dir),
+            "env": subprocess_calls[0]["env"],
+            "check": False,
+        }
+    ]
+    assert subprocess_calls[0]["env"]["ASTRA_DESKTOP_API_URL"] == "http://127.0.0.1:8876"
+    assert subprocess_calls[0]["env"]["VITE_ASTRA_DESKTOP_API_URL"] == "http://127.0.0.1:8876"
+    assert subprocess_calls[0]["env"]["ASTRA_DESKTOP_API_PYTHON"] == app_module.sys.executable
+
+
+def test_desktop_packaging_commands_delegate_to_helpers(monkeypatch, capsys, tmp_path: Path) -> None:
+    monkeypatch.setattr(app_module, "chdir_to_repository_root", lambda: tmp_path)
+
+    calls: list[tuple[str, object]] = []
+
+    def fake_build_desktop_app(*, python_executable: str, api_url: str):
+        calls.append(("build", (python_executable, api_url)))
+        return SimpleNamespace(
+            detail="bundle built",
+            app_path=tmp_path / "var" / "desktop" / "Astra Desktop.app",
+            config_path=tmp_path / "launcher.json",
+        )
+
+    def fake_open_desktop_app(*, python_executable: str, api_url: str):
+        calls.append(("open", (python_executable, api_url)))
+        return SimpleNamespace(
+            detail="desktop opened",
+            app_path=tmp_path / "Applications" / "Astra Desktop.app",
+            config_path=tmp_path / "launcher.json",
+        )
+
+    def fake_install_desktop_app(*, python_executable: str, api_url: str):
+        calls.append(("install", (python_executable, api_url)))
+        return SimpleNamespace(
+            detail="desktop installed",
+            app_path=tmp_path / "Applications" / "Astra Desktop.app",
+            config_path=tmp_path / "launcher.json",
+        )
+
+    def fake_stop_desktop_app():
+        calls.append(("stop", None))
+        return SimpleNamespace(
+            detail="desktop stopped",
+            pid=4242,
+        )
+
+    monkeypatch.setattr(app_module, "build_desktop_app", fake_build_desktop_app)
+    monkeypatch.setattr(app_module, "open_desktop_app", fake_open_desktop_app)
+    monkeypatch.setattr(app_module, "install_desktop_app", fake_install_desktop_app)
+    monkeypatch.setattr(app_module, "stop_desktop_app", fake_stop_desktop_app)
+
+    build_code = asyncio.run(
+        app_module.run_cli(
+            app_module.build_parser().parse_args(["desktop-build", "--api-url", "http://127.0.0.1:8876"])
+        )
+    )
+    open_code = asyncio.run(
+        app_module.run_cli(
+            app_module.build_parser().parse_args(["desktop-open", "--api-url", "http://127.0.0.1:8876"])
+        )
+    )
+    install_code = asyncio.run(
+        app_module.run_cli(
+            app_module.build_parser().parse_args(["desktop-install", "--api-url", "http://127.0.0.1:8876"])
+        )
+    )
+    stop_code = asyncio.run(app_module.run_cli(app_module.build_parser().parse_args(["desktop-stop"])))
+
+    output = capsys.readouterr().out
+
+    assert build_code == 0
+    assert open_code == 0
+    assert install_code == 0
+    assert stop_code == 0
+    assert calls == [
+        ("build", (app_module.sys.executable, "http://127.0.0.1:8876")),
+        ("open", (app_module.sys.executable, "http://127.0.0.1:8876")),
+        ("install", (app_module.sys.executable, "http://127.0.0.1:8876")),
+        ("stop", None),
+    ]
+    assert "bundle built" in output
+    assert "desktop opened" in output
+    assert "desktop installed" in output
+    assert "desktop stopped" in output
+    assert "bridge pid: 4242" in output
 
 
 def test_main_runs_desktop_api_without_asyncio(monkeypatch, tmp_path: Path) -> None:

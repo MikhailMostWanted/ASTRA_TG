@@ -8,6 +8,14 @@ import subprocess
 import sys
 
 from apps.bot.app import run_bot
+from apps.cli.desktop import (
+    DEFAULT_API_URL as DEFAULT_DESKTOP_API_URL,
+    build_desktop_app,
+    ensure_launcher_config,
+    install_desktop_app,
+    open_desktop_app,
+    stop_desktop_app,
+)
 from apps.cli.formatting import format_action_results, format_doctor, format_logs, format_status
 from apps.cli.processes import inspect_process, start_component, stop_component
 from apps.cli.runtime import (
@@ -96,8 +104,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     desktop_parser.add_argument(
         "--api-url",
-        default="http://127.0.0.1:8765",
+        default=DEFAULT_DESKTOP_API_URL,
         help="URL локального desktop API, который увидит frontend.",
+    )
+
+    desktop_build_parser = subparsers.add_parser(
+        "desktop-build",
+        help="Собрать локальный macOS .app bundle для Astra Desktop.",
+    )
+    desktop_build_parser.add_argument(
+        "--api-url",
+        default=DEFAULT_DESKTOP_API_URL,
+        help="URL локального desktop API, который будет сохранён в launcher config.",
+    )
+
+    desktop_open_parser = subparsers.add_parser(
+        "desktop-open",
+        help="Открыть Astra Desktop.app, при необходимости сначала собрать локальный bundle.",
+    )
+    desktop_open_parser.add_argument(
+        "--api-url",
+        default=DEFAULT_DESKTOP_API_URL,
+        help="URL локального desktop API, который будет сохранён в launcher config.",
+    )
+
+    desktop_install_parser = subparsers.add_parser(
+        "desktop-install",
+        help="Установить Astra Desktop.app в ~/Applications.",
+    )
+    desktop_install_parser.add_argument(
+        "--api-url",
+        default=DEFAULT_DESKTOP_API_URL,
+        help="URL локального desktop API, который будет сохранён в launcher config.",
+    )
+
+    subparsers.add_parser(
+        "desktop-stop",
+        help="Корректно закрыть Astra Desktop и остановить desktop bridge, если он жив.",
     )
 
     desktop_api_parser = subparsers.add_parser(
@@ -166,6 +209,14 @@ async def run_cli(args: argparse.Namespace) -> int:
         return await _handle_desktop_api(host=args.host, port=args.port)
     if args.command == "desktop":
         return await _handle_desktop(api_url=args.api_url)
+    if args.command == "desktop-build":
+        return await _handle_desktop_build(api_url=args.api_url)
+    if args.command == "desktop-open":
+        return await _handle_desktop_open(api_url=args.api_url)
+    if args.command == "desktop-install":
+        return await _handle_desktop_install(api_url=args.api_url)
+    if args.command == "desktop-stop":
+        return await _handle_desktop_stop()
     if args.command == "fullaccess":
         return await run_fullaccess_command(
             args.fullaccess_command,
@@ -282,6 +333,12 @@ async def _handle_desktop(*, api_url: str) -> int:
             f"Desktop app ещё не найден: {package_json}. Сначала добавь apps/desktop."
         )
 
+    await asyncio.to_thread(
+        ensure_launcher_config,
+        python_executable=sys.executable,
+        api_url=api_url,
+    )
+
     env = os.environ.copy()
     env["ASTRA_DESKTOP_API_URL"] = api_url
     env["VITE_ASTRA_DESKTOP_API_URL"] = api_url
@@ -293,6 +350,54 @@ async def _handle_desktop(*, api_url: str) -> int:
         check=False,
     )
     return int(result.returncode)
+
+
+async def _handle_desktop_build(*, api_url: str) -> int:
+    result = await asyncio.to_thread(
+        build_desktop_app,
+        python_executable=sys.executable,
+        api_url=api_url,
+    )
+    print(result.detail)
+    if result.app_path is not None:
+        print(f".app: {result.app_path}")
+    if result.config_path is not None:
+        print(f"launcher config: {result.config_path}")
+    return 0
+
+
+async def _handle_desktop_open(*, api_url: str) -> int:
+    result = await asyncio.to_thread(
+        open_desktop_app,
+        python_executable=sys.executable,
+        api_url=api_url,
+    )
+    print(result.detail)
+    if result.app_path is not None:
+        print(f"app path: {result.app_path}")
+    return 0
+
+
+async def _handle_desktop_install(*, api_url: str) -> int:
+    result = await asyncio.to_thread(
+        install_desktop_app,
+        python_executable=sys.executable,
+        api_url=api_url,
+    )
+    print(result.detail)
+    if result.app_path is not None:
+        print(f"installed app: {result.app_path}")
+    if result.config_path is not None:
+        print(f"launcher config: {result.config_path}")
+    return 0
+
+
+async def _handle_desktop_stop() -> int:
+    result = await asyncio.to_thread(stop_desktop_app)
+    print(result.detail)
+    if result.pid is not None:
+        print(f"bridge pid: {result.pid}")
+    return 0
 
 
 async def _run_managed_bot() -> None:

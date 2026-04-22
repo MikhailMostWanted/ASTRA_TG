@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import os
 from typing import Any
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from apps.cli.desktop import DESKTOP_API_PID_PATH
 from config.settings import Settings
 from storage.database import bootstrap_database, build_database_runtime
 
@@ -64,6 +67,9 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         await bootstrap_database(effective_runtime)
+        pid_path = _desktop_api_pid_path()
+        pid_path.parent.mkdir(parents=True, exist_ok=True)
+        pid_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
         _app.state.bridge = DesktopBridge(
             settings=effective_settings,
             runtime=effective_runtime,
@@ -71,6 +77,7 @@ def create_app(
         try:
             yield
         finally:
+            pid_path.unlink(missing_ok=True)
             if owned_runtime:
                 await effective_runtime.dispose()
 
@@ -302,6 +309,13 @@ def main() -> int:
 
 def _bridge(app: FastAPI) -> DesktopBridge:
     return app.state.bridge
+
+
+def _desktop_api_pid_path() -> Path:
+    raw_path = (os.environ.get("ASTRA_DESKTOP_API_PID_PATH") or "").strip()
+    if raw_path:
+        return Path(raw_path).expanduser()
+    return DESKTOP_API_PID_PATH
 
 
 async def _call_with_lookup(app: FastAPI, fn):

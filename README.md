@@ -105,22 +105,42 @@ CLI сам переключается в корень репозитория, п
 ```bash
 astratg desktop-api
 astratg desktop
+astratg desktop-build
+astratg desktop-install
+astratg desktop-open
+astratg desktop-stop
 ```
 
 Что делает каждая:
 
 - `astratg desktop-api` поднимает только локальный bridge на `http://127.0.0.1:8765`;
 - `astratg desktop` запускает Tauri desktop dev-режим и, если bridge ещё не поднят, стартует его автоматически;
+- `astratg desktop-build` собирает локальный `.app` и кладёт его в `var/desktop/Astra Desktop.app`;
+- `astratg desktop-install` копирует готовый `.app` в `~/Applications/Astra Desktop.app`;
+- `astratg desktop-open` открывает установленный `.app` двойному клику эквивалентно через `open`;
+- `astratg desktop-stop` корректно закрывает приложение и останавливает desktop bridge;
 - frontend получает API URL через локальное окружение и не ходит напрямую по разрозненным Python-модулям.
 
-Если нужно раздельно:
+Обычный macOS-flow:
 
 ```bash
-astratg desktop-api --host 127.0.0.1 --port 8765
-cd apps/desktop
-npm install
-npm run build
+astratg desktop-build
+astratg desktop-install
+astratg desktop-open
 ```
+
+Что важно:
+
+- после `astratg desktop-install` приложение лежит в `~/Applications/Astra Desktop.app` и его можно запускать без терминала через Finder, Dock, Launchpad или Spotlight;
+- локальная сборка без установки лежит в `var/desktop/Astra Desktop.app`;
+- при старте `.app` сам проверяет bridge, поднимает его при необходимости и не плодит второй экземпляр окна;
+- если bridge был поднят самим приложением, он завершается при закрытии окна/приложения.
+
+Как удалить:
+
+- закрой приложение через `astratg desktop-stop` или `Cmd+Q`;
+- удали `~/Applications/Astra Desktop.app` или `var/desktop/Astra Desktop.app`;
+- при желании удали `~/Library/Application Support/Astra Desktop/launcher.json`.
 
 ## Provider layer
 
@@ -218,6 +238,10 @@ astratg backup
 astratg export
 astratg desktop-api
 astratg desktop
+astratg desktop-build
+astratg desktop-install
+astratg desktop-open
+astratg desktop-stop
 ```
 
 Низкоуровневые entrypoints и ops-утилиты по-прежнему доступны напрямую:

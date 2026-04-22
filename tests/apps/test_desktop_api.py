@@ -1,4 +1,5 @@
 import asyncio
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -118,6 +119,25 @@ def test_desktop_api_memory_digest_reminders_sources_and_fullaccess(
             assert "doctor" in ops_payload
             assert ops_payload["doctor"]["warnings"] is not None
 
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_desktop_api_lifecycle_writes_and_removes_pid_file(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, _ = await _seed_runtime(monkeypatch, tmp_path)
+        pid_path = tmp_path / "var" / "run" / "astra-desktop-api.pid"
+        monkeypatch.setenv("ASTRA_DESKTOP_API_PID_PATH", str(pid_path))
+        app = create_app(settings, runtime=runtime)
+
+        with TestClient(app) as client:
+            response = client.get("/health")
+            assert response.status_code == 200
+            assert pid_path.exists() is True
+            assert pid_path.read_text(encoding="utf-8").strip() == str(os.getpid())
+
+        assert pid_path.exists() is False
         await runtime.dispose()
 
     asyncio.run(run_assertions())

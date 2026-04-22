@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Astra",
+        "title": "Astra Desktop",
         "width": 1560,
         "height": 980,
         "minWidth": 1220,

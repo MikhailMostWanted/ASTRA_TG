@@ -24,9 +24,11 @@ import type {
   SourcesPayload,
 } from "@/lib/types";
 
-const API_URL = (
+const DEFAULT_API_URL = (
   import.meta.env.VITE_ASTRA_DESKTOP_API_URL || "http://127.0.0.1:8765"
 ).replace(/\/$/, "");
+
+let apiUrl = DEFAULT_API_URL;
 
 export class ApiError extends Error {
   status: number;
@@ -44,7 +46,7 @@ type RequestOptions = Omit<RequestInit, "body"> & {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { body, headers, ...init } = options;
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(`${apiUrl}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -63,6 +65,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return (await response.json()) as T;
 }
 
+export function setApiUrl(nextApiUrl: string) {
+  apiUrl = nextApiUrl.replace(/\/$/, "");
+}
+
+export function getApiUrl() {
+  return apiUrl;
+}
+
 function withQuery(path: string, params: Record<string, string | number | undefined>) {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -75,7 +85,9 @@ function withQuery(path: string, params: Record<string, string | number | undefi
 }
 
 export const api = {
-  apiUrl: API_URL,
+  get apiUrl() {
+    return apiUrl;
+  },
   health: () => request<HealthPayload>("/health"),
   dashboard: () => request<DashboardPayload>("/api/dashboard"),
   ops: (tail = 80) => request<OpsOverviewPayload>(withQuery("/api/ops", { tail })),
