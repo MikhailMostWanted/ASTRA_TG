@@ -239,7 +239,7 @@ def test_style_management_commands_show_profiles_and_chat_status(
             runtime.session_factory,
         )
         assert any("Ручной override: practical_short" in answer for answer in set_message.answers)
-        assert any("Источник профиля: ручной override" in answer for answer in set_message.answers)
+        assert any("Источник профиля: ручной выбор" in answer for answer in set_message.answers)
 
         status_message = FakeIncomingMessage(bot=FakeBot(), chat_id=900)
         await management_module.handle_style_status_command(
@@ -248,7 +248,7 @@ def test_style_management_commands_show_profiles_and_chat_status(
             runtime.session_factory,
         )
         assert any("Эффективный профиль: practical_short" in answer for answer in status_message.answers)
-        assert any("Ручной override: practical_short" in answer for answer in status_message.answers)
+        assert any("Ручной профиль: practical_short" in answer for answer in status_message.answers)
 
         unset_message = FakeIncomingMessage(bot=FakeBot(), chat_id=900)
         await management_module.handle_style_unset_command(
@@ -264,7 +264,7 @@ def test_style_management_commands_show_profiles_and_chat_status(
             SimpleNamespace(args="@project_style"),
             runtime.session_factory,
         )
-        assert any("Ручной override: не задан" in answer for answer in fallback_status.answers)
+        assert any("Ручной профиль: не задан" in answer for answer in fallback_status.answers)
         assert any("Эффективный профиль: friend_explain" in answer for answer in fallback_status.answers)
         assert any("Источник профиля: автовыбор" in answer for answer in fallback_status.answers)
 

@@ -20,6 +20,7 @@ SCREEN_REPLY_HELP = "reply_help"
 SCREEN_REPLY_PICK = "reply_pick"
 SCREEN_MEMORY_PICK = "memory_pick"
 SCREEN_FULLACCESS_CHATS = "fullaccess_chats"
+SCREEN_FULLACCESS_LOGIN = "fullaccess_login"
 
 
 OVERVIEW_SCREENS: tuple[str, ...] = (
@@ -131,6 +132,10 @@ def fullaccess_chats_route() -> str:
     return "ux:fullaccess:chats"
 
 
+def fullaccess_login_route() -> str:
+    return "ux:fullaccess:login"
+
+
 def fullaccess_chat_route(chat_ref: str) -> str:
     return f"ux:fullaccess:chat:{chat_ref}"
 
@@ -149,6 +154,8 @@ def parse_inline_route(data: str | None) -> ParsedInlineRoute | None:
         return ParsedInlineRoute(kind="screen", screen=SCREEN_MEMORY_PICK, data=data)
     if parts == ["ux", "fullaccess", "chats"]:
         return ParsedInlineRoute(kind="screen", screen=SCREEN_FULLACCESS_CHATS, data=data)
+    if parts == ["ux", "fullaccess", "login"]:
+        return ParsedInlineRoute(kind="screen", screen=SCREEN_FULLACCESS_LOGIN, data=data)
     if len(parts) == 2 and parts[1] in OVERVIEW_SCREENS:
         return ParsedInlineRoute(kind="screen", screen=parts[1], data=data)
     if len(parts) == 3 and parts[1] == "refresh":

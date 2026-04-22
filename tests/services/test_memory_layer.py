@@ -240,9 +240,9 @@ def test_memory_rebuild_builds_chat_and_people_memory_from_local_messages(
                 chat_style_override_repository=ChatStyleOverrideRepository(session),
             )
             status_text = await status_service.build_status_message()
-            assert "Astra AFT / Status" in status_text
-            assert "[OK] Memory: карт чатов 2, людей 3" in status_text
-            assert "[OK] Reply:" in status_text
+            assert "✅ Короткий статус" in status_text
+            assert "[OK] Память: карт чатов 2, людей 3" in status_text
+            assert "[OK] Ответы:" in status_text
 
         await runtime.dispose()
 

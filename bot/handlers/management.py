@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from bot.handlers.common import remember_owner_chat_if_private
 from config.settings import Settings
 from fullaccess.auth import FullAccessAuthService
+from fullaccess.copy import LOCAL_LOGIN_COMMAND
 from fullaccess.formatter import FullAccessFormatter
 from fullaccess.sync import FullAccessSyncService
 from services.chat_memory_builder import ChatMemoryBuilder
@@ -132,11 +133,17 @@ async def handle_fullaccess_login_command(
     command: CommandObject,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    login_code = command.args.strip() if command.args and command.args.strip() else None
-    if login_code and len(login_code.split()) > 1:
+    if command.args and command.args.strip():
         await message.answer(
-            "Через бота поддержан только код Telegram. Если нужен пароль 2FA, "
-            "используй локальный helper: python -m fullaccess.cli login --code <код>."
+            "\n".join(
+                [
+                    "Код нельзя отправлять в чат с ботом.",
+                    "",
+                    "Войди локально через CLI.",
+                    f"Команда: {LOCAL_LOGIN_COMMAND}",
+                    "Потом вернись сюда и нажми «Обновить».",
+                ]
+            )
         )
         return
 
@@ -145,11 +152,7 @@ async def handle_fullaccess_login_command(
         service = _build_fullaccess_auth_service(session)
         formatter = FullAccessFormatter()
         try:
-            result = (
-                await service.complete_login(login_code)
-                if login_code is not None
-                else await service.begin_login()
-            )
+            result = await service.begin_login()
         except ValueError as error:
             await message.answer(str(error))
             return

@@ -9,8 +9,8 @@ from services.reply_examples_models import ReplyExamplesRebuildResult, ReplyExam
 class ReplyExamplesFormatter:
     def format_rebuild_result(self, result: ReplyExamplesRebuildResult) -> str:
         lines = [
-            "Локальная база reply examples пересобрана.",
-            f"Собрано reply examples: {result.examples_created}",
+            "Локальная база похожих ответов пересобрана.",
+            f"Собрано примеров: {result.examples_created}",
             f"Чатов: {result.chats_processed}",
             f"Просмотрено сообщений: {result.messages_scanned}",
         ]
@@ -26,7 +26,7 @@ class ReplyExamplesFormatter:
         retrieval_result: ReplyExamplesRetrievalResult,
     ) -> str:
         lines = [
-            "Похожие прошлые ответы",
+            "💬 Похожие прошлые ответы",
             f"Чат: {chat_title}",
             f"Источник: {chat_reference}",
             "",

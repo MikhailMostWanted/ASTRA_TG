@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
+from fullaccess.copy import LOCAL_LOGIN_COMMAND
 from fullaccess.models import FullAccessChatSummary, FullAccessConfig, FullAccessRemoteMessage
 from services.message_normalizer import normalize_text
 
@@ -151,7 +152,7 @@ class TelethonFullAccessClient:
                 ) from error
             except PhoneCodeExpiredError as error:
                 raise ValueError(
-                    "Код Telegram уже истёк. Сначала заново вызови /fullaccess_login без аргументов."
+                    f"Код Telegram уже истёк. Запусти {LOCAL_LOGIN_COMMAND} ещё раз и запроси новый код."
                 ) from error
             except ApiIdInvalidError as error:
                 raise ValueError(

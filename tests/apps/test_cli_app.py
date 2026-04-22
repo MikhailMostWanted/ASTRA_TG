@@ -27,6 +27,16 @@ def test_cli_parser_supports_expected_commands() -> None:
     assert args.command == "export"
     assert args.stdout is True
 
+    args = parser.parse_args(["fullaccess", "login"])
+    assert args.command == "fullaccess"
+    assert args.fullaccess_command == "login"
+    assert args.code is None
+
+    args = parser.parse_args(["fullaccess", "login", "--code", "12345"])
+    assert args.command == "fullaccess"
+    assert args.fullaccess_command == "login"
+    assert args.code == "12345"
+
 
 def test_status_command_handles_missing_processes(monkeypatch, capsys, tmp_path: Path) -> None:
     monkeypatch.setattr(app_module, "chdir_to_repository_root", lambda: tmp_path)

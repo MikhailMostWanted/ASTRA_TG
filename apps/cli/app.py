@@ -23,6 +23,7 @@ from apps.cli.runtime import (
 from apps.worker.app import run_worker_once
 from config.settings import Settings
 from core.logging import configure_logging, get_logger, log_event, log_exception
+from fullaccess.cli import run_fullaccess_command
 
 
 LOGGER = get_logger(__name__)
@@ -86,6 +87,31 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Дополнительно вывести JSON в stdout.",
     )
+
+    fullaccess_parser = subparsers.add_parser(
+        "fullaccess",
+        help="Безопасные локальные команды для experimental full-access.",
+    )
+    fullaccess_subparsers = fullaccess_parser.add_subparsers(
+        dest="fullaccess_command",
+        required=True,
+    )
+    fullaccess_subparsers.add_parser(
+        "status",
+        help="Показать состояние full-access слоя.",
+    )
+    login_parser = fullaccess_subparsers.add_parser(
+        "login",
+        help="Безопасно запросить код и завершить локальный вход через CLI.",
+    )
+    login_parser.add_argument(
+        "--code",
+        help="Код Telegram. Если не указан, CLI спросит его интерактивно.",
+    )
+    fullaccess_subparsers.add_parser(
+        "logout",
+        help="Локально удалить session и pending auth.",
+    )
     return parser
 
 
@@ -108,6 +134,11 @@ async def run_cli(args: argparse.Namespace) -> int:
         return await run_ops_command("backup")
     if args.command == "export":
         return await run_ops_command("export", stdout=args.stdout)
+    if args.command == "fullaccess":
+        return await run_fullaccess_command(
+            args.fullaccess_command,
+            code=getattr(args, "code", None),
+        )
     if args.command == "_run-bot":
         await _run_managed_bot()
         return 0

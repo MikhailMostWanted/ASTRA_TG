@@ -220,15 +220,15 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             }
 
             rendered = formatter.format_result(result)
-            assert "Чат: Команда продукта" in rendered
-            assert "Сообщение-ориентир" in rendered
+            assert "💬 Ответ / Команда продукта" in rendered
+            assert "Ориентир" in rendered
             assert "Анна" in rendered
-            assert "[OK] Style: friend_explain" in rendered
-            assert "[OK] Persona: да" in rendered
-            assert "Итоговая серия" in rendered
+            assert "[OK] Стиль: friend_explain" in rendered
+            assert "[OK] Персона: да" in rendered
+            assert "Готовый вариант ответа" in rendered
             assert "1." in rendered
-            assert "Почему этот ответ" in rendered
-            assert "[OK] Guardrails: ok" in rendered
+            assert "Почему именно так" in rendered
+            assert "[OK] Ограничители: без замечаний" in rendered
             assert "Риск:" in rendered
             assert "уверенность" in rendered
 
@@ -240,9 +240,9 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             runtime.session_factory,
         )
         assert any("Команда продукта" in answer for answer in fake_message.answers)
-        assert any("[OK] Style: friend_explain" in answer for answer in fake_message.answers)
-        assert any("[OK] Persona: да" in answer for answer in fake_message.answers)
-        assert any("Итоговая серия" in answer for answer in fake_message.answers)
+        assert any("[OK] Стиль: friend_explain" in answer for answer in fake_message.answers)
+        assert any("[OK] Персона: да" in answer for answer in fake_message.answers)
+        assert any("Готовый вариант ответа" in answer for answer in fake_message.answers)
         assert any("Риск:" in answer for answer in fake_message.answers)
 
         await runtime.dispose()
@@ -423,7 +423,7 @@ def test_reply_engine_handles_missing_chat_insufficient_context_and_latest_outbo
             assert persona_off.suggestion is not None
             assert persona_off.suggestion.persona_applied is False
             assert persona_off.suggestion.final_reply_messages == persona_off.suggestion.reply_messages
-            assert "[OFF] Persona: нет" in formatter.format_result(persona_off)
+            assert "[OFF] Персона: нет" in formatter.format_result(persona_off)
 
         await runtime.dispose()
 

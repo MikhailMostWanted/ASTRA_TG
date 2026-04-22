@@ -13,6 +13,7 @@ from fullaccess.client import (
     build_fullaccess_client,
     telethon_is_available,
 )
+from fullaccess.copy import LOCAL_LOGIN_COMMAND, local_login_instruction_lines
 from fullaccess.models import (
     FullAccessConfig,
     FullAccessLoginResult,
@@ -70,15 +71,19 @@ class FullAccessAuthService:
                 reason_parts.append(f"Не удалось проверить авторизацию: {error}")
             else:
                 if authorized:
-                    reason_parts.append("Experimental full-access готов к ручному чтению и sync.")
+                    reason_parts.append("Experimental full-access готов к ручному чтению и синхронизации.")
                 elif pending_state is not None:
-                    reason_parts.append("Код уже запрошен, жду подтверждение входа.")
+                    reason_parts.append(
+                        f"Код уже запрошен. Заверши вход локально через {LOCAL_LOGIN_COMMAND}."
+                    )
                 elif session_exists:
-                    reason_parts.append("Локальная session найдена, но пользователь не авторизован.")
+                    reason_parts.append("Локальная сессия найдена, но пользователь не авторизован.")
                 elif not config.phone_configured:
                     reason_parts.append("Нужно задать FULLACCESS_PHONE, чтобы запросить код входа.")
                 else:
-                    reason_parts.append("Можно запрашивать код авторизации через /fullaccess_login.")
+                    reason_parts.append(
+                        f"Код можно запросить через /fullaccess_login, а завершить вход локально через {LOCAL_LOGIN_COMMAND}."
+                    )
 
         return FullAccessStatusReport(
             enabled=config.enabled,
@@ -126,10 +131,7 @@ class FullAccessAuthService:
         return FullAccessLoginResult(
             kind="code_requested",
             phone=config.phone,
-            instructions=(
-                "Отправь в бот /fullaccess_login <код>.",
-                "Если Telegram попросит пароль 2FA, заверши вход локально: python -m fullaccess.cli login --code <код>.",
-            ),
+            instructions=local_login_instruction_lines(),
         )
 
     async def complete_login(
@@ -140,13 +142,13 @@ class FullAccessAuthService:
     ) -> FullAccessLoginResult:
         normalized_code = code.strip()
         if not normalized_code:
-            raise ValueError("Код Telegram пустой. Сначала запроси код, затем пришли его командой.")
+            raise ValueError("Код Telegram пустой. Запусти локальный вход и введи код в консоли.")
 
         config = await self._require_login_prerequisites()
         pending_state = await self._load_pending_auth()
         if pending_state is None:
             raise ValueError(
-                "Нет активного запроса кода. Сначала вызови /fullaccess_login без аргументов."
+                f"Нет активного запроса кода. Сначала запроси его через /fullaccess_login или {LOCAL_LOGIN_COMMAND}."
             )
 
         client = self.client_factory(config)
@@ -163,10 +165,7 @@ class FullAccessAuthService:
                 return FullAccessLoginResult(
                     kind="password_required",
                     phone=pending_state.phone,
-                    instructions=(
-                        "Через бот пароль 2FA не принимаю.",
-                        f"Заверши вход локально: python -m fullaccess.cli login --code {normalized_code}",
-                    ),
+                    instructions=local_login_instruction_lines(),
                 )
             password = password_callback().strip()
             if not password:

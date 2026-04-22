@@ -29,28 +29,28 @@ class DigestFormatter:
     max_message_length: int = 3500
 
     def format(self, result: DigestBuildResult) -> RenderedDigest:
-        title = "Astra AFT / Digest"
+        title = "📰 Дайджест"
         intro_sections = [
-            "Сводка",
+            "Коротко",
             format_status_line(MARKER_OK, "Окно", format_window_range(result.window)),
             format_status_line(MARKER_OK, "Сообщений", str(result.total_messages)),
             format_status_line(MARKER_OK, "Источников", str(result.source_count)),
             "",
-            "Обзор",
+            "Сводка",
             *result.overview_lines,
             "",
-            "Ключевые темы и источники",
+            "Темы и источники",
             *(result.key_source_lines or [f"{MARKER_OFF} Пока нет содержательных источников."]),
             "",
-            "Источники",
+            "По источникам",
         ]
         detail_sections = [self._format_source_section(source) for source in result.source_summaries]
         stats_section = "\n".join(
             [
-                "Детали",
+                "Тех. детали",
                 format_status_line(MARKER_OK, "Сообщений в окне", str(result.total_messages)),
                 format_status_line(MARKER_OK, "Источников с активностью", str(result.source_count)),
-                format_status_line(MARKER_OK, "Окно digest", result.window.label),
+                format_status_line(MARKER_OK, "Окно дайджеста", result.window.label),
             ]
         )
         chunks = _chunk_rendered_digest(
@@ -64,7 +64,7 @@ class DigestFormatter:
 
     def format_empty_window(self, *, window_label: str) -> RenderedDigest:
         lines = [
-            "Astra AFT / Digest",
+            "📰 Дайджест",
             "",
             *state_shell_lines(
                 marker=MARKER_WARN,
@@ -90,12 +90,12 @@ class DigestFormatter:
                 marker=MARKER_WARN,
                 status="Дайджест не собран",
                 meaning="В выбранном окне не нашлось новых данных.",
-                next_step="Попробуй окно 24h или проверь Sources.",
+                next_step="Попробуй окно 24h или проверь Источники.",
             )
             lines.extend(
                 [
                     "",
-                    "Детали",
+                    "Тех. детали",
                     format_status_line(MARKER_OK, "Окно", format_window_range(plan.window)),
                     format_status_line(MARKER_OFF, "Получатель", target_label),
                 ]
@@ -103,17 +103,19 @@ class DigestFormatter:
             return "\n".join(lines)
 
         lines = [
-            "Сводка",
-            format_status_line(MARKER_OK, "Дайджест", "собран"),
+            "Коротко",
             plan.summary_short,
             "",
-            "Ключевые параметры",
+            "Что дальше",
+            "Дайджест уже показан в текущем чате.",
+            "",
+            "Тех. детали",
             format_status_line(MARKER_OK, "Окно", format_window_range(plan.window)),
             format_status_line(MARKER_OK, "Получатель", target_label),
             format_status_line(MARKER_OK, "Сообщений", str(plan.message_count)),
             format_status_line(MARKER_OK, "Источников", str(plan.source_count)),
         ]
-        lines.extend(["", "Детали", format_status_line(MARKER_OK, "Digest ID", f"#{plan.digest_id}")])
+        lines.extend(["", format_status_line(MARKER_OK, "Digest ID", f"#{plan.digest_id}")])
         if plan.llm_refine_requested:
             lines.append(
                 format_status_line(MARKER_OK, "LLM-улучшение", "применено")

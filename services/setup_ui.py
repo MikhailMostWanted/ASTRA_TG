@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.settings import Settings
 from fullaccess.auth import FullAccessAuthService
+from fullaccess.copy import LOCAL_LOGIN_COMMAND, local_login_instruction_lines
 from fullaccess.formatter import FullAccessFormatter
 from fullaccess.sync import FullAccessSyncService
 from services.chat_memory_builder import ChatMemoryBuilder
@@ -20,6 +21,7 @@ from services.inline_navigation import (
     SCREEN_DOCTOR,
     SCREEN_FULLACCESS,
     SCREEN_FULLACCESS_CHATS,
+    SCREEN_FULLACCESS_LOGIN,
     SCREEN_HOME,
     SCREEN_MEMORY,
     SCREEN_MEMORY_PICK,
@@ -35,6 +37,7 @@ from services.inline_navigation import (
     digest_run_route,
     fullaccess_chat_route,
     fullaccess_chats_route,
+    fullaccess_login_route,
     memory_rebuild_route,
     memory_chat_route,
     memory_pick_route,
@@ -237,6 +240,8 @@ class SetupUIService:
             return await self._build_fullaccess_card()
         if screen == SCREEN_FULLACCESS_CHATS:
             return await self._build_fullaccess_chats_card()
+        if screen == SCREEN_FULLACCESS_LOGIN:
+            return await self._build_fullaccess_login_card()
         if screen == SCREEN_OPS:
             return await self._build_ops_card()
         raise ValueError(f"Неизвестный setup-экран: {screen}")
@@ -262,7 +267,7 @@ class SetupUIService:
             sender=sender,
         )
         return render_text_card(
-            title="Astra AFT / Digest / Результат",
+            title="📰 Дайджест / Результат",
             lines=DigestFormatter().format_inline_result(
                 plan=plan,
                 notice=publish_result.notice,
@@ -292,63 +297,52 @@ class SetupUIService:
     async def _build_home_card(self) -> RenderedCard:
         report = await self._build_report()
         facts = report.facts
+        summary_lines = [
+            (
+                f"✅ Основной путь готов: {report.ready_check_count}/{report.total_check_count}."
+                if _core_path_ready(report)
+                else f"⚠️ Основной путь ещё собирается: {report.ready_check_count}/{report.total_check_count}."
+            ),
+            f"📂 Источники: {facts.active_sources} активных, с данными {facts.chats_with_data}.",
+            (
+                f"📰 Дайджест и 🧠 память: target {facts.digest_target_label or 'ещё не задан'}, "
+                f"карт памяти {facts.chat_memory_cards + facts.person_memory_cards}."
+            ),
+            (
+                f"💬 Ответы и ⏰ напоминания: ready-чатов {facts.reply_ready_chats}, "
+                f"активных напоминаний {facts.active_reminders}."
+            ),
+        ]
         detail_lines = [
-            _line(
-                _ok_warn(facts.active_sources > 0 and facts.has_messages),
-                "Источники",
-                f"{facts.active_sources} активных, с данными {facts.chats_with_data}/{facts.total_sources}",
-            ),
-            _line(
-                _ok_warn(
-                    facts.digest_sources > 0
-                    and facts.digest_target_configured
-                    and facts.digest_window_messages > 0
-                ),
-                "Digest",
-                f"target: {facts.digest_target_label or 'не задан'}, окно {facts.digest_window_label}: {facts.digest_window_messages}",
-            ),
-            _line(
-                _ok_warn(facts.has_memory_cards),
-                "Memory",
-                f"чаты {facts.chat_memory_cards}, люди {facts.person_memory_cards}",
-            ),
-            _line(
-                _ok_warn(_find_check(report.layers, "reply").ready),
-                "Reply",
-                f"ready chats {facts.reply_ready_chats}, few-shot: {_yes_no(facts.reply_examples > 0)}",
-            ),
-            _compose_reminders_line(report),
             _compose_provider_line(report),
             _compose_fullaccess_line(report),
             _compose_ops_line(facts),
+            f"{MARKER_WARN if report.warnings else MARKER_OK} Предупреждений: {len(report.warnings)}",
         ]
         return render_home_card(
-            title="Astra AFT / Setup",
-            summary_lines=[
-                f"Готово: {report.ready_check_count}/{report.total_check_count}",
-                f"Основной контур: {_yes_no(_core_path_ready(report))}",
-            ],
+            title="🛠️ Настройка Astra",
+            summary_lines=summary_lines,
             detail_lines=detail_lines,
             next_step=_build_next_step(report),
             rows=[
                 [
                     ("Статус", screen_route(SCREEN_STATUS)),
-                    ("Чеклист", screen_route(SCREEN_CHECKLIST)),
-                    ("Диагностика", screen_route(SCREEN_DOCTOR)),
-                ],
-                [
                     ("Источники", screen_route(SCREEN_SOURCES)),
                     ("Дайджест", screen_route(SCREEN_DIGEST)),
-                    ("Память", screen_route(SCREEN_MEMORY)),
                 ],
                 [
+                    ("Память", screen_route(SCREEN_MEMORY)),
                     ("Ответы", screen_route(SCREEN_REPLY)),
                     ("Напоминания", screen_route(SCREEN_REMINDERS)),
                 ],
                 [
-                    ("Provider", screen_route(SCREEN_PROVIDER)),
+                    ("Провайдер", screen_route(SCREEN_PROVIDER)),
                     ("Full-access", screen_route(SCREEN_FULLACCESS)),
-                    ("Ops", screen_route(SCREEN_OPS)),
+                ],
+                [
+                    ("Чеклист", screen_route(SCREEN_CHECKLIST)),
+                    ("Доктор", screen_route(SCREEN_DOCTOR)),
+                    ("Операции", screen_route(SCREEN_OPS)),
                 ],
                 [("Обновить", "ux:refresh:home")],
             ],
@@ -357,46 +351,31 @@ class SetupUIService:
     async def _build_status_card(self) -> RenderedCard:
         report = await self._build_report()
         facts = report.facts
+        summary_lines = [
+            (
+                "✅ Основной путь готов."
+                if _core_path_ready(report)
+                else "⚠️ Основной путь ещё не готов."
+            ),
+            f"📂 Источники: {facts.active_sources} активных, сообщений {facts.total_messages}.",
+            f"📰 Дайджест: target {facts.digest_target_label or 'ещё не задан'}, в 24h данных {facts.digest_window_messages}.",
+            f"🧠 Память / 💬 ответы / ⏰ напоминания: {facts.chat_memory_cards} / {facts.reply_ready_chats} / {facts.active_reminders}.",
+        ]
         detail_lines = [
-            _line(
-                _ok_warn(facts.active_sources > 0 and facts.has_messages),
-                "Источники",
-                f"{facts.active_sources} активных, сообщений {facts.total_messages}, с данными {facts.chats_with_data}",
-            ),
-            _line(
-                _ok_warn(
-                    facts.digest_sources > 0
-                    and facts.digest_target_configured
-                    and facts.digest_window_messages > 0
-                ),
-                "Digest",
-                f"target: {facts.digest_target_label or 'не задан'}, данных 24h: {facts.digest_window_messages}",
-            ),
-            _line(
-                _ok_warn(facts.has_memory_cards),
-                "Memory",
-                f"чаты {facts.chat_memory_cards}, люди {facts.person_memory_cards}, rebuild: {_format_timestamp(facts.last_memory_rebuild_at)}",
-            ),
-            _line(
-                _ok_warn(_find_check(report.layers, "reply").ready),
-                "Reply",
-                f"ready chats {facts.reply_ready_chats}, examples {facts.reply_examples}, style {facts.style_profiles}/{STYLE_READY_PROFILE_COUNT}",
-            ),
-            _compose_reminders_line(report),
+            f"{MARKER_OK if facts.last_memory_rebuild_at else MARKER_OFF} Последняя пересборка памяти: {_format_timestamp(facts.last_memory_rebuild_at)}",
+            f"{MARKER_OK if facts.reply_examples else MARKER_OFF} Похожие ответы: {facts.reply_examples}",
             _compose_provider_line(report),
             _compose_fullaccess_line(report),
             _compose_ops_line(facts),
+            f"{MARKER_WARN if report.warnings else MARKER_OK} Предупреждений: {len(report.warnings)}",
         ]
-        rows = [[("Чеклист", screen_route(SCREEN_CHECKLIST)), ("Диагностика", screen_route(SCREEN_DOCTOR))]]
+        rows = [[("Чеклист", screen_route(SCREEN_CHECKLIST)), ("Доктор", screen_route(SCREEN_DOCTOR))]]
         navigation_button = _build_navigation_button(report)
         if navigation_button is not None:
             rows.append([navigation_button])
         return render_overview_card(
-            title="Astra AFT / Status",
-            summary_lines=[
-                f"Готово: {report.ready_check_count}/{report.total_check_count}",
-                f"Предупреждений: {len(report.warnings)}",
-            ],
+            title="✅ Короткий статус",
+            summary_lines=summary_lines,
             detail_lines=detail_lines,
             next_step=_build_next_step(report),
             rows=rows,
@@ -410,15 +389,16 @@ class SetupUIService:
             _compose_checklist_line(index=index, item=item)
             for index, item in enumerate(report.checklist, start=1)
         ]
-        rows = [[("Статус", screen_route(SCREEN_STATUS)), ("Диагностика", screen_route(SCREEN_DOCTOR))]]
+        rows = [[("Статус", screen_route(SCREEN_STATUS)), ("Доктор", screen_route(SCREEN_DOCTOR))]]
         navigation_button = _build_navigation_button(report)
         if navigation_button is not None:
             rows.append([navigation_button])
         return render_overview_card(
-            title="Astra AFT / Checklist",
+            title="🛠️ Чеклист",
             summary_lines=[
-                f"Готово: {report.ready_check_count}/{report.total_check_count}",
-                f"Первый незакрытый шаг: {_first_unready_title(report)}",
+                f"Закрыто шагов: {report.ready_check_count}/{report.total_check_count}.",
+                f"Сейчас мешает: {_first_unready_title(report)}.",
+                "Иди сверху вниз: так быстрее собрать рабочий путь без лишней диагностики.",
             ],
             detail_lines=detail_lines,
             next_step=_build_next_step(report),
@@ -431,10 +411,10 @@ class SetupUIService:
         report = await self._build_report()
         doctor = SystemHealthService().build_report(report)
         detail_lines = [
-            "ОК",
+            "Что уже ок",
             *[f"{MARKER_OK} {compact_text(item, limit=82)}" for item in doctor.ok_items[:3]],
             "",
-            "Предупреждения",
+            "На что смотреть",
             *[
                 f"{_doctor_warning_marker(item)} {compact_text(item, limit=82)}"
                 for item in doctor.warnings[:4]
@@ -443,14 +423,15 @@ class SetupUIService:
         hidden_warning_count = max(len(doctor.warnings) - 4, 0)
         if hidden_warning_count:
             detail_lines.append(f"{MARKER_WARN} Ещё предупреждений: {hidden_warning_count}")
-        detail_lines.extend(["", "Операционный слой"])
+        detail_lines.extend(["", "Операции"])
         detail_lines.append(_compose_ops_line(report.facts))
         rows = [[("Статус", screen_route(SCREEN_STATUS)), ("Чеклист", screen_route(SCREEN_CHECKLIST))]]
         return render_overview_card(
-            title="Astra AFT / Doctor",
+            title="🛠️ Доктор",
             summary_lines=[
-                f"ОК-пунктов: {len(doctor.ok_items)}",
-                f"Предупреждений: {len(doctor.warnings)}",
+                f"ОК-пунктов: {len(doctor.ok_items)}.",
+                f"Предупреждений: {len(doctor.warnings)}.",
+                "Здесь скрытые причины, startup warnings и операционные детали.",
             ],
             detail_lines=detail_lines,
             next_step=compact_text(
@@ -466,29 +447,36 @@ class SetupUIService:
         report = await self._build_report()
         chats = await self.chat_repository.list_chats()
         message_counts = await self.message_repository.count_messages_by_chat()
-        detail_lines = []
+        detail_lines: list[str] = []
         for chat in chats[:4]:
             marker = MARKER_OK if chat.is_enabled and message_counts.get(chat.id, 0) > 0 else MARKER_OFF if not chat.is_enabled else MARKER_WARN
             source_flags = []
             if chat.exclude_from_digest:
-                source_flags.append("без digest")
+                source_flags.append("без дайджеста")
             if chat.exclude_from_memory:
-                source_flags.append("без memory")
+                source_flags.append("без памяти")
             flags = f", {', '.join(source_flags)}" if source_flags else ""
             detail_lines.append(
                 f"{marker} {chat.title or chat.telegram_chat_id}: {message_counts.get(chat.id, 0)} сообщений{flags}"
             )
-        if not detail_lines:
-            detail_lines.extend(
-                state_shell_lines(
-                    marker=MARKER_WARN,
-                    status="Источники не добавлены",
-                    meaning="Astra пока не получает сообщения для digest, memory и reply.",
-                    next_step="/source_add <chat_id|@username>",
-                )
-            )
         if len(chats) > 4:
             detail_lines.append(f"{MARKER_OK} Ещё источников: {len(chats) - 4}")
+
+        if chats:
+            summary_lines = [
+                f"📂 Активно: {report.facts.active_sources} из {report.facts.total_sources}.",
+                f"📥 С данными: {report.facts.chats_with_data}.",
+                "Именно эти чаты кормят ingest, дайджест, память и ответы.",
+            ]
+        else:
+            summary_lines = [
+                "📂 Пока источников нет.",
+                "Astra ещё не получает сообщения для дайджеста, памяти и ответов.",
+                "Добавь первый источник и вернись сюда.",
+            ]
+            detail_lines = [
+                f"{MARKER_WARN} Можно использовать @username, chat_id, форвард или ответ на сообщение.",
+            ]
         rows = [[("Как добавить", sources_help_route())]]
         for chat in chats[:3]:
             rows.append(
@@ -501,12 +489,8 @@ class SetupUIService:
             )
 
         return render_overview_card(
-            title="Astra AFT / Sources",
-            summary_lines=[
-                f"Всего источников: {report.facts.total_sources}",
-                f"Активных: {report.facts.active_sources}",
-                f"С данными: {report.facts.chats_with_data}",
-            ],
+            title="📂 Источники",
+            summary_lines=summary_lines,
             detail_lines=detail_lines,
             next_step=_build_sources_next_step(report),
             rows=rows,
@@ -516,12 +500,12 @@ class SetupUIService:
 
     def _build_sources_help_card(self) -> RenderedCard:
         return render_help_card(
-            title="Astra AFT / Sources / Как добавить",
+            title="📂 Как добавить источник",
             lines=[
-                "1. /source_add @username для публичного чата или канала.",
-                "2. /source_add -1001234567890 для прямого chat_id.",
-                "3. Перешли сообщение из нужного чата и вызови /source_add.",
-                "4. Ответь на сообщение из нужного чата и вызови /source_add.",
+                "1. Напиши: /source_add @username",
+                "2. Или используй прямой chat_id: /source_add -1001234567890",
+                "3. Можно переслать сообщение из нужного чата",
+                "4. Можно ответить на сообщение и вызвать /source_add",
             ],
             next_step="/source_add <chat_id|@username>",
             rows=[[("Назад", screen_route(SCREEN_SOURCES)), ("Домой", screen_route(SCREEN_HOME))]],
@@ -530,19 +514,21 @@ class SetupUIService:
     async def _build_digest_card(self) -> RenderedCard:
         report = await self._build_report()
         facts = report.facts
+        summary_lines = [
+            f"📰 Куда отправим: {facts.digest_target_label or 'ещё не задано'}.",
+            f"📥 Данных в {facts.digest_window_label}: {facts.digest_window_messages}.",
+            "Дайджест собирается по локальной БД, а не по живому Telegram.",
+        ]
         detail_lines = [
-            _line(_ok_warn(facts.digest_target_configured), "Target", facts.digest_target_label or "не задан"),
+            _line(_ok_warn(facts.digest_target_configured), "Получатель", facts.digest_target_label or "не задан"),
             _line(_ok_warn(facts.digest_window_messages > 0), "Данные", f"в {facts.digest_window_label}: {facts.digest_window_messages}"),
-            _line(_ok_warn(facts.digest_sources > 0), "Источники", f"digest-источников: {facts.digest_sources}"),
+            _line(_ok_warn(facts.digest_sources > 0), "Источники", f"для дайджеста: {facts.digest_sources}"),
             _compose_provider_digest_line(report),
-            f"{MARKER_OK} Digest читает локальную БД и показывает preview в текущем чате.",
+            f"{MARKER_OK} Дайджест читает локальную БД и показывает превью в текущем чате.",
         ]
         return render_overview_card(
-            title="Astra AFT / Digest",
-            summary_lines=[
-                f"Канал доставки: {facts.digest_target_label or 'не задан'}",
-                f"Окно по умолчанию: {facts.digest_window_label}",
-            ],
+            title="📰 Дайджест",
+            summary_lines=summary_lines,
             detail_lines=detail_lines,
             next_step=_build_digest_next_step(report),
             rows=[
@@ -558,18 +544,21 @@ class SetupUIService:
     async def _build_memory_card(self) -> RenderedCard:
         report = await self._build_report()
         facts = report.facts
+        summary_lines = [
+            f"🧠 Карт чатов: {facts.chat_memory_cards}.",
+            f"👤 Карт людей: {facts.person_memory_cards}.",
+            "Память строится только по локальным сообщениям.",
+            f"🕒 Последняя пересборка: {_format_timestamp(facts.last_memory_rebuild_at)}.",
+        ]
         detail_lines = [
             _line(_ok_warn(facts.chat_memory_cards > 0), "Карты чатов", str(facts.chat_memory_cards)),
             _line(MARKER_OK if facts.person_memory_cards > 0 else MARKER_OFF, "Карты людей", str(facts.person_memory_cards)),
-            _line(_ok_warn(facts.last_memory_rebuild_at is not None), "Последний rebuild", _format_timestamp(facts.last_memory_rebuild_at)),
-            f"{MARKER_OK} Память строится только по локальной SQLite-БД.",
+            _line(_ok_warn(facts.last_memory_rebuild_at is not None), "Последняя пересборка", _format_timestamp(facts.last_memory_rebuild_at)),
+            f"{MARKER_OK} Память строится только по локальной базе данных.",
         ]
         return render_overview_card(
-            title="Astra AFT / Memory",
-            summary_lines=[
-                f"Карт чатов: {facts.chat_memory_cards}",
-                f"Карт людей: {facts.person_memory_cards}",
-            ],
+            title="🧠 Память",
+            summary_lines=summary_lines,
             detail_lines=detail_lines,
             next_step=_build_memory_next_step(report),
             rows=[
@@ -582,6 +571,11 @@ class SetupUIService:
     async def _build_reply_card(self) -> RenderedCard:
         report = await self._build_report()
         facts = report.facts
+        summary_lines = [
+            f"💬 Готовых чатов: {facts.reply_ready_chats}.",
+            f"🧾 Похожие ответы: {'есть' if facts.reply_examples > 0 else 'пока нет'}.",
+            "Здесь покажу ориентир, готовый вариант ответа и короткое почему.",
+        ]
         detail_lines = [
             _line(_ok_warn(facts.reply_ready_chats > 0), "Готовые чаты", str(facts.reply_ready_chats)),
             _line(
@@ -598,26 +592,23 @@ class SetupUIService:
             _compose_provider_reply_line(report),
         ]
         return render_overview_card(
-            title="Astra AFT / Reply",
-            summary_lines=[
-                f"Готовых чатов: {facts.reply_ready_chats}",
-                f"Похожие ответы: {_yes_no(facts.reply_examples > 0)}",
-            ],
+            title="💬 Ответы",
+            summary_lines=summary_lines,
             detail_lines=detail_lines,
             next_step=_build_reply_next_step(report),
-            rows=[[("Выбрать чат", reply_pick_route()), ("Как использовать", reply_help_route())]],
+            rows=[[("Выбрать чат", reply_pick_route()), ("Как это работает", reply_help_route())]],
             back_screen=SCREEN_HOME,
             current_screen=SCREEN_REPLY,
         )
 
     def _build_reply_help_card(self) -> RenderedCard:
         return render_help_card(
-            title="Astra AFT / Reply / Как использовать",
+            title="💬 Как использовать ответы",
             lines=[
-                "Слой ответов работает по локальному контексту, а не по живому Telegram.",
-                "Базовый запуск: /reply <chat_id|@username>.",
-                "LLM-версия: /reply_llm <chat_id|@username>.",
-                "Похожие ответы: /reply_examples <chat_id|@username>.",
+                "1. Выбери чат кнопкой ниже.",
+                "2. Если чата нет, сначала накопи сообщения и пересобери память.",
+                "3. Команда-резерв: /reply <chat_id|@username>",
+                "4. LLM-версия: /reply_llm <chat_id|@username>",
             ],
             next_step="/reply <chat_id|@username>",
             rows=[[("Назад", screen_route(SCREEN_REPLY)), ("Домой", screen_route(SCREEN_HOME))]],
@@ -626,6 +617,12 @@ class SetupUIService:
     async def _build_reminders_card(self) -> RenderedCard:
         report = await self._build_report()
         facts = report.facts
+        summary_lines = [
+            f"⏰ Кандидатов: {facts.candidate_tasks}.",
+            f"✅ Активных задач: {facts.confirmed_tasks}.",
+            f"🔔 Активных напоминаний: {facts.active_reminders}.",
+            "Скан ищет задачи и напоминания в локальных сообщениях.",
+        ]
         detail_lines = [
             _line(
                 _ok_warn(facts.owner_chat_id is not None),
@@ -643,12 +640,8 @@ class SetupUIService:
             ),
         ]
         return render_overview_card(
-            title="Astra AFT / Reminders",
-            summary_lines=[
-                f"Кандидатов: {facts.candidate_tasks}",
-                f"Активных задач: {facts.confirmed_tasks}",
-                f"Активных напоминаний: {facts.active_reminders}",
-            ],
+            title="⏰ Напоминания",
+            summary_lines=summary_lines,
             detail_lines=detail_lines,
             next_step=_build_reminders_next_step(report),
             rows=[
@@ -661,8 +654,13 @@ class SetupUIService:
 
     async def _build_provider_card(self) -> RenderedCard:
         status = await self._get_provider_status(check_api=True)
+        summary_lines = [
+            f"🔌 Слой: {'включён' if status.enabled else 'выключен'}.",
+            f"🌐 API: {'доступен' if status.available else 'недоступен'}.",
+            "Даже без провайдера основной путь Astra остаётся рабочим.",
+        ]
         detail_lines = [
-            f"{MARKER_OPT} Provider-слой: {'включён' if status.enabled else 'выключен'}",
+            f"{MARKER_OPT} Слой провайдера: {'включён' if status.enabled else 'выключен'}",
             _line(
                 _provider_detail_marker(status.enabled, status.configured),
                 "Конфиг",
@@ -670,12 +668,12 @@ class SetupUIService:
             ),
             _line(
                 _provider_detail_marker(status.enabled, status.reply_refine_available),
-                "Reply refine",
+                "Улучшение ответов",
                 "доступен" if status.reply_refine_available else "недоступен",
             ),
             _line(
                 _provider_detail_marker(status.enabled, status.digest_refine_available),
-                "Digest refine",
+                "Улучшение дайджеста",
                 "доступен" if status.digest_refine_available else "недоступен",
             ),
             _line(
@@ -685,11 +683,8 @@ class SetupUIService:
             ),
         ]
         return render_overview_card(
-            title="Astra AFT / Provider",
-            summary_lines=[
-                f"Слой: {'включён' if status.enabled else 'выключен'}",
-                f"API: {'доступен' if status.available else 'недоступен'}",
-            ],
+            title="🔌 Провайдер",
+            summary_lines=summary_lines,
             detail_lines=detail_lines,
             next_step=_build_provider_next_step(status=status),
             rows=[[("Статус", screen_route(SCREEN_STATUS))]],
@@ -699,8 +694,13 @@ class SetupUIService:
 
     async def _build_fullaccess_card(self) -> RenderedCard:
         status = await self.fullaccess_auth_service.build_status_report()
+        summary_lines = [
+            "🧪 Экспериментальный read-only слой для ручной синхронизации.",
+            f"Статус: {'авторизован' if status.authorized else 'не авторизован'}.",
+            f"Session: {'есть' if status.session_exists else 'нет'}.",
+            f"Синхронизировано: {status.synced_chat_count} чатов, {status.synced_message_count} сообщений.",
+        ]
         detail_lines = [
-            f"{MARKER_EXP} Только чтение, только вручную.",
             _line(MARKER_EXP if status.enabled else MARKER_OFF, "Слой", "включён" if status.enabled else "выключен"),
             _line(
                 _fullaccess_detail_marker(status.enabled, status.authorized),
@@ -732,16 +732,13 @@ class SetupUIService:
             f"{MARKER_WARN if status.enabled and not status.ready_for_manual_sync else MARKER_OFF if not status.enabled else MARKER_OK} Причина: {status.reason}",
         ]
         return render_overview_card(
-            title="Astra AFT / Full-access",
-            summary_lines=[
-                f"Ручной sync: {_yes_no(status.ready_for_manual_sync)}",
-                f"Синкануто сообщений: {status.synced_message_count}",
-            ],
+            title="🧪 Full-access",
+            summary_lines=summary_lines,
             detail_lines=detail_lines,
             next_step=_build_fullaccess_next_step(status),
             rows=[
-                [("Чаты", fullaccess_chats_route()), ("Sync", fullaccess_chats_route())],
-                [("Статус", screen_route(SCREEN_STATUS))],
+                [("Статус", screen_route(SCREEN_STATUS)), ("Локальный вход", fullaccess_login_route())],
+                [("Чаты", fullaccess_chats_route()), ("Синхронизировать", fullaccess_chats_route())],
             ],
             back_screen=SCREEN_HOME,
             current_screen=SCREEN_FULLACCESS,
@@ -751,39 +748,42 @@ class SetupUIService:
         report = await self._build_report()
         facts = report.facts
         recent_ops_label = _build_recent_ops_label(report)
+        summary_lines = [
+            f"🛠️ Бэкап: {'доступен' if facts.backup_tool_available else 'недоступен'}.",
+            f"📦 Экспорт: {'доступен' if facts.export_tool_available else 'недоступен'}.",
+            f"⚠️ Недавние ошибки: {recent_ops_label}.",
+            "Для глубоких причин и startup warnings смотри Доктор.",
+        ]
         detail_lines = [
             _line(
                 _ok_warn(facts.backup_tool_available),
-                "Backup",
+                "Бэкап",
                 "доступен" if facts.backup_tool_available else "недоступен",
             ),
             _line(
                 _ok_warn(facts.export_tool_available),
-                "Export",
+                "Экспорт",
                 "доступен" if facts.export_tool_available else "недоступен",
             ),
             _line(
                 _ok_warn(facts.last_backup_at is not None),
-                "Последний backup",
+                "Последний бэкап",
                 _format_timestamp(facts.last_backup_at),
             ),
             _line(
                 _ok_warn(facts.last_export_at is not None),
-                "Последний export",
+                "Последний экспорт",
                 _format_timestamp(facts.last_export_at),
             ),
             f"{MARKER_OK if recent_ops_label == 'нет' else MARKER_WARN} Недавние предупреждения/ошибки: {recent_ops_label}",
             f"{MARKER_OK} CLI: python -m apps.ops status | python -m apps.ops backup | python -m apps.ops export",
         ]
         return render_overview_card(
-            title="Astra AFT / Ops",
-            summary_lines=[
-                f"Backup доступен: {_yes_no(facts.backup_tool_available)}",
-                f"Export доступен: {_yes_no(facts.export_tool_available)}",
-            ],
+            title="🛠️ Операции",
+            summary_lines=summary_lines,
             detail_lines=detail_lines,
             next_step=_build_ops_next_step(facts),
-            rows=[[("Doctor", screen_route(SCREEN_DOCTOR)), ("Статус", screen_route(SCREEN_STATUS))]],
+            rows=[[("Доктор", screen_route(SCREEN_DOCTOR)), ("Статус", screen_route(SCREEN_STATUS))]],
             back_screen=SCREEN_HOME,
             current_screen=SCREEN_OPS,
         )
@@ -803,10 +803,15 @@ class SetupUIService:
         if not detail_lines:
             detail_lines.extend(_build_reply_picker_empty_state(report))
         return render_overview_card(
-            title="Astra AFT / Reply / Выбор чата",
+            title="💬 Выбери чат",
             summary_lines=[
-                f"Готовых чатов для reply: {len(ready_chats)}",
-                f"Few-shot: {_yes_no(report.facts.reply_examples > 0)}",
+                f"Готовых чатов: {len(ready_chats)}.",
+                (
+                    "Ниже только чаты, где уже хватает данных для подсказки."
+                    if ready_chats
+                    else "Пока нет чатов с достаточным контекстом для подсказки."
+                ),
+                f"Похожие примеры: {_yes_no(report.facts.reply_examples > 0)}.",
             ],
             detail_lines=detail_lines,
             next_step=(
@@ -836,14 +841,15 @@ class SetupUIService:
         if not detail_lines:
             detail_lines.extend(_build_memory_picker_empty_state(report))
         return render_overview_card(
-            title="Astra AFT / Memory / Выбор чата",
+            title="🧠 Выбери чат",
             summary_lines=[
-                f"Карты чатов: {report.facts.chat_memory_cards}",
-                f"Карты людей: {report.facts.person_memory_cards}",
+                f"Карт чатов: {report.facts.chat_memory_cards}.",
+                f"Карт людей: {report.facts.person_memory_cards}.",
+                "Ниже готовые карточки памяти по чатам.",
             ],
             detail_lines=detail_lines,
             next_step=(
-                "Выбери чат с готовой memory-карточкой."
+                "Выбери чат с готовой карточкой памяти."
                 if rows
                 else _build_memory_next_step(report)
             ),
@@ -877,7 +883,7 @@ class SetupUIService:
                         ]
                     )
                 if chat_list.truncated:
-                    detail_lines.append(f"{MARKER_WARN} Список урезан до нескольких чатов для безопасного ручного sync.")
+                    detail_lines.append(f"{MARKER_WARN} Список урезан до нескольких чатов для безопасной ручной синхронизации.")
         if not detail_lines:
             detail_lines.extend(
                 state_shell_lines(
@@ -888,14 +894,15 @@ class SetupUIService:
                 )
             )
         return render_overview_card(
-            title="Astra AFT / Full-access / Чаты",
+            title="🧪 Чаты для синхронизации",
             summary_lines=[
-                f"Готов к sync: {_yes_no(status.ready_for_manual_sync)}",
-                f"Показано чатов: {len(rows)}",
+                f"Ручная синхронизация: {'готова' if status.ready_for_manual_sync else 'пока не готова'}.",
+                f"Показано чатов: {len(rows)}.",
+                "Выбирай один чат за раз: это безопасный ручной режим.",
             ],
             detail_lines=detail_lines,
             next_step=(
-                "Выбери чат и запусти ручной sync."
+                "Выбери чат и запусти ручную синхронизацию."
                 if rows
                 else _build_fullaccess_next_step(status)
             ),
@@ -904,17 +911,42 @@ class SetupUIService:
             current_screen=SCREEN_FULLACCESS_CHATS,
         )
 
+    async def _build_fullaccess_login_card(self) -> RenderedCard:
+        status = await self.fullaccess_auth_service.build_status_report()
+        detail_lines = [
+            f"{MARKER_WARN} Код в чат с ботом отправлять нельзя.",
+            *[f"{MARKER_OK} {line}" for line in local_login_instruction_lines()],
+            (
+                f"{MARKER_OK} Код уже запрошен: да."
+                if status.pending_login
+                else f"{MARKER_OFF} Код ещё не запрошен. Если нужно, запроси его командой /fullaccess_login."
+            ),
+        ]
+        return render_overview_card(
+            title="🧪 Локальный вход",
+            summary_lines=[
+                "Вход в full-access делается только локально через CLI.",
+                "Если код уже запрошен, CLI попросит его в консоли.",
+                "После входа просто вернись сюда и нажми «Обновить».",
+            ],
+            detail_lines=detail_lines,
+            next_step=f"Открой терминал и запусти: {LOCAL_LOGIN_COMMAND}",
+            rows=[[("К статусу", screen_route(SCREEN_FULLACCESS))]],
+            back_screen=SCREEN_FULLACCESS,
+            current_screen=SCREEN_FULLACCESS_LOGIN,
+        )
+
     async def build_reply_result_card(self, *, reference: str) -> RenderedCard:
         result = await self._build_reply_service().build_reply(reference)
         callback_reference = _route_reference(result.chat_reference or reference)
-        title = f"Astra AFT / Reply / {result.chat_title or (result.chat_reference or reference)}"
+        title = f"💬 Ответ / {result.chat_title or (result.chat_reference or reference)}"
         return render_text_card(
             title=title,
             lines=ReplyFormatter().format_inline_result(result).splitlines(),
             rows=[
                 [
                     ("Похожие", reply_examples_route(callback_reference)),
-                    ("Style", style_status_route(callback_reference)),
+                    ("Стиль", style_status_route(callback_reference)),
                 ],
             ],
             back_screen=SCREEN_REPLY_PICK,
@@ -923,7 +955,7 @@ class SetupUIService:
 
     async def build_memory_result_card(self, *, reference: str) -> RenderedCard:
         return render_text_card(
-            title="Astra AFT / Memory / Карточка",
+            title="🧠 Карточка памяти",
             lines=(await self.memory_service.build_chat_memory_card(reference)).splitlines(),
             rows=[],
             back_screen=SCREEN_MEMORY_PICK,
@@ -952,7 +984,7 @@ class SetupUIService:
                     retrieval_result=retrieval,
                 ).splitlines()
         return render_text_card(
-            title="Astra AFT / Reply / Похожие ответы",
+            title="💬 Похожие ответы",
             lines=lines,
             rows=[],
             back_screen=SCREEN_REPLY_PICK,
@@ -967,7 +999,7 @@ class SetupUIService:
         except ValueError as error:
             lines = [str(error)]
         return render_text_card(
-            title="Astra AFT / Reply / Style",
+            title="💬 Стиль ответа",
             lines=lines,
             rows=[],
             back_screen=SCREEN_REPLY_PICK,
@@ -1000,12 +1032,12 @@ class SetupUIService:
                 f"{MARKER_OK} Окно: {window_argument}",
                 f"{MARKER_OK if result.created_count > 0 else MARKER_OFF} Новых карточек: {result.created_count}",
                 f"{MARKER_OFF if result.skipped_existing_count == 0 else MARKER_OK} Уже известных пропущено: {result.skipped_existing_count}",
-                f"{MARKER_OK if facts.owner_chat_id is not None else MARKER_WARN} Owner chat: {_yes_no(facts.owner_chat_id is not None)}",
+                f"{MARKER_OK if facts.owner_chat_id is not None else MARKER_WARN} Личный чат владельца: {_yes_no(facts.owner_chat_id is not None)}",
                 f"{MARKER_OK if facts.active_reminders > 0 else MARKER_OFF} Активных напоминаний: {facts.active_reminders}",
             ]
         )
         return render_text_card(
-            title="Astra AFT / Reminders / Скан",
+            title="⏰ Скан напоминаний",
             lines=lines,
             rows=[
                 [("Скан 24h", reminders_scan_route("24h")), ("Скан 12h", reminders_scan_route("12h"))],
@@ -1030,7 +1062,7 @@ class SetupUIService:
                 else ["Источник не найден. Проверь chat_id или @username."]
             )
         return render_text_card(
-            title="Astra AFT / Sources / Обновление",
+            title="📂 Источник обновлён",
             lines=lines,
             rows=[],
             back_screen=SCREEN_SOURCES,
@@ -1039,14 +1071,14 @@ class SetupUIService:
 
     async def sync_fullaccess_chat(self, *, reference: str) -> RenderedCard:
         formatter = FullAccessFormatter()
-        title = "Astra AFT / Full-access / Sync"
+        title = "🧪 Sync завершён"
         try:
             result = await self._build_fullaccess_sync_service().sync_chat(reference)
             lines = _body_lines(formatter.format_sync_result(result), title=title)
         except ValueError as error:
             lines = state_shell_lines(
                 marker=MARKER_WARN,
-                status="Sync не запущен",
+                status="Синхронизация не запущена",
                 meaning=str(error),
                 next_step="/fullaccess_status",
             )
@@ -1232,7 +1264,7 @@ def _build_next_step(report: OperationalReport) -> str:
     if next_command == "/source_add":
         return "/source_add <chat_id|@username>"
     if next_command == "/sources":
-        return "Накопить сообщения или использовать /fullaccess_sync"
+        return "Накопи сообщения или подтяни историю через Full-access."
     if next_command == "/digest_target":
         return "/digest_target <chat_id|@username>"
     if next_command == "/memory_rebuild":
@@ -1244,10 +1276,10 @@ def _build_next_step(report: OperationalReport) -> str:
     if next_command == "/provider_status":
         return "/provider_status"
     if next_command == "/fullaccess_status":
-        return "/fullaccess_status"
+        return "Открой Full-access и проверь статус."
     if report.next_steps:
         return report.next_steps[0]
-    return "Core-путь готов. Можно использовать /digest_now, /reply и /reminders_scan."
+    return "Основной путь готов. Можно запускать дайджест, ответы и напоминания."
 
 
 def _build_navigation_button(report: OperationalReport) -> tuple[str, str] | None:
@@ -1259,7 +1291,7 @@ def _build_navigation_button(report: OperationalReport) -> tuple[str, str] | Non
         "/memory_rebuild": ("Память", screen_route(SCREEN_MEMORY)),
         "/reply": ("Ответы", screen_route(SCREEN_REPLY)),
         "/reminders_scan": ("Напоминания", screen_route(SCREEN_REMINDERS)),
-        "/provider_status": ("Provider", screen_route(SCREEN_PROVIDER)),
+        "/provider_status": ("Провайдер", screen_route(SCREEN_PROVIDER)),
         "/fullaccess_status": ("Full-access", screen_route(SCREEN_FULLACCESS)),
     }
     return mapping.get(next_command)
@@ -1269,8 +1301,8 @@ def _build_sources_next_step(report: OperationalReport) -> str:
     if report.facts.active_sources == 0:
         return "/source_add <chat_id|@username>"
     if not report.facts.has_messages:
-        return "Накопить сообщения или использовать /fullaccess_sync"
-    return "Открой Digest или настрой /digest_target"
+        return "Накопи сообщения или подтяни историю через Full-access."
+    return "Открой Дайджест или настрой /digest_target."
 
 
 def _build_digest_next_step(report: OperationalReport) -> str:
@@ -1286,7 +1318,7 @@ def _build_memory_next_step(report: OperationalReport) -> str:
         return "Сначала накопи сообщения через Источники"
     if not report.facts.has_memory_cards:
         return "/memory_rebuild"
-    return "Открой «Чаты» в Memory и выбери готовую карточку."
+    return "Открой «Чаты» в Памяти и выбери готовую карточку."
 
 
 def _build_reply_next_step(report: OperationalReport) -> str:
@@ -1295,8 +1327,8 @@ def _build_reply_next_step(report: OperationalReport) -> str:
     if not report.facts.has_memory_cards:
         return "/memory_rebuild"
     if report.facts.reply_ready_chats > 0:
-        return "Открой «Выбрать чат» в Reply."
-    return "Подходящих reply-ready чатов пока нет."
+        return "Открой «Выбрать чат» в Ответах."
+    return "Подходящих чатов для подсказки пока нет."
 
 
 def _build_reminders_next_step(report: OperationalReport) -> str:
@@ -1309,22 +1341,22 @@ def _build_reminders_next_step(report: OperationalReport) -> str:
 
 def _build_provider_next_step(*, status) -> str:
     if not status.enabled:
-        return "Core-путь работает и без provider."
+        return "Основной путь работает и без провайдера."
     if not status.configured:
         return "Проверь /provider_status и env-конфиг."
     if not status.available:
         return "Проверь доступность API через /provider_status."
-    return "Provider готов; можно использовать Digest и Reply."
+    return "Провайдер готов; можно улучшать дайджест и ответы."
 
 
 def _build_fullaccess_next_step(status) -> str:
     if not status.enabled:
-        return "Core-путь работает и без experimental слоя."
+        return "Основной путь работает и без experimental слоя."
     if not status.authorized:
-        return "/fullaccess_status или /fullaccess_login"
+        return f"Войди локально через CLI: {LOCAL_LOGIN_COMMAND}"
     if status.ready_for_manual_sync:
-        return "Открой список чатов и выбери manual sync."
-    return "/fullaccess_status"
+        return "Открой список чатов и выбери ручную синхронизацию."
+    return "Обнови статус после локального входа."
 
 
 def _build_ops_next_step(facts) -> str:
@@ -1353,22 +1385,22 @@ def _build_reply_picker_empty_state(report: OperationalReport) -> list[str]:
     if not report.facts.has_messages:
         return state_shell_lines(
             marker=MARKER_WARN,
-            status="Нет данных для Reply",
+            status="Нет данных для ответов",
             meaning="В локальной БД ещё нет сообщений, из которых можно собрать контекст.",
             next_step="Добавь источник и дождись ingest-сообщений.",
         )
     if not report.facts.has_memory_cards:
         return state_shell_lines(
             marker=MARKER_WARN,
-            status="Memory ещё не собрана",
-            meaning="Reply нужен локальный контекст по чатам и людям.",
+            status="Память ещё не собрана",
+            meaning="Для ответов нужен локальный контекст по чатам и людям.",
             next_step="/memory_rebuild",
         )
     return state_shell_lines(
         marker=MARKER_OFF,
-        status="Reply-ready чатов пока нет",
+        status="Готовых чатов пока нет",
         meaning="Сообщения есть, но подходящего чата с достаточным контекстом пока не найдено.",
-        next_step="Подожди новых сообщений или открой Memory.",
+        next_step="Подожди новых сообщений или открой Память.",
     )
 
 
@@ -1376,14 +1408,14 @@ def _build_memory_picker_empty_state(report: OperationalReport) -> list[str]:
     if not report.facts.has_messages:
         return state_shell_lines(
             marker=MARKER_WARN,
-            status="Нет данных для Memory",
-            meaning="Memory строится только из сообщений, сохранённых в локальной БД.",
+            status="Нет данных для памяти",
+            meaning="Память строится только из сообщений, сохранённых в локальной БД.",
             next_step="Сначала накопи сообщения через источники.",
         )
     return state_shell_lines(
         marker=MARKER_WARN,
-        status="Карточки Memory ещё не построены",
-        meaning="Сообщения уже есть, но rebuild ещё не запускался.",
+        status="Карточки памяти ещё не построены",
+        meaning="Сообщения уже есть, но пересборка ещё не запускалась.",
         next_step="/memory_rebuild",
     )
 
@@ -1403,11 +1435,11 @@ def _check_title(item: OperationalCheck) -> str:
         "owner_chat": "Личный чат",
         "active_source": "Источник",
         "messages": "Сообщения",
-        "digest_target": "Digest target",
-        "memory_layer": "Memory",
-        "reply_layer": "Reply",
-        "reminders_layer": "Reminders",
-        "provider_layer": "Provider",
+        "digest_target": "Получатель дайджеста",
+        "memory_layer": "Память",
+        "reply_layer": "Ответы",
+        "reminders_layer": "Напоминания",
+        "provider_layer": "Провайдер",
         "fullaccess_layer": "Full-access",
     }
     return titles.get(item.key, item.title)

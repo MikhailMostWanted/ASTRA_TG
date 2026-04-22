@@ -8,7 +8,7 @@ from services.bot_commands import BOT_COMMAND_SPECS, iter_command_sections
 @dataclass(frozen=True, slots=True)
 class HelpFormatter:
     def build_message(self) -> str:
-        lines = ["Команды Astra AFT", ""]
+        lines = ["Команды Astra AFT", "", "Главный вход: /setup", ""]
 
         for section in iter_command_sections():
             specs = [spec for spec in BOT_COMMAND_SPECS if spec.section == section.key]
@@ -20,5 +20,6 @@ class HelpFormatter:
             lines.append("")
 
         lines.append("Быстрый старт: /onboarding")
-        lines.append("Живая готовность: /status, /checklist, /doctor")
+        lines.append("Короткий статус: /status")
+        lines.append("Глубже: /checklist, /doctor")
         return "\n".join(lines)

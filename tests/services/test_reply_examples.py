@@ -247,7 +247,7 @@ def test_reply_examples_rebuild_filters_noise_and_retrieval_prefers_good_local_e
                 chat_reference="@product_team",
                 retrieval_result=retrieval,
             )
-            assert "Похожие прошлые ответы" in rendered
+            assert "💬 Похожие прошлые ответы" in rendered
             assert "Команда продукта" in rendered
             assert "Сходство:" in rendered
             assert "тот же чат" in rendered.lower()
@@ -266,7 +266,7 @@ def test_reply_examples_rebuild_filters_noise_and_retrieval_prefers_good_local_e
                 ReminderRepository(session),
                 reply_examples,
             ).build_status_message()
-            assert "Astra AFT / Status" in status_text
+            assert "✅ Короткий статус" in status_text
             assert "[OK] Источники: 2 активных, сообщений 9, с данными 2" in status_text
             assert "Следующий шаг" in status_text
 
@@ -366,7 +366,8 @@ def test_reply_commands_use_few_shot_support_and_show_examples(
             SimpleNamespace(args=None),
             runtime.session_factory,
         )
-        assert any("Собрано reply examples: 1" in answer for answer in rebuild_message.answers)
+        assert any("Локальная база похожих ответов пересобрана." in answer for answer in rebuild_message.answers)
+        assert any("Собрано примеров: 1" in answer for answer in rebuild_message.answers)
         assert any("Чатов: 2" in answer for answer in rebuild_message.answers)
         assert any("Просмотрено сообщений: 3" in answer for answer in rebuild_message.answers)
 
@@ -376,7 +377,7 @@ def test_reply_commands_use_few_shot_support_and_show_examples(
             SimpleNamespace(args="@product_team"),
             runtime.session_factory,
         )
-        assert any("Похожие прошлые ответы" in answer for answer in preview_message.answers)
+        assert any("💬 Похожие прошлые ответы" in answer for answer in preview_message.answers)
         assert any("финальный бюджет" in answer.lower() for answer in preview_message.answers)
         assert any("Сходство:" in answer for answer in preview_message.answers)
 
@@ -386,8 +387,8 @@ def test_reply_commands_use_few_shot_support_and_show_examples(
             SimpleNamespace(args="@product_team"),
             runtime.session_factory,
         )
-        assert any("[OK] Few-shot:" in answer for answer in reply_message.answers)
-        assert any("Почему этот ответ" in answer for answer in reply_message.answers)
+        assert any("[OK] Похожие примеры:" in answer for answer in reply_message.answers)
+        assert any("Почему именно так" in answer for answer in reply_message.answers)
 
         async with runtime.session_factory() as session:
             chats = ChatRepository(session)
@@ -439,7 +440,7 @@ def test_reply_commands_use_few_shot_support_and_show_examples(
             SimpleNamespace(args="@no_examples"),
             runtime.session_factory,
         )
-        assert any("[OFF] Few-shot: нет" in answer for answer in no_support_message.answers)
+        assert any("[OFF] Похожие примеры: нет" in answer for answer in no_support_message.answers)
 
         await runtime.dispose()
 

@@ -38,19 +38,18 @@ class ReminderFormatter:
         reasons = payload.get("reasons") or []
         text = "\n".join(
             [
-                "Astra AFT / Reminders / Candidate",
+                "⏰ Кандидат в напоминание",
                 "",
-                "Сводка",
-                format_status_line(MARKER_WARN, "Статус", "требует подтверждения"),
-                format_status_line(MARKER_OK, "Задача", task.title),
-                format_status_line(MARKER_OK, "Напомнить", format_utc(reminder.remind_at)),
+                f"{MARKER_WARN} Нуждается в подтверждении.",
+                f"Задача: {task.title}",
+                f"Когда напомнить: {format_utc(reminder.remind_at)}",
                 "",
-                "Контекст",
+                "Что нашли",
                 format_status_line(MARKER_OK, "Чат", chat_title),
                 format_status_line(MARKER_OK, "Связано с", source_sender),
                 truncate_text(task.summary or payload.get("source_message_preview"), limit=180),
                 "",
-                "Детали",
+                "Тех. детали",
                 (
                     format_status_line(MARKER_OK, "Срок", format_utc(task.due_at))
                     if task.due_at is not None
@@ -74,7 +73,7 @@ class ReminderFormatter:
         builder = InlineKeyboardBuilder()
         builder.row(
             InlineKeyboardButton(
-                text="Одобрить",
+                text="Подтвердить",
                 callback_data=build_reminder_callback_data("approve", task_id),
             ),
             InlineKeyboardButton(
@@ -82,7 +81,7 @@ class ReminderFormatter:
                 callback_data=build_reminder_callback_data("postpone", task_id),
             ),
             InlineKeyboardButton(
-                text="Отклонить",
+                text="Не нужно",
                 callback_data=build_reminder_callback_data("reject", task_id),
             ),
         )
@@ -100,7 +99,7 @@ class ReminderFormatter:
         if candidate_count == 0:
             return "\n".join(
                 [
-                    "Astra AFT / Reminders / Скан",
+                    "⏰ Скан напоминаний",
                     "",
                     *state_shell_lines(
                         marker=MARKER_OFF,
@@ -112,9 +111,9 @@ class ReminderFormatter:
             )
 
         lines = [
-            "Astra AFT / Reminders / Скан",
+            "⏰ Скан напоминаний",
             "",
-            "Сводка",
+            "Коротко",
             format_status_line(MARKER_OK, "Найдено кандидатов", str(candidate_count)),
             format_status_line(MARKER_OK, "Окно", window_label),
             format_status_line(MARKER_OK, "Область", scope),
@@ -128,7 +127,7 @@ class ReminderFormatter:
         if not tasks:
             return "\n".join(
                 [
-                    "Astra AFT / Reminders / Tasks",
+                    "⏰ Активные задачи",
                     "",
                     *state_shell_lines(
                         marker=MARKER_OFF,
@@ -139,7 +138,7 @@ class ReminderFormatter:
                 ]
             )
 
-        lines = ["Astra AFT / Reminders / Tasks", "", "Детали"]
+        lines = ["⏰ Активные задачи", "", "Список"]
         for index, task in enumerate(tasks[:10], start=1):
             reminder = _pick_primary_reminder(task.reminders)
             lines.extend(
@@ -152,9 +151,9 @@ class ReminderFormatter:
                         else format_status_line(MARKER_OFF, "Срок", "не задан")
                     ),
                     (
-                        format_status_line(MARKER_OK, "Reminder", format_utc(reminder.remind_at))
+                        format_status_line(MARKER_OK, "Напоминание", format_utc(reminder.remind_at))
                         if reminder is not None
-                        else format_status_line(MARKER_OFF, "Reminder", "не задан")
+                        else format_status_line(MARKER_OFF, "Напоминание", "не задано")
                     ),
                     format_status_line(MARKER_OK, "Источник", _resolve_chat_title(task, reminder)),
                     f"Контекст: {truncate_text(task.summary, limit=160) or 'нет краткого контекста'}",
@@ -167,7 +166,7 @@ class ReminderFormatter:
         if not reminders:
             return "\n".join(
                 [
-                    "Astra AFT / Reminders",
+                    "⏰ Активные напоминания",
                     "",
                     *state_shell_lines(
                         marker=MARKER_OFF,
@@ -178,7 +177,7 @@ class ReminderFormatter:
                 ]
             )
 
-        lines = ["Astra AFT / Reminders", "", "Детали"]
+        lines = ["⏰ Активные напоминания", "", "Список"]
         for index, reminder in enumerate(reminders[:10], start=1):
             task = reminder.task
             lines.extend(
@@ -203,7 +202,7 @@ class ReminderFormatter:
             "already_processed": "Кандидат уже обработан",
         }.get(result.action, "Состояние кандидата обновлено.")
         lines = [
-            "Astra AFT / Reminders / Action",
+            "⏰ Обновление напоминания",
             "",
             *state_shell_lines(
                 marker=MARKER_OK,
@@ -212,10 +211,10 @@ class ReminderFormatter:
                 next_step="/reminders",
             ),
             "",
-            "Детали",
+            "Тех. детали",
             format_status_line(MARKER_OK, "Статус задачи", task.status),
-            format_status_line(MARKER_OK, "Reminder", format_utc(reminder.remind_at)),
-            format_status_line(MARKER_OK, "Статус reminder", reminder.status),
+            format_status_line(MARKER_OK, "Напоминание", format_utc(reminder.remind_at)),
+            format_status_line(MARKER_OK, "Статус напоминания", reminder.status),
             format_status_line(MARKER_OK, "Источник", _resolve_chat_title(task, reminder)),
         ]
         if result.action == "postpone" and result.original_remind_at is not None:
@@ -234,9 +233,9 @@ class ReminderFormatter:
         )
         return "\n".join(
             [
-                "Astra AFT / Reminders / Delivery",
+                "⏰ Напоминание",
                 "",
-                "Сводка",
+                "Коротко",
                 format_status_line(MARKER_OK, "Задача", title),
                 format_status_line(MARKER_OK, "Чат", chat_title),
                 format_status_line(MARKER_OK, "Связано с", source_sender),

@@ -69,13 +69,21 @@ class BotStatusService:
         )
 
         lines = [
-            "Astra AFT / Status",
+            "✅ Короткий статус",
             "",
-            "Сводка",
-            f"Готово: {report.ready_check_count}/{report.total_check_count}",
-            f"Предупреждений: {len(report.warnings)}",
+            (
+                f"✅ Основной путь готов: {report.ready_check_count}/{report.total_check_count}."
+                if report.ready_check_count == report.total_check_count
+                else f"⚠️ Готово: {report.ready_check_count}/{report.total_check_count}."
+            ),
+            f"📂 Источники: {facts.active_sources} активных, сообщений {facts.total_messages}.",
+            f"📰 Дайджест: {facts.digest_target_label or 'получатель не задан'}.",
+            f"🧠 Память / 💬 ответы / ⏰ напоминания: {facts.chat_memory_cards} / {facts.reply_ready_chats} / {facts.active_reminders}.",
             "",
-            "Детали",
+            "Следующий шаг",
+            next_step,
+            "",
+            "Тех. детали",
             format_status_line(
                 ready_marker(facts.active_sources > 0 and facts.has_messages),
                 "Источники",
@@ -83,28 +91,25 @@ class BotStatusService:
             ),
             format_status_line(
                 ready_marker(digest_status.ready),
-                "Digest",
-                f"target: {facts.digest_target_label or 'не задан'}",
+                "Дайджест",
+                f"получатель: {facts.digest_target_label or 'не задан'}",
             ),
             format_status_line(
                 ready_marker(memory_status.ready),
-                "Memory",
+                "Память",
                 f"карт чатов {facts.chat_memory_cards}, людей {facts.person_memory_cards}",
             ),
-            format_status_line(ready_marker(reply_status.ready), "Reply", reply_status.detail),
+            format_status_line(ready_marker(reply_status.ready), "Ответы", reply_status.detail),
             format_status_line(
                 ready_marker(reminders_status.ready),
-                "Reminders",
-                f"owner chat: {facts.owner_chat_id if facts.owner_chat_id is not None else 'не задан'}",
+                "Напоминания",
+                f"личный чат: {facts.owner_chat_id if facts.owner_chat_id is not None else 'не задан'}",
             ),
-            format_status_line(_optional_marker(provider_status), "Provider", provider_status.detail),
+            format_status_line(_optional_marker(provider_status), "Провайдер", provider_status.detail),
             format_status_line(_experimental_marker(fullaccess_status), "Full-access", fullaccess_status.detail),
-            format_status_line(MARKER_OK, "Ops", _build_ops_status_line(facts)),
+            format_status_line(MARKER_OK, "Операции", _build_ops_status_line(facts)),
             "",
-            "Следующий шаг",
-            next_step,
-            "",
-            "Подробно",
+            "Дальше",
             "/setup, /checklist, /doctor",
         ]
         return "\n".join(lines)
@@ -112,13 +117,12 @@ class BotStatusService:
     async def build_checklist_message(self) -> str:
         report = await self._build_operational_report()
         lines = [
-            "Astra AFT / Checklist",
+            "🛠️ Чеклист",
             "",
-            "Сводка",
-            f"Готово: {report.ready_check_count}/{report.total_check_count}",
-            f"Первый незакрытый шаг: {_first_unready_title(report)}",
+            f"Закрыто шагов: {report.ready_check_count}/{report.total_check_count}.",
+            f"Сейчас мешает: {_first_unready_title(report)}.",
             "",
-            "Детали",
+            "Шаги",
         ]
         for index, item in enumerate(report.checklist, start=1):
             lines.append(_format_check(index=index, item=item))
@@ -126,9 +130,9 @@ class BotStatusService:
             [
                 "",
                 "Следующий шаг",
-                report.next_steps[0] if report.next_steps else "Core-путь готов.",
+                report.next_steps[0] if report.next_steps else "Основной путь готов.",
                 "",
-                "Подробно",
+                "Дальше",
                 "/status, /doctor",
             ]
         )
@@ -139,16 +143,15 @@ class BotStatusService:
         doctor = SystemHealthService().build_report(report)
         facts = report.facts
         lines = [
-            "Astra AFT / Doctor",
+            "🛠️ Доктор",
             "",
-            "Сводка",
-            f"ОК-пунктов: {len(doctor.ok_items)}",
-            f"Предупреждений: {len(doctor.warnings)}",
+            f"ОК-пунктов: {len(doctor.ok_items)}.",
+            f"Предупреждений: {len(doctor.warnings)}.",
             "",
-            "ОК",
+            "Что уже ок",
         ]
         lines.extend(f"{MARKER_OK} {compact_text(item, limit=86)}" for item in doctor.ok_items[:6])
-        lines.extend(["", "Предупреждения"])
+        lines.extend(["", "На что смотреть"])
         lines.extend(
             f"{_doctor_warning_marker(item)} {compact_text(item, limit=86)}"
             for item in doctor.warnings[:8]
@@ -156,11 +159,11 @@ class BotStatusService:
         hidden_warning_count = max(len(doctor.warnings) - 8, 0)
         if hidden_warning_count:
             lines.append(f"{MARKER_WARN} Ещё предупреждений: {hidden_warning_count}")
-        lines.extend(["", "Операционный слой"])
-        lines.append(format_status_line(ready_marker(facts.backup_tool_available), "Backup", "доступен" if facts.backup_tool_available else "недоступен"))
-        lines.append(format_status_line(ready_marker(facts.export_tool_available), "Export", "доступен" if facts.export_tool_available else "недоступен"))
-        lines.append(format_status_line(MARKER_OK if facts.last_backup_at else MARKER_OFF, "Последний backup", _format_timestamp(facts.last_backup_at)))
-        lines.append(format_status_line(MARKER_OK if facts.last_export_at else MARKER_OFF, "Последний export", _format_timestamp(facts.last_export_at)))
+        lines.extend(["", "Операции"])
+        lines.append(format_status_line(ready_marker(facts.backup_tool_available), "Бэкап", "доступен" if facts.backup_tool_available else "недоступен"))
+        lines.append(format_status_line(ready_marker(facts.export_tool_available), "Экспорт", "доступен" if facts.export_tool_available else "недоступен"))
+        lines.append(format_status_line(MARKER_OK if facts.last_backup_at else MARKER_OFF, "Последний бэкап", _format_timestamp(facts.last_backup_at)))
+        lines.append(format_status_line(MARKER_OK if facts.last_export_at else MARKER_OFF, "Последний экспорт", _format_timestamp(facts.last_export_at)))
         lines.append(format_status_line(MARKER_OK if facts.last_fullaccess_sync_at else MARKER_OFF, "Последний full-access sync", _format_timestamp(facts.last_fullaccess_sync_at)))
         lines.append(format_status_line(MARKER_WARN if facts.recent_worker_error else MARKER_OK, "Последняя ошибка worker", facts.recent_worker_error or "нет"))
         lines.append(format_status_line(MARKER_WARN if facts.recent_provider_error else MARKER_OK, "Последняя ошибка provider", facts.recent_provider_error or "нет"))
@@ -177,21 +180,21 @@ class BotStatusService:
     async def build_provider_status_message(self) -> str:
         status = await self._get_provider_status(check_api=True)
         lines = [
-            "Astra AFT / Provider",
+            "🔌 Провайдер",
             "",
-            "Сводка",
-            f"{MARKER_OPT} Optional слой: {'включён' if status.enabled else 'выключен'}",
-            f"API: {'доступен' if status.available else 'недоступен'}",
+            f"Слой: {'включён' if status.enabled else 'выключен'}.",
+            f"API: {'доступен' if status.available else 'недоступен'}.",
+            "Без провайдера основной путь всё равно работает.",
             "",
-            "Детали",
+            "Тех. детали",
             format_status_line(_provider_detail_marker(status.enabled, status.configured), "Конфиг", "настроен" if status.configured else "не настроен"),
             format_status_line(MARKER_OK if status.provider_name else MARKER_OFF, "Провайдер", status.provider_name or "не выбран"),
-            format_status_line(_provider_detail_marker(status.enabled, status.reply_refine_available), "Reply refine", "доступен" if status.reply_refine_available else "недоступен"),
-            format_status_line(_provider_detail_marker(status.enabled, status.digest_refine_available), "Digest refine", "доступен" if status.digest_refine_available else "недоступен"),
+            format_status_line(_provider_detail_marker(status.enabled, status.reply_refine_available), "Улучшение ответов", "доступно" if status.reply_refine_available else "недоступно"),
+            format_status_line(_provider_detail_marker(status.enabled, status.digest_refine_available), "Улучшение дайджеста", "доступно" if status.digest_refine_available else "недоступно"),
             format_status_line(MARKER_OK if status.enabled and status.available else MARKER_WARN if status.enabled else MARKER_OFF, "Причина", status.reason),
             "",
             "Следующий шаг",
-            "Core-путь работает и без provider." if not status.enabled else "/provider_status",
+            "Основной путь работает и без провайдера." if not status.enabled else "/provider_status",
         ]
         return "\n".join(lines)
 
@@ -215,7 +218,7 @@ class BotStatusService:
             return [
                 "\n".join(
                     [
-                        "Astra AFT / Sources",
+                        "📂 Источники",
                         "",
                         *state_shell_lines(
                             marker=MARKER_WARN,
@@ -237,19 +240,19 @@ class BotStatusService:
                 f"Тип: {chat.type}",
             ]
             if chat.handle:
-                lines.append(f"Username: @{chat.handle}")
+                lines.append(f"Юзернейм: @{chat.handle}")
             if chat.category:
                 lines.append(f"Категория: {chat.category}")
             lines.append(
-                f"Исключён из digest: {'да' if chat.exclude_from_digest else 'нет'}"
+                f"Исключён из дайджеста: {'да' if chat.exclude_from_digest else 'нет'}"
             )
             lines.append(
-                f"Исключён из memory: {'да' if chat.exclude_from_memory else 'нет'}"
+                f"Исключён из памяти: {'да' if chat.exclude_from_memory else 'нет'}"
             )
             sections.append("\n".join(lines))
 
         return _chunk_sections(
-            title="Astra AFT / Sources",
+            title="📂 Источники",
             sections=sections,
             max_message_length=max_message_length,
         )
@@ -299,11 +302,11 @@ def _check_title(item: OperationalCheck) -> str:
         "owner_chat": "Личный чат",
         "active_source": "Источник",
         "messages": "Сообщения",
-        "digest_target": "Digest target",
-        "memory_layer": "Memory",
-        "reply_layer": "Reply",
-        "reminders_layer": "Reminders",
-        "provider_layer": "Provider",
+        "digest_target": "Получатель дайджеста",
+        "memory_layer": "Память",
+        "reply_layer": "Ответы",
+        "reminders_layer": "Напоминания",
+        "provider_layer": "Провайдер",
         "fullaccess_layer": "Full-access",
     }
     return titles.get(item.key, item.title)
@@ -390,16 +393,16 @@ def _format_timestamp(value: datetime | str | None) -> str:
 def _build_ops_status_line(facts) -> str:
     notes: list[str] = []
     if facts.backup_tool_available:
-        notes.append("backup готов")
+        notes.append("бэкап готов")
     else:
-        notes.append("backup недоступен")
+        notes.append("бэкап недоступен")
     if facts.export_tool_available:
-        notes.append("export готов")
+        notes.append("экспорт готов")
     recent_errors = [
         label
         for label, message in (
             ("worker", facts.recent_worker_error),
-            ("provider", facts.recent_provider_error),
+            ("провайдер", facts.recent_provider_error),
             ("full-access", facts.recent_fullaccess_error),
         )
         if message

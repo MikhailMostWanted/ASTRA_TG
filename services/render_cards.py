@@ -168,9 +168,11 @@ def _build_card_text(
     detail_lines: list[str],
     next_step: str,
 ) -> str:
-    lines = [title, "", "Сводка", *summary_lines]
-    if detail_lines:
-        lines.extend(["", *detail_lines])
+    lines = [title]
+    if summary_lines:
+        lines.extend(["", *summary_lines])
     if next_step:
         lines.extend(["", "Следующий шаг", next_step])
+    if detail_lines:
+        lines.extend(["", "Тех. детали", *detail_lines])
     return "\n".join(lines)

@@ -18,11 +18,11 @@ class MemoryFormatter:
         message_count: int,
     ) -> str:
         lines = [
-            f"Память по чату: {chat.title}",
-            f"Тип: {_human_chat_type(chat.type)}",
-            f"Сохранено сообщений: {message_count}",
+            f"🧠 Память по чату: {chat.title}",
             f"Коротко: {memory.chat_summary_short}",
-            f"Состояние: {memory.current_state or 'не определено'}",
+            f"Сейчас: {memory.current_state or 'не определено'}",
+            f"Сообщений в базе: {message_count}",
+            f"Тип чата: {_human_chat_type(chat.type)}",
             _format_string_section(
                 "Доминирующие темы",
                 [
@@ -43,7 +43,7 @@ class MemoryFormatter:
                 [str(item) for item in (memory.recent_conflicts_json or [])],
                 empty_text="не замечены",
             ),
-            f"Последний digest: {format_utc(memory.last_digest_at)}",
+            f"Последний дайджест: {format_utc(memory.last_digest_at)}",
             f"Память обновлена: {format_utc(memory.updated_at)}",
         ]
         return "\n".join(lines)
@@ -55,7 +55,7 @@ class MemoryFormatter:
         message_count: int,
     ) -> str:
         lines = [
-            f"Память по человеку: {memory.display_name}",
+            f"🧠 Память по человеку: {memory.display_name}",
             f"Ключ: {memory.person_key}",
             f"Статус: {memory.relationship_label or 'контакт'}",
             f"Связанных сообщений: {message_count}",

@@ -123,11 +123,11 @@ def test_reminder_scan_and_candidate_decisions(monkeypatch, tmp_path: Path) -> N
             tasks_text = await service.build_tasks_message()
             reminders_text = await service.build_reminders_message()
 
-            assert "Astra AFT / Reminders / Tasks" in tasks_text
+            assert "⏰ Активные задачи" in tasks_text
             assert "финальный договор" in tasks_text.lower()
             assert "Команда продукта" in tasks_text
-            assert "Astra AFT / Reminders" in reminders_text
-            assert "подтверждено: да" in reminders_text.lower()
+            assert "⏰ Активные напоминания" in reminders_text
+            assert "подтверждено" in reminders_text.lower()
 
             await messages.create_message(
                 chat_id=active_chat.id,

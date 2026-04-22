@@ -27,10 +27,10 @@ class StyleFormatter:
         lines.extend(
             [
                 "",
-                f"Ручной override: {selection.override_profile_key or 'не задан'}",
+                f"Ручной профиль: {selection.override_profile_key or 'не задан'}",
                 f"Эффективный профиль: {selection.profile.key}",
                 (
-                    "Источник профиля: ручной override"
+                    "Источник профиля: ручной выбор"
                     if selection.source == "override"
                     else "Источник профиля: автовыбор"
                 ),

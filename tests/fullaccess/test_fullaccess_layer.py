@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from aiogram.filters.command import CommandObject
+
 from config.settings import Settings
 from fullaccess.auth import FullAccessAuthService
 from fullaccess.models import FullAccessChatSummary, FullAccessRemoteMessage
@@ -115,10 +117,41 @@ def test_fullaccess_status_command_reports_disabled_mode(monkeypatch, tmp_path: 
         )
 
         assert len(message.answers) == 1
-        assert "[OFF] Experimental слой: выключен" in message.answers[0]
+        assert "🧪 Full-access" in message.answers[0]
+        assert "Экспериментальный read-only слой" in message.answers[0]
+        assert "Статус: не авторизован." in message.answers[0]
         assert "[OFF] api_id/api_hash: не настроены" in message.answers[0]
         assert "[OFF] Авторизация: нет" in message.answers[0]
         assert "[OK] Read-only: активен" in message.answers[0]
+        assert "FULLACCESS_ENABLED=false" in message.answers[0]
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_fullaccess_login_command_rejects_code_in_bot(monkeypatch, tmp_path: Path) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "fullaccess-login-safe" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        management_module = importlib.import_module("bot.handlers.management")
+        message = FakeIncomingMessage(chat_id=900)
+
+        await management_module.handle_fullaccess_login_command(
+            message,
+            CommandObject(prefix="/", command="fullaccess_login", args="12345"),
+            runtime.session_factory,
+        )
+
+        assert len(message.answers) == 1
+        assert "Код нельзя отправлять в чат с ботом." in message.answers[0]
+        assert "Войди локально через CLI." in message.answers[0]
+        assert "astra fullaccess login" in message.answers[0]
+        assert "Обновить" in message.answers[0]
 
         await runtime.dispose()
 

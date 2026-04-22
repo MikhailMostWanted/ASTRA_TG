@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from fullaccess.copy import LOCAL_LOGIN_COMMAND
 from fullaccess.models import (
     FullAccessChatListResult,
     FullAccessLoginResult,
@@ -23,16 +24,21 @@ from services.render_cards import (
 class FullAccessFormatter:
     def format_status(self, report: FullAccessStatusReport) -> str:
         lines = [
-            "Astra AFT / Full-access",
+            "🧪 Full-access",
             "",
-            "Сводка",
+            "Экспериментальный read-only слой для ручной синхронизации.",
             (
-                f"{MARKER_EXP if report.enabled else MARKER_OFF} Experimental слой: "
-                f"{'включён' if report.enabled else 'выключен'}"
+                "Статус: авторизован."
+                if report.authorized
+                else "Статус: не авторизован."
             ),
-            f"Ручной sync: {'да' if report.ready_for_manual_sync else 'нет'}",
+            f"Сессия: {'есть' if report.session_exists else 'нет'}.",
+            f"Ручная синхронизация: {'готова' if report.ready_for_manual_sync else 'пока не готова'}.",
             "",
-            "Детали",
+            "Следующий шаг",
+            _next_step(report),
+            "",
+            "Тех. детали",
             format_status_line(
                 _marker(report.enabled, report.api_credentials_configured),
                 "api_id/api_hash",
@@ -45,7 +51,7 @@ class FullAccessFormatter:
             ),
             format_status_line(
                 _marker(report.enabled, report.session_exists),
-                "Session",
+                "Сессия",
                 "найдена" if report.session_exists else "не найдена",
             ),
             format_status_line(
@@ -58,7 +64,7 @@ class FullAccessFormatter:
                 "Read-only",
                 "активен" if report.effective_readonly else "не активен",
             ),
-            format_status_line(MARKER_OK, "Sync limit", str(report.sync_limit)),
+            format_status_line(MARKER_OK, "Лимит синхронизации", str(report.sync_limit)),
             format_status_line(
                 MARKER_OK if report.synced_chat_count else MARKER_OFF,
                 "Синхронизировано чатов",
@@ -74,17 +80,14 @@ class FullAccessFormatter:
                 "Причина",
                 report.reason,
             ),
-            "",
-            "Следующий шаг",
-            _next_step(report),
         ]
         return "\n".join(lines)
 
     def format_login(self, result: FullAccessLoginResult) -> str:
         headers = {
-            "already_authorized": "Пользовательская session уже авторизована.",
-            "code_requested": "Код входа Telegram запрошен.",
-            "authorized": "Пользовательская session авторизована.",
+            "already_authorized": "Локальный вход уже завершён.",
+            "code_requested": "Код запрошен безопасно.",
+            "authorized": "Локальный вход завершён.",
             "password_required": "Telegram запросил пароль 2FA.",
         }
         marker = (
@@ -95,39 +98,38 @@ class FullAccessFormatter:
             else MARKER_EXP
         )
         lines = [
-            "Astra AFT / Full-access / Login",
+            "🧪 Локальный вход",
             "",
-            *state_shell_lines(
-                marker=marker,
-                status=headers.get(result.kind, "Операция завершена.").rstrip("."),
-                meaning="Авторизация нужна только для ручного read-only sync.",
-                next_step="Следуй инструкции ниже." if result.instructions else "/fullaccess_status",
-            ),
+            f"{marker} {headers.get(result.kind, 'Операция завершена.').rstrip('.')}",
+            "Код в бот отправлять не нужно.",
+            "Авторизация нужна только для ручной read-only синхронизации.",
         ]
         if result.phone:
             lines.extend(
-                ["", "Детали", format_status_line(MARKER_OK, "Телефон", result.phone)]
+                ["", "Тех. детали", format_status_line(MARKER_OK, "Телефон", result.phone)]
             )
         if result.instructions:
-            lines.extend(["", "Инструкция", *result.instructions])
+            lines.extend(["", "Следующий шаг", f"Команда: {LOCAL_LOGIN_COMMAND}", "", *result.instructions])
+        else:
+            lines.extend(["", "Следующий шаг", "Вернись в бот и нажми «Обновить»."])
         return "\n".join(lines)
 
     def format_logout(self, result: FullAccessLogoutResult) -> str:
         return "\n".join(
             [
-                "Astra AFT / Full-access / Logout",
+                "🧪 Full-access / Выход",
                 "",
                 *state_shell_lines(
                     marker=MARKER_OK,
                     status="Локальный logout завершён",
                     meaning="User-session очищена только локально.",
-                    next_step="/fullaccess_status",
+                    next_step="Открой Full-access и нажми «Обновить».",
                 ),
                 "",
-                "Детали",
+                "Тех. детали",
                 format_status_line(
                     MARKER_OK if result.session_removed else MARKER_OFF,
-                    "Session файл удалён",
+                    "Файл сессии удалён",
                     "да" if result.session_removed else "нет",
                 ),
                 format_status_line(
@@ -142,24 +144,24 @@ class FullAccessFormatter:
         if not result.chats:
             return "\n".join(
                 [
-                    "Astra AFT / Full-access / Чаты",
+                    "🧪 Чаты для синхронизации",
                     "",
                     *state_shell_lines(
                         marker=MARKER_OFF,
                         status="Список чатов пуст",
                         meaning="Авторизация есть, но доступных user-чатов не найдено.",
-                        next_step="/fullaccess_status",
+                        next_step="Вернись в Full-access и нажми «Обновить».",
                     ),
                 ]
             )
 
         lines = [
-            "Astra AFT / Full-access / Чаты",
+            "🧪 Чаты для синхронизации",
             "",
-            "Сводка",
-            f"Показано чатов: {len(result.chats)}",
+            f"Показано чатов: {len(result.chats)}.",
+            "Выбери один чат для ручной синхронизации.",
             "",
-            "Детали",
+            "Тех. детали",
         ]
         for index, chat in enumerate(result.chats, start=1):
             parts = [f"{index}. {chat.title}", str(chat.telegram_chat_id), chat.chat_type]
@@ -180,16 +182,16 @@ class FullAccessFormatter:
     def format_sync_result(self, result: FullAccessSyncResult) -> str:
         return "\n".join(
             [
-                "Astra AFT / Full-access / Sync",
+                "🧪 Sync завершён",
                 "",
-                *state_shell_lines(
-                    marker=MARKER_OK,
-                    status="Ручной sync завершён",
-                    meaning=f"Сохранено новых сообщений: {result.created_count}.",
-                    next_step="Открой Sources, Memory или Reply.",
-                ),
+                "История подтянута локально и безопасно.",
+                f"Новых сообщений: {result.created_count}.",
+                f"Чат: {result.chat.title}.",
                 "",
-                "Детали",
+                "Следующий шаг",
+                "Открой Источники, Память или Ответы.",
+                "",
+                "Тех. детали",
                 format_status_line(MARKER_OK, "Чат", result.chat.title),
                 format_status_line(MARKER_OK, "ID Telegram", str(result.chat.telegram_chat_id)),
                 format_status_line(MARKER_OK, "Локальный chat_id", str(result.local_chat_id)),
@@ -226,9 +228,9 @@ def _marker(enabled: bool, ready: bool) -> str:
 
 def _next_step(report: FullAccessStatusReport) -> str:
     if not report.enabled:
-        return "Core-путь работает и без full-access."
+        return "Основной путь работает и без full-access."
     if not report.authorized:
-        return "/fullaccess_login"
+        return f"Войди локально через CLI: {LOCAL_LOGIN_COMMAND}"
     if report.ready_for_manual_sync:
-        return "/fullaccess_chats"
-    return "/fullaccess_status"
+        return "Открой список чатов и запусти ручную синхронизацию."
+    return "Обнови статус после локального входа."

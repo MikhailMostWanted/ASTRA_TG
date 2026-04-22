@@ -10,6 +10,7 @@ from fullaccess.client import (
     build_fullaccess_client,
     telethon_is_available,
 )
+from fullaccess.copy import LOCAL_LOGIN_COMMAND
 from fullaccess.models import (
     FullAccessChatListResult,
     FullAccessChatSummary,
@@ -173,10 +174,10 @@ class FullAccessSyncService:
         if not authorized:
             await _record_fullaccess_error_if_possible(
                 self.setting_repository,
-                "Пользовательская session не авторизована. Сначала выполни /fullaccess_login."
+                f"Пользовательская session не авторизована. Сначала выполни локальный вход: {LOCAL_LOGIN_COMMAND}."
             )
             raise ValueError(
-                "Пользовательская session не авторизована. Сначала выполни /fullaccess_login."
+                f"Пользовательская session не авторизована. Сначала выполни локальный вход: {LOCAL_LOGIN_COMMAND}."
             )
         return config
 

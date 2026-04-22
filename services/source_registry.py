@@ -30,7 +30,7 @@ class SourceMutationResult:
             f"Статус: {'активен' if self.chat.is_enabled else 'выключен'}",
         ]
         if self.chat.handle:
-            lines.append(f"Username: @{self.chat.handle}")
+            lines.append(f"Юзернейм: @{self.chat.handle}")
         if self.note:
             lines.extend(["", self.note])
         return "\n".join(lines)

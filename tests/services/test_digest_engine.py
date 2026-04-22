@@ -187,7 +187,7 @@ def test_digest_engine_builds_and_saves_digest_from_messages(monkeypatch, tmp_pa
             assert plan.message_count == 4
             assert plan.source_count == 2
             assert plan.preview_chunks
-            assert "Astra AFT / Digest" in plan.preview_chunks[0]
+            assert "📰 Дайджест" in plan.preview_chunks[0]
             assert "Новости релизов" in plan.preview_chunks[0]
             assert "Команда продукта" in plan.preview_chunks[0]
             assert "07:00 Редакция: Ок" not in plan.preview_chunks[0]
@@ -341,7 +341,7 @@ def test_digest_llm_handler_falls_back_to_deterministic_digest_when_provider_una
         )
 
         assert fake_bot.sent_messages
-        assert any("Astra AFT / Digest" in sent.text for sent in fake_bot.sent_messages)
+        assert any("📰 Дайджест" in sent.text for sent in fake_bot.sent_messages)
         assert any("Новости релизов" in sent.text for sent in fake_bot.sent_messages)
         assert any("API сейчас недоступен" in answer for answer in fake_message.answers)
         assert any("детерминированный digest" in answer.lower() for answer in fake_message.answers)
@@ -398,7 +398,7 @@ def test_digest_engine_handles_empty_window_without_saving_digest(monkeypatch, t
 
             assert plan.has_digest is False
             assert len(plan.preview_chunks) == 1
-            assert "Astra AFT / Digest" in plan.preview_chunks[0]
+            assert "📰 Дайджест" in plan.preview_chunks[0]
             assert "[WARN] Данных для дайджеста нет" in plan.preview_chunks[0]
             assert "За 12h по активным digest-источникам сообщений не найдено." in plan.preview_chunks[0]
             assert await digests.count_digests() == 0

@@ -48,7 +48,7 @@ class ReplyFormatter:
             return []
         return [
             "",
-            "Итоговая серия",
+            "Готовый вариант ответа",
             *self.style_formatter.format_reply_messages(
                 suggestion.final_reply_messages or suggestion.reply_messages
             ),
@@ -57,7 +57,7 @@ class ReplyFormatter:
 
 def _reply_title(result: ReplyResult) -> str:
     chat_label = result.chat_title or result.chat_reference or "чат"
-    return f"Astra AFT / Reply / {chat_label}"
+    return f"💬 Ответ / {chat_label}"
 
 
 def _reply_error_lines(result: ReplyResult) -> list[str]:
@@ -74,12 +74,7 @@ def _reply_success_lines(result: ReplyResult) -> list[str]:
     if suggestion is None:
         return []
     return [
-        "Сводка",
-        format_status_line(MARKER_OK, "Готово", "вариант ответа собран"),
-        format_status_line(MARKER_OK, "Чат", result.chat_title or "не определён"),
-        format_status_line(MARKER_OK, "Источник", result.chat_reference or "не определён"),
-        "",
-        "Сообщение-ориентир",
+        "Ориентир",
         compact_text(
             result.source_message_preview or suggestion.source_message_preview or "нет превью",
             limit=220,
@@ -100,7 +95,7 @@ def _why_and_details(result: ReplyResult) -> list[str]:
     )
     guardrails_marker = MARKER_OK if not suggestion.guardrail_flags else MARKER_WARN
     guardrails_detail = (
-        "ok" if not suggestion.guardrail_flags else ", ".join(suggestion.guardrail_flags)
+        "без замечаний" if not suggestion.guardrail_flags else ", ".join(suggestion.guardrail_flags)
     )
     llm_lines: list[str] = []
     if suggestion.llm_refine_requested:
@@ -120,15 +115,15 @@ def _why_and_details(result: ReplyResult) -> list[str]:
         )
     lines = [
         "",
-        "Почему этот ответ",
+        "Почему именно так",
         compact_text(suggestion.reason_short, limit=140),
         "",
-        "Детали",
-        format_status_line(MARKER_OK, "Style", f"{suggestion.style_profile_key} ({style_source})"),
-        format_status_line(MARKER_OK if suggestion.persona_applied else MARKER_OFF, "Persona", "да" if suggestion.persona_applied else "нет"),
-        format_status_line(MARKER_OK if suggestion.few_shot_found else MARKER_OFF, "Few-shot", few_shot_detail),
+        "Тех. детали",
+        format_status_line(MARKER_OK, "Стиль", f"{suggestion.style_profile_key} ({style_source})"),
+        format_status_line(MARKER_OK if suggestion.persona_applied else MARKER_OFF, "Персона", "да" if suggestion.persona_applied else "нет"),
+        format_status_line(MARKER_OK if suggestion.few_shot_found else MARKER_OFF, "Похожие примеры", few_shot_detail),
         *llm_lines,
-        format_status_line(guardrails_marker, "Guardrails", guardrails_detail),
+        format_status_line(guardrails_marker, "Ограничители", guardrails_detail),
         format_status_line(MARKER_OK, "Риск", f"{suggestion.risk_label}; уверенность {round(suggestion.confidence * 100)}%"),
         format_status_line(MARKER_OK, "Стратегия", suggestion.strategy),
     ]

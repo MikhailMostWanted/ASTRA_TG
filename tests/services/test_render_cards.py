@@ -77,11 +77,11 @@ def test_digest_chunking_keeps_summary_first_and_continuation_context() -> None:
     rendered = DigestFormatter(max_message_length=900).format(result)
 
     assert len(rendered.chunks) > 1
-    assert rendered.chunks[0].startswith("Astra AFT / Digest\n\nСводка")
-    assert "Ключевые темы и источники" in rendered.chunks[0]
-    assert rendered.chunks[1].startswith("Astra AFT / Digest (продолжение)")
-    assert "[OK] Окно:" in rendered.chunks[1]
-    assert "Детали" in rendered.chunks[-1]
+    assert rendered.chunks[0].startswith("📰 Дайджест\n\nКоротко")
+    assert "Сводка" in rendered.chunks[0]
+    assert "Темы и источники" in rendered.chunks[0]
+    assert rendered.chunks[1].startswith("📰 Дайджест (продолжение)\n\n[OK] Окно:")
+    assert "Тех. детали" in rendered.chunks[-1]
 
 
 def _source_summary(*, index: int, title: str) -> DigestSourceSummary:
