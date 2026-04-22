@@ -25,12 +25,14 @@ class FakeIncomingMessage:
     chat_id: int
     chat: object = field(init=False)
     answers: list[str] = field(default_factory=list)
+    reply_markups: list[object | None] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.chat = SimpleNamespace(id=self.chat_id)
 
-    async def answer(self, text: str):
+    async def answer(self, text: str, reply_markup=None):
         self.answers.append(text)
+        self.reply_markups.append(reply_markup)
         return SimpleNamespace(message_id=1000 + len(self.answers))
 
 
@@ -221,7 +223,8 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
 
             rendered = formatter.format_result(result)
             assert "💬 Ответ / Команда продукта" in rendered
-            assert "Ориентир" in rendered
+            assert "Фокус ответа" in rendered
+            assert "[OK] Почему выбран:" in rendered
             assert "Анна" in rendered
             assert "[OK] Стиль: friend_explain" in rendered
             assert "[OK] Персона: да" in rendered
@@ -242,6 +245,7 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
         assert any("Команда продукта" in answer for answer in fake_message.answers)
         assert any("[OK] Стиль: friend_explain" in answer for answer in fake_message.answers)
         assert any("[OK] Персона: да" in answer for answer in fake_message.answers)
+        assert any("Фокус ответа" in answer for answer in fake_message.answers)
         assert any("Готовый вариант ответа" in answer for answer in fake_message.answers)
         assert any("Риск:" in answer for answer in fake_message.answers)
 
@@ -540,6 +544,361 @@ def test_reply_llm_handler_falls_back_to_deterministic_reply_when_provider_unava
         assert any("Команда продукта" in answer for answer in fake_message.answers)
         assert any("[WARN] LLM: резервный режим" in answer for answer in fake_message.answers)
         assert any("API сейчас недоступен" in answer for answer in fake_message.answers)
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_reply_engine_prefers_question_over_later_low_signal_message(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "reply-focus-selection" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        reply_engine_module = importlib.import_module("services.reply_engine")
+        reply_context_module = importlib.import_module("services.reply_context_builder")
+        reply_classifier_module = importlib.import_module("services.reply_classifier")
+        reply_strategy_module = importlib.import_module("services.reply_strategy")
+        style_adapter_module = importlib.import_module("services.style_adapter")
+        style_selector_module = importlib.import_module("services.style_selector")
+        persona_adapter_module = importlib.import_module("services.persona_adapter")
+        persona_core_module = importlib.import_module("services.persona_core")
+        persona_guardrails_module = importlib.import_module("services.persona_guardrails")
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            chat_memory_repo = ChatMemoryRepository(session)
+            person_memory_repo = PersonMemoryRepository(session)
+            settings_repo = SettingRepository(session)
+
+            focus_chat = await chats.upsert_chat(
+                telegram_chat_id=-100320,
+                title="Фокус на вопросе",
+                handle="focus_question",
+                chat_type="group",
+                is_enabled=True,
+            )
+            day_chat = await chats.upsert_chat(
+                telegram_chat_id=-100321,
+                title="Разговор про день",
+                handle="day_question",
+                chat_type="group",
+                is_enabled=True,
+            )
+            no_trigger_chat = await chats.upsert_chat(
+                telegram_chat_id=-100322,
+                title="Нет триггера",
+                handle="no_trigger",
+                chat_type="group",
+                is_enabled=True,
+            )
+            await session.commit()
+
+            async def add_message(
+                *,
+                chat_id: int,
+                telegram_message_id: int,
+                sender_id: int | None,
+                sender_name: str,
+                direction: str,
+                sent_at: datetime,
+                text: str,
+            ) -> None:
+                await messages.create_message(
+                    chat_id=chat_id,
+                    telegram_message_id=telegram_message_id,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    direction=direction,
+                    source_adapter="telegram",
+                    source_type="message",
+                    sent_at=sent_at,
+                    raw_text=text,
+                    normalized_text=text,
+                )
+
+            await add_message(
+                chat_id=focus_chat.id,
+                telegram_message_id=1,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                sent_at=datetime(2026, 4, 22, 8, 0, tzinfo=timezone.utc),
+                text="Я в дороге, чуть позже отпишусь.",
+            )
+            await add_message(
+                chat_id=focus_chat.id,
+                telegram_message_id=2,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                sent_at=datetime(2026, 4, 22, 8, 4, tzinfo=timezone.utc),
+                text="Когда сможешь прислать файл по бюджету?",
+            )
+            await add_message(
+                chat_id=focus_chat.id,
+                telegram_message_id=3,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                sent_at=datetime(2026, 4, 22, 8, 5, tzinfo=timezone.utc),
+                text="хорошо",
+            )
+
+            await add_message(
+                chat_id=day_chat.id,
+                telegram_message_id=1,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                sent_at=datetime(2026, 4, 22, 9, 0, tzinfo=timezone.utc),
+                text="Привет.",
+            )
+            await add_message(
+                chat_id=day_chat.id,
+                telegram_message_id=2,
+                sender_id=15,
+                sender_name="Мария",
+                direction="inbound",
+                sent_at=datetime(2026, 4, 22, 9, 2, tzinfo=timezone.utc),
+                text="Как прошел твой день?",
+            )
+            await add_message(
+                chat_id=day_chat.id,
+                telegram_message_id=3,
+                sender_id=15,
+                sender_name="Мария",
+                direction="inbound",
+                sent_at=datetime(2026, 4, 22, 9, 3, tzinfo=timezone.utc),
+                text="хорошо",
+            )
+
+            await add_message(
+                chat_id=no_trigger_chat.id,
+                telegram_message_id=1,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                sent_at=datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc),
+                text="Я потом вернусь.",
+            )
+            await add_message(
+                chat_id=no_trigger_chat.id,
+                telegram_message_id=2,
+                sender_id=17,
+                sender_name="Игорь",
+                direction="inbound",
+                sent_at=datetime(2026, 4, 22, 10, 1, tzinfo=timezone.utc),
+                text="ок",
+            )
+            await add_message(
+                chat_id=no_trigger_chat.id,
+                telegram_message_id=3,
+                sender_id=17,
+                sender_name="Игорь",
+                direction="inbound",
+                sent_at=datetime(2026, 4, 22, 10, 2, tzinfo=timezone.utc),
+                text="+",
+            )
+            await session.commit()
+
+            service = reply_engine_module.ReplyEngineService(
+                chat_repository=chats,
+                message_repository=messages,
+                chat_memory_repository=chat_memory_repo,
+                person_memory_repository=person_memory_repo,
+                context_builder=reply_context_module.ReplyContextBuilder(
+                    message_repository=messages,
+                    chat_memory_repository=chat_memory_repo,
+                    person_memory_repository=person_memory_repo,
+                ),
+                classifier=reply_classifier_module.ReplyClassifier(),
+                strategy_resolver=reply_strategy_module.ReplyStrategyResolver(),
+                style_selector=style_selector_module.StyleSelectorService(
+                    style_profile_repository=StyleProfileRepository(session),
+                    chat_style_override_repository=ChatStyleOverrideRepository(session),
+                    chat_memory_repository=chat_memory_repo,
+                    person_memory_repository=person_memory_repo,
+                ),
+                style_adapter=style_adapter_module.StyleAdapter(),
+                persona_core_service=persona_core_module.PersonaCoreService(settings_repo),
+                persona_adapter=persona_adapter_module.PersonaAdapter(),
+                persona_guardrails=persona_guardrails_module.PersonaGuardrails(),
+            )
+
+            focus_result = await service.build_reply("@focus_question")
+            assert focus_result.kind == "suggestion"
+            assert focus_result.suggestion is not None
+            assert focus_result.suggestion.source_message_preview.endswith(
+                "Когда сможешь прислать файл по бюджету?"
+            )
+            assert focus_result.suggestion.focus_label == "вопрос"
+            assert "low-signal" in focus_result.suggestion.focus_reason
+            assert focus_result.suggestion.strategy != "не отвечать"
+
+            day_result = await service.build_reply("@day_question")
+            assert day_result.kind == "suggestion"
+            assert day_result.suggestion is not None
+            assert day_result.suggestion.source_message_preview.endswith("Как прошел твой день?")
+            assert day_result.suggestion.focus_label == "вопрос"
+
+            no_trigger_result = await service.build_reply("@no_trigger")
+            assert no_trigger_result.kind == "suggestion"
+            assert no_trigger_result.suggestion is not None
+            assert no_trigger_result.suggestion.focus_label == "низкий сигнал"
+            assert no_trigger_result.suggestion.strategy == "не отвечать"
+            assert no_trigger_result.suggestion.alternative_action is not None
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_reply_command_without_reference_opens_reply_picker(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "reply-picker-command" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            chat_memory_repo = ChatMemoryRepository(session)
+
+            focused_chat = await chats.upsert_chat(
+                telegram_chat_id=-100330,
+                title="Команда клиента",
+                handle="client_room",
+                chat_type="group",
+                is_enabled=True,
+            )
+            noisy_chat = await chats.upsert_chat(
+                telegram_chat_id=-100331,
+                title="Фоновый чат",
+                handle="noise_room",
+                chat_type="group",
+                is_enabled=True,
+            )
+            await session.commit()
+
+            async def add_message(
+                *,
+                chat_id: int,
+                telegram_message_id: int,
+                sender_id: int | None,
+                sender_name: str,
+                direction: str,
+                sent_at: datetime,
+                text: str,
+            ) -> None:
+                await messages.create_message(
+                    chat_id=chat_id,
+                    telegram_message_id=telegram_message_id,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                    direction=direction,
+                    source_adapter="telegram",
+                    source_type="message",
+                    sent_at=sent_at,
+                    raw_text=text,
+                    normalized_text=text,
+                )
+
+            await add_message(
+                chat_id=focused_chat.id,
+                telegram_message_id=1,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                sent_at=datetime(2026, 4, 22, 11, 0, tzinfo=timezone.utc),
+                text="Собираю апдейт.",
+            )
+            await add_message(
+                chat_id=focused_chat.id,
+                telegram_message_id=2,
+                sender_id=21,
+                sender_name="Анна",
+                direction="inbound",
+                sent_at=datetime(2026, 4, 22, 11, 2, tzinfo=timezone.utc),
+                text="Когда будет короткий статус по клиенту?",
+            )
+            await add_message(
+                chat_id=focused_chat.id,
+                telegram_message_id=3,
+                sender_id=21,
+                sender_name="Анна",
+                direction="inbound",
+                sent_at=datetime(2026, 4, 22, 11, 3, tzinfo=timezone.utc),
+                text="ок",
+            )
+            await chat_memory_repo.upsert_chat_memory(
+                chat_id=focused_chat.id,
+                chat_summary_short="Ждут короткий статус по клиенту.",
+                chat_summary_long="Чат про клиентский статус с ожидаемым апдейтом.",
+                current_state="Нужно вернуться с коротким статусом.",
+                dominant_topics_json=[{"topic": "клиент", "mentions": 2}],
+                recent_conflicts_json=[],
+                pending_tasks_json=["Вернуть статус по клиенту."],
+                linked_people_json=[],
+                last_digest_at=None,
+            )
+
+            await add_message(
+                chat_id=noisy_chat.id,
+                telegram_message_id=1,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                sent_at=datetime(2026, 4, 22, 11, 10, tzinfo=timezone.utc),
+                text="Потом вернусь.",
+            )
+            await add_message(
+                chat_id=noisy_chat.id,
+                telegram_message_id=2,
+                sender_id=31,
+                sender_name="Игорь",
+                direction="inbound",
+                sent_at=datetime(2026, 4, 22, 11, 11, tzinfo=timezone.utc),
+                text="ага",
+            )
+            await add_message(
+                chat_id=noisy_chat.id,
+                telegram_message_id=3,
+                sender_id=31,
+                sender_name="Игорь",
+                direction="inbound",
+                sent_at=datetime(2026, 4, 22, 11, 12, tzinfo=timezone.utc),
+                text="+",
+            )
+            await session.commit()
+
+        management_module = importlib.import_module("bot.handlers.management")
+        picker_message = FakeIncomingMessage(bot=FakeBot(), chat_id=900)
+        await management_module.handle_reply_command(
+            picker_message,
+            SimpleNamespace(args=None),
+            runtime.session_factory,
+        )
+
+        assert len(picker_message.answers) == 1
+        assert "💬 Выбери чат" in picker_message.answers[0]
+        assert "незакрытым триггером" in picker_message.answers[0]
+        assert "фокус вопрос" in picker_message.answers[0]
+        assert picker_message.reply_markups[0] is not None
+        first_row = picker_message.reply_markups[0].inline_keyboard[0]
+        assert [button.text for button in first_row] == ["Команда клиента"]
 
         await runtime.dispose()
 

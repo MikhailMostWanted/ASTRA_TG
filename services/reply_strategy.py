@@ -53,6 +53,8 @@ class ReplyStrategyResolver:
             chat_id=context.chat.id,
             situation=classification.situation,
             source_message_preview=source_preview,
+            focus_label=context.focus_label,
+            focus_reason=context.focus_reason,
             few_shot_match_count=few_shot_support.match_count if few_shot_support else 0,
             few_shot_notes=few_shot_support.notes if few_shot_support else (),
             alternative_action=alternative_action,

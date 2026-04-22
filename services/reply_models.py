@@ -17,6 +17,9 @@ class ReplyContext:
     recent_messages: tuple[Message, ...]
     latest_message: Message
     target_message: Message
+    focus_label: str
+    focus_reason: str
+    focus_score: float
     chat_memory: ChatMemory | None
     person_memory: PersonMemory | None
     linked_people: tuple[PersonMemory, ...]
@@ -52,6 +55,8 @@ class ReplyDraft:
     chat_id: int
     situation: str
     source_message_preview: str
+    focus_label: str
+    focus_reason: str
     few_shot_match_count: int = 0
     few_shot_notes: tuple[str, ...] = ()
     alternative_action: str | None = None
@@ -76,6 +81,8 @@ class ReplySuggestion:
     chat_id: int
     situation: str
     source_message_preview: str
+    focus_label: str
+    focus_reason: str
     few_shot_found: bool
     few_shot_match_count: int
     few_shot_notes: tuple[str, ...]

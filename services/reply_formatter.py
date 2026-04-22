@@ -74,10 +74,15 @@ def _reply_success_lines(result: ReplyResult) -> list[str]:
     if suggestion is None:
         return []
     return [
-        "Ориентир",
+        "Фокус ответа",
         compact_text(
             result.source_message_preview or suggestion.source_message_preview or "нет превью",
             limit=220,
+        ),
+        format_status_line(
+            MARKER_OK,
+            "Почему выбран",
+            compact_text(suggestion.focus_reason, limit=160),
         ),
     ]
 

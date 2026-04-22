@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from aiogram.types import InlineKeyboardMarkup
+from models import Chat
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.settings import Settings
@@ -68,7 +69,7 @@ from services.reply_engine import ReplyEngineService
 from services.reply_examples_formatter import ReplyExamplesFormatter
 from services.reply_examples_retriever import ReplyExamplesRetriever
 from services.reply_formatter import ReplyFormatter
-from services.reply_models import ReplyContextIssue
+from services.reply_models import ReplyContext, ReplyContextIssue
 from services.reply_strategy import ReplyStrategyResolver
 from services.reminder_extractor import ReminderExtractor
 from services.reminder_formatter import ReminderFormatter
@@ -115,6 +116,13 @@ from storage.repositories import (
 
 
 STYLE_READY_PROFILE_COUNT = 6
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplyPickerCandidate:
+    chat: Chat
+    context: ReplyContext
+    message_count: int
 
 
 @dataclass(slots=True)
@@ -605,12 +613,12 @@ class SetupUIService:
         return render_help_card(
             title="💬 Как использовать ответы",
             lines=[
-                "1. Выбери чат кнопкой ниже.",
-                "2. Если чата нет, сначала накопи сообщения и пересобери память.",
-                "3. Команда-резерв: /reply <chat_id|@username>",
-                "4. LLM-версия: /reply_llm <chat_id|@username>",
+                "1. Открой /reply без аргумента или выбери чат кнопкой ниже.",
+                "2. Picker поднимет недавние чаты с незакрытым reply-trigger и локальным контекстом.",
+                "3. Резервный режим: /reply <chat_id|@username>",
+                "4. LLM-версия остаётся командой /reply_llm <chat_id|@username>",
             ],
-            next_step="/reply <chat_id|@username>",
+            next_step="/reply",
             rows=[[("Назад", screen_route(SCREEN_REPLY)), ("Домой", screen_route(SCREEN_HOME))]],
         )
 
@@ -790,15 +798,18 @@ class SetupUIService:
 
     async def _build_reply_picker_card(self) -> RenderedCard:
         report = await self._build_report()
-        ready_chats = await self.message_repository.list_reply_ready_chats(limit=6)
-        message_counts = await self.message_repository.count_messages_by_chat()
+        ready_chats = await self._build_reply_picker_candidates(limit=6)
         detail_lines: list[str] = []
         rows: list[list[tuple[str, str]]] = []
-        for index, chat in enumerate(ready_chats, start=1):
+        for index, candidate in enumerate(ready_chats, start=1):
+            chat = candidate.chat
             reference = _chat_route_reference(chat)
             detail_lines.append(
-                f"{MARKER_OK} {index}. {chat.title}: {message_counts.get(chat.id, 0)} сообщ., {_chat_display_reference(chat)}"
+                f"{MARKER_OK} {index}. {chat.title}: фокус {candidate.context.focus_label}, "
+                f"{candidate.message_count} сообщ., контекст {_yes_no(candidate.context.has_memory_support)}, "
+                f"{_chat_display_reference(chat)}"
             )
+            detail_lines.append(f"    {compact_text(candidate.context.focus_reason, limit=110)}")
             rows.append([(_picker_button_label(chat.title), reply_chat_route(reference))])
         if not detail_lines:
             detail_lines.extend(_build_reply_picker_empty_state(report))
@@ -807,7 +818,7 @@ class SetupUIService:
             summary_lines=[
                 f"Готовых чатов: {len(ready_chats)}.",
                 (
-                    "Ниже только чаты, где уже хватает данных для подсказки."
+                    "Сверху чаты с более сильным незакрытым триггером, свежими сообщениями и доступным локальным контекстом."
                     if ready_chats
                     else "Пока нет чатов с достаточным контекстом для подсказки."
                 ),
@@ -823,6 +834,33 @@ class SetupUIService:
             back_screen=SCREEN_REPLY,
             current_screen=SCREEN_REPLY_PICK,
         )
+
+    async def _build_reply_picker_candidates(self, *, limit: int) -> list[_ReplyPickerCandidate]:
+        message_counts = await self.message_repository.count_messages_by_chat()
+        ready_chats = await self.message_repository.list_reply_ready_chats(limit=max(limit * 2, 12))
+        context_builder = self._build_reply_context_builder()
+        candidates: list[_ReplyPickerCandidate] = []
+        for chat in ready_chats:
+            context_or_issue = await context_builder.build(chat)
+            if isinstance(context_or_issue, ReplyContextIssue):
+                continue
+            candidates.append(
+                _ReplyPickerCandidate(
+                    chat=chat,
+                    context=context_or_issue,
+                    message_count=message_counts.get(chat.id, 0),
+                )
+            )
+
+        candidates.sort(
+            key=lambda item: (
+                -_reply_picker_priority(item.context),
+                -item.context.latest_message.sent_at.timestamp(),
+                item.chat.title.casefold(),
+                item.chat.telegram_chat_id,
+            )
+        )
+        return candidates[:limit]
 
     async def _build_memory_picker_card(self) -> RenderedCard:
         report = await self._build_report()
@@ -1327,7 +1365,7 @@ def _build_reply_next_step(report: OperationalReport) -> str:
     if not report.facts.has_memory_cards:
         return "/memory_rebuild"
     if report.facts.reply_ready_chats > 0:
-        return "Открой «Выбрать чат» в Ответах."
+        return "Открой /reply или «Выбрать чат» в Ответах."
     return "Подходящих чатов для подсказки пока нет."
 
 
@@ -1402,6 +1440,17 @@ def _build_reply_picker_empty_state(report: OperationalReport) -> list[str]:
         meaning="Сообщения есть, но подходящего чата с достаточным контекстом пока не найдено.",
         next_step="Подожди новых сообщений или открой Память.",
     )
+
+
+def _reply_picker_priority(context: ReplyContext) -> float:
+    score = context.focus_score
+    if context.has_memory_support:
+        score += 0.3
+    if context.pending_loops:
+        score += 0.15
+    if context.focus_label == "низкий сигнал":
+        score -= 0.25
+    return score
 
 
 def _build_memory_picker_empty_state(report: OperationalReport) -> list[str]:

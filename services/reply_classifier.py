@@ -2,53 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from services.memory_common import looks_like_conflict, normalize_display_name
+from services.memory_common import normalize_display_name
 from services.reply_models import ReplyClassification, ReplyContext
+from services.reply_signal import (
+    has_emotional_signal,
+    has_open_loop_signal,
+    has_question_signal,
+    has_request_signal,
+    is_low_signal_text,
+    reply_tokens,
+)
 
 
-QUESTION_WORDS = (
-    "когда",
-    "где",
-    "что",
-    "как",
-    "почему",
-    "зачем",
-    "сколько",
-    "какой",
-    "какая",
-    "какие",
-    "можно",
-    "сможешь",
-    "успеешь",
-)
-REQUEST_MARKERS = (
-    "посмотри",
-    "скинь",
-    "пришли",
-    "сделай",
-    "проверь",
-    "дай",
-    "напомни",
-    "подскажи",
-    "возьми",
-    "подготовь",
-    "нужно",
-    "надо",
-    "давай",
-)
-NO_REPLY_MARKERS = {
-    "ок",
-    "окей",
-    "ага",
-    "ясно",
-    "понял",
-    "поняла",
-    "спасибо",
-    "спс",
-    "принято",
-    "хорошо",
-    "понятно",
-}
 SMALL_TALK_MARKERS = (
     "привет",
     "доброе",
@@ -116,12 +81,13 @@ class ReplyClassifier:
     ) -> ReplyClassification:
         normalized = " ".join(text.split()).strip()
         lowered = normalized.casefold()
-        tokens = tuple(token.strip(".,!?():;\"'«»") for token in lowered.split())
+        tokens = reply_tokens(lowered)
 
-        has_question = "?" in normalized or any(token in QUESTION_WORDS for token in tokens)
-        has_request = any(marker in lowered for marker in REQUEST_MARKERS)
-        has_tension = looks_like_conflict(normalized) or "напряж" in chat_state.casefold()
-        is_short_ack = normalized and len(tokens) <= 3 and all(token in NO_REPLY_MARKERS for token in tokens)
+        has_question = has_question_signal(normalized)
+        has_request = has_request_signal(normalized)
+        has_open_loop_signal_text = has_open_loop_signal(normalized)
+        has_tension = has_emotional_signal(normalized) or "напряж" in chat_state.casefold()
+        is_short_ack = is_low_signal_text(normalized)
         has_small_talk = len(normalized) <= 48 and any(marker in lowered for marker in SMALL_TALK_MARKERS)
         needs_softness = has_tension or any(marker in lowered for marker in SOFT_REPLY_MARKERS)
         mentions_sensitive_pattern = "часто задаёт вопросы" in interaction_pattern.casefold()
@@ -141,7 +107,7 @@ class ReplyClassifier:
         if has_tension and ("!" in normalized or "срочно" in lowered or "почему" in lowered):
             return ReplyClassification(
                 situation="tension",
-                reason="Вижу напряжённый тон или жалобу, поэтому лучше отвечать спокойно и без встречной резкости.",
+                reason="Фокус ответа звучит напряжённо, поэтому лучше отвечать спокойно и без встречной резкости.",
                 has_question=has_question,
                 has_request=has_request,
                 has_tension=True,
@@ -153,7 +119,7 @@ class ReplyClassifier:
         if needs_softness:
             return ReplyClassification(
                 situation="soft_reply",
-                reason="Сообщение лучше закрывать мягко и предметно, чтобы не разогнать лишнюю резкость.",
+                reason="Фокус ответа лучше закрывать мягко и предметно, чтобы не разогнать лишнюю резкость.",
                 has_question=has_question,
                 has_request=has_request,
                 has_tension=has_tension,
@@ -165,7 +131,7 @@ class ReplyClassifier:
         if has_question:
             return ReplyClassification(
                 situation="question",
-                reason="Последнее сообщение выглядит как вопрос или уточнение, поэтому безопаснее ответить коротко и по делу.",
+                reason="Фокус ответа выглядит как вопрос или уточнение, поэтому безопаснее ответить коротко и по делу.",
                 has_question=True,
                 has_request=has_request,
                 has_tension=has_tension,
@@ -174,10 +140,10 @@ class ReplyClassifier:
                 topic_hint=topic_hint,
             )
 
-        if has_request or has_open_loops:
+        if has_request or has_open_loops or has_open_loop_signal_text:
             return ReplyClassification(
                 situation="request",
-                reason="Похоже на просьбу или ожидание действия, поэтому лучше подтвердить, что тема взята в работу.",
+                reason="Фокус ответа похож на просьбу или ожидание действия, поэтому лучше подтвердить, что тема взята в работу.",
                 has_question=has_question,
                 has_request=True,
                 has_tension=has_tension,
@@ -189,7 +155,7 @@ class ReplyClassifier:
         if mentions_sensitive_pattern:
             return ReplyClassification(
                 situation="question",
-                reason="Последнее сообщение выглядит как вопрос или уточнение, поэтому безопаснее ответить коротко и по делу.",
+                reason="Фокус ответа выглядит как вопрос или уточнение, поэтому безопаснее ответить коротко и по делу.",
                 has_question=True,
                 has_request=has_request,
                 has_tension=has_tension,
@@ -201,7 +167,7 @@ class ReplyClassifier:
         if has_small_talk:
             return ReplyClassification(
                 situation="small_talk",
-                reason="Это короткая бытовая реплика без явного риска, тут достаточно живого короткого ответа.",
+                reason="Фокус ответа выглядит как короткая бытовая реплика без явного риска, тут достаточно живого короткого ответа.",
                 has_question=False,
                 has_request=False,
                 has_tension=False,
@@ -212,7 +178,7 @@ class ReplyClassifier:
 
         return ReplyClassification(
             situation="soft_reply",
-            reason="Контекст остаётся немного неопределённым, поэтому безопаснее короткий нейтральный ответ.",
+            reason="Контекст вокруг выбранного фокуса остаётся немного неопределённым, поэтому безопаснее короткий нейтральный ответ.",
             has_question=False,
             has_request=False,
             has_tension=False,

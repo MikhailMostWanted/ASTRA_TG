@@ -38,6 +38,7 @@ from services.error_handling import user_safe_handler
 from services.reply_formatter import ReplyFormatter
 from services.reply_models import ReplyContextIssue
 from services.reply_strategy import ReplyStrategyResolver
+from services.setup_ui import SetupUIService
 from services.style_adapter import StyleAdapter
 from services.style_formatter import StyleFormatter
 from services.style_profiles import StyleProfileService
@@ -358,14 +359,18 @@ async def handle_reply_command(
     command: CommandObject,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    try:
-        reference = PARSER.parse_required_reference(command.args, command_name="reply")
-    except ValueError as error:
-        await message.answer(str(error))
-        return
-
     async with session_factory() as session:
         await remember_owner_chat_if_private(message, session)
+        if not (command.args and command.args.strip()):
+            card = await SetupUIService.from_session(session).build_screen("reply_pick")
+            await message.answer(card.text, reply_markup=card.reply_markup)
+            return
+
+        try:
+            reference = PARSER.parse_required_reference(command.args, command_name="reply")
+        except ValueError as error:
+            await message.answer(str(error))
+            return
         service = _build_reply_service(session)
         formatter = ReplyFormatter()
         result = await service.build_reply(reference)

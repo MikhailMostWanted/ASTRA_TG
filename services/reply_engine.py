@@ -215,6 +215,8 @@ class ReplyEngineService:
                 chat_id=draft.chat_id,
                 situation=draft.situation,
                 source_message_preview=draft.source_message_preview,
+                focus_label=draft.focus_label,
+                focus_reason=draft.focus_reason,
                 few_shot_found=few_shot_support.support_used,
                 few_shot_match_count=draft.few_shot_match_count,
                 few_shot_notes=draft.few_shot_notes or few_shot_support.notes,
