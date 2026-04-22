@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { formatDateTime, stringifyUnknown } from "@/lib/format";
+import { safeArray } from "@/lib/runtime-guards";
 
 import { EmptyState } from "@/components/system/EmptyState";
 import { LoadingState } from "@/components/system/LoadingState";
@@ -64,7 +65,7 @@ export function LogsScreen() {
   });
 
   const filteredLogs = useMemo(() => {
-    const items = logsQuery.data?.items || [];
+    const items = safeArray(logsQuery.data?.items);
     if (filter === "all") {
       return items;
     }
@@ -97,6 +98,8 @@ export function LogsScreen() {
   }
 
   const ops = opsQuery.data;
+  const doctorWarnings = safeArray(ops.doctor?.warnings);
+  const processes = safeArray(ops.processes);
 
   return (
     <ScrollArea className="h-full min-h-0">
@@ -139,8 +142,8 @@ export function LogsScreen() {
               className="bg-black/14"
             >
               <div className="flex flex-col gap-3">
-                {ops.doctor.warnings.length > 0 ? (
-                  ops.doctor.warnings.map((item) => (
+                {doctorWarnings.length > 0 ? (
+                  doctorWarnings.map((item) => (
                     <div key={item} className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3 text-sm leading-6 text-slate-300">
                       {item}
                     </div>
@@ -195,7 +198,7 @@ export function LogsScreen() {
             description="Managed bot/worker и их свежие operational details."
           >
             <div className="grid gap-3 md:grid-cols-2">
-              {ops.processes.map((process) => (
+              {processes.map((process) => (
                 <div key={process.component} className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-4">
                   <div className="flex items-center justify-between gap-3">
                     <div className="text-sm font-medium text-white">{process.component}</div>

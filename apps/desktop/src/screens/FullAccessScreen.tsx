@@ -19,6 +19,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { formatCompactNumber, initials } from "@/lib/format";
+import { extractErrorMessage, safeArray } from "@/lib/runtime-guards";
 
 import { EmptyState } from "@/components/system/EmptyState";
 import { LoadingState } from "@/components/system/LoadingState";
@@ -38,7 +39,19 @@ export function FullAccessScreen() {
     refetchInterval: 10_000,
   });
 
-  const status = overviewQuery.data?.status;
+  const status = overviewQuery.data?.status ?? {
+    enabled: false,
+    sessionExists: false,
+    authorized: false,
+    pendingLogin: false,
+    effectiveReadonly: true,
+    syncLimit: 0,
+    syncedChatCount: 0,
+    syncedMessageCount: 0,
+    readyForManualSync: false,
+    reason: "Статус full-access пока недоступен.",
+    sessionPath: "—",
+  };
   const chatsQuery = useQuery({
     queryKey: ["fullaccess-chats"],
     queryFn: () => api.fullaccessChats(50),
@@ -100,7 +113,7 @@ export function FullAccessScreen() {
   });
 
   const visibleChats = useMemo(() => {
-    const items = chatsQuery.data?.items || [];
+    const items = safeArray(chatsQuery.data?.items);
     const query = deferredChatSearch.trim().toLowerCase();
     if (!query) {
       return items;
@@ -123,15 +136,16 @@ export function FullAccessScreen() {
       <WarningState
         title="Full-access не загрузился"
         description={
-          overviewQuery.error instanceof Error
-            ? overviewQuery.error.message
-            : "Не удалось получить состояние full-access."
+          extractErrorMessage(overviewQuery.error, "Не удалось получить состояние full-access.")
         }
       />
     );
   }
 
   const overview = overviewQuery.data;
+  const instructions = safeArray(overview.instructions).filter(
+    (item): item is string => typeof item === "string" && item.trim().length > 0,
+  );
   const readyLabel = status?.authorized
     ? "Сессия готова"
     : status?.pendingLogin
@@ -146,7 +160,9 @@ export function FullAccessScreen() {
             <div>
               <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Desktop auth</div>
               <div className="text-base font-semibold text-white">Full-access без терминала</div>
-              <div className="mt-1 text-sm leading-6 text-slate-400">{overview.onboarding}</div>
+              <div className="mt-1 text-sm leading-6 text-slate-400">
+                {overview.onboarding || "Desktop-path для full-access авторизации и sync."}
+              </div>
             </div>
 
             <div className="flex gap-2">
@@ -242,7 +258,7 @@ export function FullAccessScreen() {
 
             <div className="rounded-[24px] border border-amber-300/12 bg-amber-300/8 p-4 text-sm leading-6 text-amber-50">
               <div className="font-medium">CLI fallback остаётся резервным</div>
-              <div className="mt-1">{overview.instructions.join(" ")}</div>
+              <div className="mt-1">{instructions.join(" ") || "Если UI-path недоступен, можно использовать CLI fallback."}</div>
               <div className="mt-2 rounded-[18px] border border-white/8 bg-black/18 px-3 py-2 font-mono text-xs text-slate-100">
                 {overview.localLoginCommand}
               </div>

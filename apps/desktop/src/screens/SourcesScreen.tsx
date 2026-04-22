@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api } from "@/lib/api";
 import { formatCompactNumber, formatDateTime, formatRelativeTime, initials } from "@/lib/format";
+import { extractErrorMessage, safeArray } from "@/lib/runtime-guards";
 
 import { EmptyState } from "@/components/system/EmptyState";
 import { LoadingState } from "@/components/system/LoadingState";
@@ -76,7 +77,7 @@ export function SourcesScreen() {
   });
 
   const visibleSources = useMemo(() => {
-    const items = sourcesQuery.data?.items || [];
+    const items = safeArray(sourcesQuery.data?.items);
     const query = deferredSearch.trim().toLowerCase();
     if (!query) {
       return items;
@@ -97,20 +98,17 @@ export function SourcesScreen() {
     return (
       <WarningState
         title="Источники не загрузились"
-        description={
-          sourcesQuery.error instanceof Error
-            ? sourcesQuery.error.message
-            : "Не удалось получить список источников."
-        }
+        description={extractErrorMessage(sourcesQuery.error, "Не удалось получить список источников.")}
       />
     );
   }
 
   const sources = sourcesQuery.data;
-  const activeCount = sources.items.filter((item) => item.enabled).length;
-  const fullaccessCount = sources.items.filter((item) => item.syncStatus === "fullaccess").length;
-  const readyForReplyCount = sources.items.filter((item) => item.type !== "channel" && item.lastDirection === "inbound").length;
-  const withHistoryCount = sources.items.filter((item) => item.messageCount > 0).length;
+  const sourceItems = safeArray(sources.items);
+  const activeCount = sourceItems.filter((item) => item.enabled).length;
+  const fullaccessCount = sourceItems.filter((item) => item.syncStatus === "fullaccess").length;
+  const readyForReplyCount = sourceItems.filter((item) => item.type !== "channel" && item.lastDirection === "inbound").length;
+  const withHistoryCount = sourceItems.filter((item) => item.messageCount > 0).length;
 
   return (
     <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1.12fr)_360px]">

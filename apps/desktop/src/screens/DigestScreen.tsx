@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
 import { formatCompactNumber, formatDateTime, formatRelativeTime } from "@/lib/format";
+import { safeArray } from "@/lib/runtime-guards";
 
 import { EmptyState } from "@/components/system/EmptyState";
 import { LoadingState } from "@/components/system/LoadingState";
@@ -66,7 +67,10 @@ export function DigestScreen() {
   });
 
   const activeSources = useMemo(
-    () => (sourcesQuery.data?.items || []).filter((item) => item.enabled && item.excludeFromDigest === false),
+    () =>
+      safeArray(sourcesQuery.data?.items).filter(
+        (item) => item.enabled && item.excludeFromDigest === false,
+      ),
     [sourcesQuery.data?.items],
   );
 
@@ -84,7 +88,11 @@ export function DigestScreen() {
   }
 
   const digest = digestQuery.data;
-  const latest = digest.latest;
+  const target = digest.target || { label: null, chatType: null };
+  const latest = digest.latest || null;
+  const latestItems = safeArray(latest?.items);
+  const recentRuns = safeArray(digest.recentRuns);
+  const previewChunks = safeArray(lastRun?.previewChunks);
 
   return (
     <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1.08fr)_360px]">
@@ -117,8 +125,8 @@ export function DigestScreen() {
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <MiniDigestStat
               label="Target"
-              value={digest.target.label || "не задан"}
-              note={digest.target.chatType || "Сначала выбери канал или чат для доставки."}
+              value={target.label || "не задан"}
+              note={target.chatType || "Сначала выбери канал или чат для доставки."}
               icon={<SendToBack className="size-4" />}
             />
             <MiniDigestStat
@@ -154,7 +162,7 @@ export function DigestScreen() {
                 </div>
 
                 <div className="mt-4 flex flex-col gap-3">
-                  {latest.items.map((item) => (
+                  {latestItems.map((item) => (
                     <div key={item.id} className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
                       <div className="text-sm font-medium text-white">
                         {item.title || item.sourceChatTitle || "Источник"}
@@ -173,11 +181,11 @@ export function DigestScreen() {
               />
             )}
 
-            {lastRun?.previewChunks?.length ? (
+            {previewChunks.length ? (
               <div className="rounded-[24px] border border-white/7 bg-black/16 p-4">
                 <div className="text-sm font-medium text-white">Последний предпросмотр запуска</div>
                 <div className="mt-3 flex flex-col gap-3">
-                  {lastRun.previewChunks.map((chunk) => (
+                  {previewChunks.map((chunk) => (
                     <div key={chunk} className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3 text-sm leading-6 text-slate-300">
                       {chunk}
                     </div>
@@ -186,11 +194,11 @@ export function DigestScreen() {
               </div>
             ) : null}
 
-            {digest.recentRuns.length > 0 ? (
+            {recentRuns.length > 0 ? (
               <div className="rounded-[24px] border border-white/7 bg-black/16 p-4">
                 <div className="text-sm font-medium text-white">История запусков</div>
                 <div className="mt-3 flex flex-col gap-3">
-                  {digest.recentRuns.map((item) => (
+                  {recentRuns.map((item) => (
                     <div key={item.id} className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
                       <div className="flex items-center justify-between gap-3">
                         <div className="text-sm font-medium text-white">{item.summaryShort || "Без короткой сводки"}</div>

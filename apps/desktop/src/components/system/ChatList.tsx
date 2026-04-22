@@ -16,6 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCompactNumber, formatDateTime, formatRelativeTime, initials } from "@/lib/format";
+import { safeArray, safeRecord } from "@/lib/runtime-guards";
 import type { ChatItem } from "@/lib/types";
 import type { ChatWorkspaceState } from "@/stores/app-store";
 import { cn } from "@/lib/utils";
@@ -65,6 +66,12 @@ export function ChatList({
   onToggleFavorite,
   onRefresh,
 }: ChatListProps) {
+  const safeChats = safeArray(chats);
+  const safeFavorites = safeArray(favorites).filter(
+    (item): item is number => typeof item === "number" && Number.isFinite(item),
+  );
+  const safeWorkspaceState = safeRecord<ChatWorkspaceState>(workspaceStateByChat);
+
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/7 bg-white/[0.035]">
       <div className="border-b border-white/7 px-4 py-4">
@@ -127,7 +134,7 @@ export function ChatList({
         </div>
 
         <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
-          <div>{formatCompactNumber(chats.length)} в выборке</div>
+          <div>{formatCompactNumber(safeChats.length)} в выборке</div>
           <div className="truncate">
             {refreshedAt ? `Обновлено ${formatDateTime(refreshedAt)}` : "Ещё не обновлялось"}
           </div>
@@ -136,44 +143,54 @@ export function ChatList({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-2 p-3">
-          {loading && chats.length === 0 ? <ChatListSkeleton /> : null}
+          {loading && safeChats.length === 0 ? <ChatListSkeleton /> : null}
 
-          {!loading && chats.length === 0 ? (
+          {!loading && safeChats.length === 0 ? (
             <EmptyState
               title="Чаты не найдены"
               description="Проверь фильтры или подтяни источники и full-access синхронизацию."
             />
           ) : null}
 
-          {chats.map((chat) => {
+          {safeChats.map((chat) => {
             const isSelected = chat.id === selectedChatId;
-            const isFavorite = favorites.includes(chat.id);
-            const workspaceState = workspaceStateByChat[chat.id];
+            const isFavorite = safeFavorites.includes(chat.id);
+            const workspaceState = safeWorkspaceState[chat.id];
+            const seenMessageId = workspaceState?.seenMessageId ?? null;
+            const draftSourceMessageId = workspaceState?.draftSourceMessageId ?? null;
+            const sentSourceMessageId = workspaceState?.sentSourceMessageId ?? null;
             const hasNewMessages = Boolean(
-              workspaceState?.seenMessageId !== null
+              seenMessageId !== null
               && chat.lastMessageId !== null
-              && Number(chat.lastMessageId) > Number(workspaceState.seenMessageId),
+              && Number(chat.lastMessageId) > Number(seenMessageId),
             );
             const hasDraft = Boolean(
               workspaceState?.draftText
-              && workspaceState.draftSourceMessageId !== null
-              && workspaceState.draftSourceMessageId === chat.lastMessageId,
+              && draftSourceMessageId !== null
+              && draftSourceMessageId === chat.lastMessageId,
             );
             const needsReply = Boolean(
               chat.type !== "channel"
               && chat.lastDirection === "inbound"
-              && workspaceState?.sentSourceMessageId !== chat.lastMessageId,
+              && sentSourceMessageId !== chat.lastMessageId,
             );
 
             return (
-              <button
+              <div
                 key={chat.id}
-                type="button"
+                role="button"
+                tabIndex={0}
                 className={cn(
-                  "rounded-[24px] border border-transparent bg-transparent px-3 py-3 text-left transition-all active:translate-y-px hover:border-white/10 hover:bg-white/[0.045]",
+                  "cursor-pointer rounded-[24px] border border-transparent bg-transparent px-3 py-3 text-left transition-all active:translate-y-px hover:border-white/10 hover:bg-white/[0.045]",
                   isSelected && "border-cyan-300/18 bg-cyan-400/9 shadow-[0_14px_38px_rgba(8,145,178,0.16)]",
                 )}
                 onClick={() => onSelectChat(chat.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelectChat(chat.id);
+                  }
+                }}
               >
                 <div className="flex items-start gap-3">
                   <Avatar className="size-11 border border-white/8 bg-white/[0.04]">
@@ -258,7 +275,7 @@ export function ChatList({
                     ) : null}
                   </div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
 import { formatDateTime, formatConfidence } from "@/lib/format";
+import { extractErrorMessage, safeArray } from "@/lib/runtime-guards";
 
 import { EmptyState } from "@/components/system/EmptyState";
 import { LoadingState } from "@/components/system/LoadingState";
@@ -49,16 +50,21 @@ export function RemindersScreen() {
     return (
       <WarningState
         title="Reminders overview не загрузился"
-        description={
-          remindersQuery.error instanceof Error
-            ? remindersQuery.error.message
-            : "Не удалось получить состояние reminders pipeline."
-        }
+        description={extractErrorMessage(remindersQuery.error, "Не удалось получить состояние reminders pipeline.")}
       />
     );
   }
 
   const reminders = remindersQuery.data;
+  const summary = reminders.summary || {
+    candidateCount: 0,
+    confirmedTaskCount: 0,
+    activeReminderCount: 0,
+    lastNotificationAt: null,
+  };
+  const candidates = safeArray(reminders.candidates);
+  const tasks = safeArray(reminders.tasks);
+  const reminderItems = safeArray(reminders.reminders);
 
   return (
     <ScrollArea className="h-full min-h-0">
@@ -70,26 +76,26 @@ export function RemindersScreen() {
         <div className="grid gap-4 lg:grid-cols-4">
           <MetricCard
             label="Кандидаты"
-            value={String(reminders.summary.candidateCount)}
+            value={String(summary.candidateCount || 0)}
             note="Потенциальные задачи, найденные в переписке."
             icon={ScanSearch}
           />
           <MetricCard
             label="Подтверждено"
-            value={String(reminders.summary.confirmedTaskCount)}
+            value={String(summary.confirmedTaskCount || 0)}
             note="Активные задачи, за которыми уже следит pipeline."
             icon={AlarmClock}
           />
           <MetricCard
             label="Активные reminders"
-            value={String(reminders.summary.activeReminderCount)}
+            value={String(summary.activeReminderCount || 0)}
             note="Что ещё не закрыто."
             icon={RefreshCcw}
           />
           <MetricCard
             label="Последняя отправка"
-            value={reminders.summary.lastNotificationAt ? "была" : "не было"}
-            note={formatDateTime(reminders.summary.lastNotificationAt)}
+            value={summary.lastNotificationAt ? "была" : "не было"}
+            note={formatDateTime(summary.lastNotificationAt)}
             icon={AlarmClock}
           />
         </div>
@@ -127,7 +133,7 @@ export function RemindersScreen() {
           description="Что Astra нашла, но ещё не превратила в подтверждённые задачи."
         >
           <div className="flex flex-col gap-3">
-            {reminders.candidates.length ? reminders.candidates.map((item) => (
+            {candidates.length ? candidates.map((item) => (
               <div key={item.id} className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
                 <div className="text-sm font-medium text-white">{item.title}</div>
                 <div className="mt-1 text-sm leading-6 text-slate-400">{item.summary || "Без summary"}</div>
@@ -141,7 +147,7 @@ export function RemindersScreen() {
           description="Подтверждённые open loops по чатам."
         >
           <div className="flex flex-col gap-3">
-            {reminders.tasks.length ? reminders.tasks.map((item) => (
+            {tasks.length ? tasks.map((item) => (
               <div key={item.id} className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
                 <div className="text-sm font-medium text-white">{item.title}</div>
                 <div className="mt-1 text-sm leading-6 text-slate-400">{item.sourceChatTitle || "Без чата"}</div>
@@ -158,7 +164,7 @@ export function RemindersScreen() {
           description="Ближайшие напоминания, которые worker может доставить."
         >
           <div className="flex flex-col gap-3">
-            {reminders.reminders.length ? reminders.reminders.map((item) => (
+            {reminderItems.length ? reminderItems.map((item) => (
               <div key={item.id} className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
                 <div className="text-sm font-medium text-white">{item.task?.title || "Reminder"}</div>
                 <div className="mt-1 text-sm leading-6 text-slate-400">

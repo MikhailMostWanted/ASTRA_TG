@@ -14,10 +14,12 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDateTime, formatRelativeTime, initials } from "@/lib/format";
+import { safeArray } from "@/lib/runtime-guards";
 import type { ChatItem, MessageItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { EmptyState } from "./EmptyState";
+import { WarningState } from "./WarningState";
 
 interface MessageListProps {
   chat: ChatItem | null;
@@ -26,6 +28,7 @@ interface MessageListProps {
   refreshing?: boolean;
   fullaccessReady?: boolean;
   lastUpdatedAt?: string | null;
+  errorMessage?: string | null;
   onRefresh: () => void;
   onSyncChat: () => void;
 }
@@ -37,20 +40,39 @@ export function MessageList({
   refreshing = false,
   fullaccessReady = false,
   lastUpdatedAt = null,
+  errorMessage = null,
   onRefresh,
   onSyncChat,
 }: MessageListProps) {
   const endRef = useRef<HTMLDivElement | null>(null);
+  const safeMessages = safeArray(messages);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
-  }, [chat?.id, messages.length]);
+  }, [chat?.id, safeMessages.length]);
 
   if (!chat) {
     return (
       <EmptyState
         title="Выбери чат слева"
         description="Здесь появится живая лента сообщений, статус синхронизации и свежий хвост для ответа."
+      />
+    );
+  }
+
+  if (errorMessage) {
+    return (
+      <WarningState
+        title="Лента сообщений не загрузилась"
+        description={errorMessage}
+        action={
+          <div>
+            <Button variant="outline" onClick={onRefresh}>
+              <RefreshCcw data-icon="inline-start" />
+              Повторить
+            </Button>
+          </div>
+        }
       />
     );
   }
@@ -118,16 +140,16 @@ export function MessageList({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-4 px-4 py-4">
-          {loading && messages.length === 0 ? <MessageListSkeleton /> : null}
+          {loading && safeMessages.length === 0 ? <MessageListSkeleton /> : null}
 
-          {!loading && messages.length === 0 ? (
+          {!loading && safeMessages.length === 0 ? (
             <EmptyState
               title="Сообщений пока нет"
               description="Когда в выбранный чат придут данные, здесь появится рабочая лента сообщений."
             />
           ) : null}
 
-          {messages.map((message, index) => {
+          {safeMessages.map((message, index) => {
             const inbound = message.direction === "inbound";
 
             return (
@@ -136,7 +158,7 @@ export function MessageList({
                 className={cn(
                   "flex w-full gap-3",
                   inbound ? "justify-start" : "justify-end",
-                  index > 0 && messages[index - 1]?.direction === message.direction ? "pt-0" : "pt-1",
+                  index > 0 && safeMessages[index - 1]?.direction === message.direction ? "pt-0" : "pt-1",
                 )}
               >
                 {inbound ? (

@@ -7,6 +7,7 @@ import { MessageList } from "@/components/system/MessageList";
 import { ReplyPanel } from "@/components/system/ReplyPanel";
 import { WarningState } from "@/components/system/WarningState";
 import { api } from "@/lib/api";
+import { extractErrorMessage, safeArray } from "@/lib/runtime-guards";
 import { useAppStore } from "@/stores/app-store";
 
 const CHAT_POLL_MS = 7_000;
@@ -16,15 +17,26 @@ const AUTO_SYNC_MS = 30_000;
 
 export function ChatsScreen() {
   const queryClient = useQueryClient();
-  const selectedChatId = useAppStore((state) => state.selectedChatId);
+  const rawSelectedChatId = useAppStore((state) => state.selectedChatId);
   const setSelectedChatId = useAppStore((state) => state.setSelectedChatId);
-  const favoriteChatIds = useAppStore((state) => state.favoriteChatIds);
+  const rawFavoriteChatIds = useAppStore((state) => state.favoriteChatIds);
   const toggleFavoriteChat = useAppStore((state) => state.toggleFavoriteChat);
-  const chatWorkspace = useAppStore((state) => state.chatWorkspace);
+  const rawChatWorkspace = useAppStore((state) => state.chatWorkspace);
   const markChatSeen = useAppStore((state) => state.markChatSeen);
   const saveReplyDraft = useAppStore((state) => state.saveReplyDraft);
   const markReplySent = useAppStore((state) => state.markReplySent);
   const clearReplyDraft = useAppStore((state) => state.clearReplyDraft);
+  const selectedChatId =
+    typeof rawSelectedChatId === "number" && Number.isFinite(rawSelectedChatId)
+      ? rawSelectedChatId
+      : null;
+  const favoriteChatIds = safeArray(rawFavoriteChatIds).filter(
+    (item): item is number => typeof item === "number" && Number.isFinite(item),
+  );
+  const chatWorkspace =
+    rawChatWorkspace && typeof rawChatWorkspace === "object" && !Array.isArray(rawChatWorkspace)
+      ? rawChatWorkspace
+      : {};
 
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
@@ -47,23 +59,23 @@ export function ChatsScreen() {
     queryFn: api.fullaccess,
     refetchInterval: 15_000,
   });
+  const chatItems = safeArray(chatsQuery.data?.items);
 
   useEffect(() => {
-    const items = chatsQuery.data?.items || [];
-    if (items.length === 0) {
+    if (chatItems.length === 0) {
       if (selectedChatId !== null) {
         startTransition(() => setSelectedChatId(null));
       }
       return;
     }
 
-    const stillExists = items.some((item) => item.id === selectedChatId);
+    const stillExists = chatItems.some((item) => item.id === selectedChatId);
     if (!stillExists) {
-      startTransition(() => setSelectedChatId(items[0]?.id ?? null));
+      startTransition(() => setSelectedChatId(chatItems[0]?.id ?? null));
     }
-  }, [chatsQuery.data?.items, selectedChatId, setSelectedChatId]);
+  }, [chatItems, selectedChatId, setSelectedChatId]);
 
-  const selectedChat = chatsQuery.data?.items.find((item) => item.id === selectedChatId) || null;
+  const selectedChat = chatItems.find((item) => item.id === selectedChatId) || null;
   const selectedChatWorkspace = selectedChatId !== null ? chatWorkspace[selectedChatId] || null : null;
   const fullaccessReady = Boolean(fullaccessQuery.data?.status.readyForManualSync);
 
@@ -107,15 +119,16 @@ export function ChatsScreen() {
       toast.error(error instanceof Error ? error.message : "Не удалось синхронизировать выбранный чат.");
     },
   });
+  const messageItems = safeArray(messagesQuery.data?.messages);
+  const replyPayload = replyQuery.data ?? null;
 
   useEffect(() => {
-    const messages = messagesQuery.data?.messages || [];
-    const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+    const lastMessage = messageItems.length > 0 ? messageItems[messageItems.length - 1] : null;
     if (selectedChatId === null || !lastMessage) {
       return;
     }
     markChatSeen(selectedChatId, lastMessage.id);
-  }, [messagesQuery.data?.messages, markChatSeen, selectedChatId]);
+  }, [messageItems, markChatSeen, selectedChatId]);
 
   useEffect(() => {
     if (!selectedChat || selectedChat.syncStatus !== "fullaccess" || !fullaccessReady) {
@@ -172,11 +185,7 @@ export function ChatsScreen() {
     return (
       <WarningState
         title="Чаты не загрузились"
-        description={
-          chatsQuery.error instanceof Error
-            ? chatsQuery.error.message
-            : "Не удалось получить список чатов."
-        }
+        description={extractErrorMessage(chatsQuery.error, "Не удалось получить список чатов.")}
       />
     );
   }
@@ -184,7 +193,7 @@ export function ChatsScreen() {
   return (
     <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)_400px]">
       <ChatList
-        chats={chatsQuery.data?.items || []}
+        chats={chatItems}
         selectedChatId={selectedChatId}
         search={search}
         filter={filter}
@@ -206,11 +215,16 @@ export function ChatsScreen() {
 
       <MessageList
         chat={selectedChat}
-        messages={messagesQuery.data?.messages || []}
+        messages={messageItems}
         loading={messagesQuery.isLoading}
         refreshing={messagesQuery.isFetching || syncChatMutation.isPending}
         fullaccessReady={fullaccessReady}
         lastUpdatedAt={messagesQuery.data?.refreshedAt || chatsQuery.data?.refreshedAt || null}
+        errorMessage={
+          messagesQuery.isError
+            ? extractErrorMessage(messagesQuery.error, "Не удалось загрузить ленту сообщений.")
+            : null
+        }
         onRefresh={() => {
           void refreshWorkspace();
         }}
@@ -226,10 +240,15 @@ export function ChatsScreen() {
       />
 
       <ReplyPanel
-        reply={replyQuery.data || null}
+        reply={replyPayload}
         workflowState={selectedChatWorkspace}
         loading={replyQuery.isLoading}
         refreshing={replyQuery.isFetching || syncChatMutation.isPending}
+        errorMessage={
+          replyQuery.isError
+            ? extractErrorMessage(replyQuery.error, "Не удалось собрать reply preview.")
+            : null
+        }
         onRefresh={() => {
           void refreshWorkspace();
         }}

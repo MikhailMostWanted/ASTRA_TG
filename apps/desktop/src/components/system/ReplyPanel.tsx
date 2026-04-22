@@ -17,6 +17,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatConfidence, formatDateTime, stringifyUnknown } from "@/lib/format";
+import { normalizeReplyPreviewPayload } from "@/lib/runtime-guards";
 import type { ReplyPreviewPayload } from "@/lib/types";
 import type { ChatWorkspaceState } from "@/stores/app-store";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ interface ReplyPanelProps {
   workflowState: ChatWorkspaceState | null;
   loading?: boolean;
   refreshing?: boolean;
+  errorMessage?: string | null;
   onRefresh: () => void;
   onCopy: (text: string) => void;
   onUseDraft: (text: string, sourceMessageId: number | null) => void;
@@ -41,13 +43,15 @@ export function ReplyPanel({
   workflowState,
   loading = false,
   refreshing = false,
+  errorMessage = null,
   onRefresh,
   onCopy,
   onUseDraft,
   onMarkSent,
   onClearDraft,
 }: ReplyPanelProps) {
-  const suggestion = reply?.suggestion;
+  const safeReply = normalizeReplyPreviewPayload(reply);
+  const suggestion = safeReply?.suggestion;
   const replyOptions = useMemo(() => {
     if (!suggestion) {
       return [];
@@ -88,6 +92,23 @@ export function ReplyPanel({
     );
   }
 
+  if (errorMessage) {
+    return (
+      <WarningState
+        title="Assistant panel не загрузилась"
+        description={errorMessage}
+        action={
+          <div>
+            <Button variant="outline" onClick={onRefresh}>
+              <RefreshCcw data-icon="inline-start" />
+              Повторить
+            </Button>
+          </div>
+        }
+      />
+    );
+  }
+
   if (!reply) {
     return (
       <EmptyState
@@ -97,11 +118,28 @@ export function ReplyPanel({
     );
   }
 
+  if (!safeReply) {
+    return (
+      <WarningState
+        title="Reply вернулся в неожиданном формате"
+        description="Bridge отдал payload, который desktop не может безопасно отрисовать. Обнови экран или перезапусти локальный bridge."
+        action={
+          <div>
+            <Button variant="outline" onClick={onRefresh}>
+              <RefreshCcw data-icon="inline-start" />
+              Повторить
+            </Button>
+          </div>
+        }
+      />
+    );
+  }
+
   if (!suggestion) {
     return (
       <WarningState
         title="Reply пока не собран"
-        description={reply.errorMessage || "Astra не смогла предложить ответ для выбранного контекста."}
+        description={safeReply.errorMessage || "Astra не смогла предложить ответ для выбранного контекста."}
         action={
           <div>
             <Button variant="outline" onClick={onRefresh}>
@@ -169,12 +207,12 @@ export function ReplyPanel({
             <div className="mt-2 text-sm leading-6 text-cyan-50/85">
               {suggestion.focusReason || suggestion.reasonShort}
             </div>
-            {reply.sourceMessagePreview ? (
+            {safeReply.sourceMessagePreview ? (
               <div className="mt-3 rounded-[18px] border border-white/8 bg-black/16 px-4 py-3 text-sm leading-6 text-slate-200">
                 <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Опорный триггер</div>
                 <div className="mt-2">
-                  {reply.sourceSenderName ? `${reply.sourceSenderName}: ` : ""}
-                  {reply.sourceMessagePreview}
+                  {safeReply.sourceSenderName ? `${safeReply.sourceSenderName}: ` : ""}
+                  {safeReply.sourceMessagePreview}
                 </div>
               </div>
             ) : null}

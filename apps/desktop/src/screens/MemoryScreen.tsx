@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
 import { formatDateTime, stringifyUnknown } from "@/lib/format";
+import { extractErrorMessage, safeArray } from "@/lib/runtime-guards";
 
 import { EmptyState } from "@/components/system/EmptyState";
 import { LoadingState } from "@/components/system/LoadingState";
@@ -41,16 +42,18 @@ export function MemoryScreen() {
     return (
       <WarningState
         title="Память не загрузилась"
-        description={
-          memoryQuery.error instanceof Error
-            ? memoryQuery.error.message
-            : "Не удалось получить memory overview."
-        }
+        description={extractErrorMessage(memoryQuery.error, "Не удалось получить memory overview.")}
       />
     );
   }
 
   const memory = memoryQuery.data;
+  const summary = memory.summary || {
+    chatCards: 0,
+    peopleCards: 0,
+    lastRebuildAt: null,
+  };
+  const memoryItems = safeArray(memory.items);
 
   return (
     <ScrollArea className="h-full min-h-0">
@@ -68,33 +71,33 @@ export function MemoryScreen() {
         <div className="grid gap-4 lg:grid-cols-3">
           <MetricCard
             label="Карточки чатов"
-            value={String(memory.summary.chatCards)}
+            value={String(summary.chatCards || 0)}
             note="Локальные summary-карты по каждому активному контексту."
             icon={BrainCircuit}
           />
           <MetricCard
             label="Карточки людей"
-            value={String(memory.summary.peopleCards)}
+            value={String(summary.peopleCards || 0)}
             note="Сигналы по людям и связанным open loops."
             icon={MessageCircleHeart}
           />
           <MetricCard
             label="Последняя пересборка"
-            value={memory.summary.lastRebuildAt ? "есть" : "ещё не было"}
-            note={formatDateTime(memory.summary.lastRebuildAt, true)}
+            value={summary.lastRebuildAt ? "есть" : "ещё не было"}
+            note={formatDateTime(summary.lastRebuildAt, true)}
             icon={RefreshCcw}
           />
         </div>
       </SectionCard>
 
-      {memory.items.length === 0 ? (
+      {memoryItems.length === 0 ? (
         <EmptyState
           title="Память пока пустая"
           description="Сначала накопи сообщения или запусти rebuild после синхронизации нужных чатов."
         />
       ) : (
         <div className="grid gap-4 xl:grid-cols-2">
-          {memory.items.map((item) => (
+          {memoryItems.map((item) => (
             <SectionCard
               key={item.id}
               title={item.chatTitle || `Chat #${item.chatId}`}
@@ -114,13 +117,13 @@ export function MemoryScreen() {
                   <div className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
                     <div className="mb-2 text-xs uppercase tracking-[0.22em] text-slate-500">Темы</div>
                     <div className="flex flex-col gap-2 text-sm leading-6 text-slate-300">
-                      {item.topics.length ? item.topics.map((topic) => <div key={stringifyUnknown(topic)}>{stringifyUnknown(topic)}</div>) : <div>Нет явных тем</div>}
+                      {safeArray(item.topics).length ? safeArray(item.topics).map((topic) => <div key={stringifyUnknown(topic)}>{stringifyUnknown(topic)}</div>) : <div>Нет явных тем</div>}
                     </div>
                   </div>
                   <div className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
                     <div className="mb-2 text-xs uppercase tracking-[0.22em] text-slate-500">Что делать дальше</div>
                     <div className="flex flex-col gap-2 text-sm leading-6 text-slate-300">
-                      {item.pendingTasks.length ? item.pendingTasks.map((task) => <div key={stringifyUnknown(task)}>{stringifyUnknown(task)}</div>) : <div>Открытых хвостов не видно</div>}
+                      {safeArray(item.pendingTasks).length ? safeArray(item.pendingTasks).map((task) => <div key={stringifyUnknown(task)}>{stringifyUnknown(task)}</div>) : <div>Открытых хвостов не видно</div>}
                     </div>
                   </div>
                 </div>

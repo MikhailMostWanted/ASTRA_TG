@@ -18,6 +18,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { api } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import { extractErrorMessage, safeArray } from "@/lib/runtime-guards";
 import { useAppStore } from "@/stores/app-store";
 
 import { LoadingState } from "@/components/system/LoadingState";
@@ -83,12 +84,13 @@ export function DashboardScreen() {
       return [];
     }
 
-    const onlineProcesses = data.processes.filter((item) => item.running).length;
-    const visibleErrors = data.errors.filter((item) => item.tone !== "success").length;
+    const summary = data.summary || { readyChecks: 0, nextSteps: [] };
+    const onlineProcesses = safeArray(data.processes).filter((item) => item.running).length;
+    const visibleErrors = safeArray(data.errors).filter((item) => item.tone !== "success").length;
 
     return [
-      { label: "Готово", value: data.summary.readyChecks },
-      { label: "Шаги", value: data.summary.nextSteps.length },
+      { label: "Готово", value: summary.readyChecks || 0 },
+      { label: "Шаги", value: safeArray(summary.nextSteps).length },
       { label: "Процессы", value: onlineProcesses },
       { label: "Ошибки", value: visibleErrors },
     ];
@@ -102,11 +104,7 @@ export function DashboardScreen() {
     return (
       <WarningState
         title="Сводка не загрузилась"
-        description={
-          dashboardQuery.error instanceof Error
-            ? dashboardQuery.error.message
-            : "Не удалось получить состояние Astra."
-        }
+        description={extractErrorMessage(dashboardQuery.error, "Не удалось получить состояние Astra.")}
         action={
           <div>
             <Button variant="outline" onClick={() => dashboardQuery.refetch()}>
@@ -120,6 +118,23 @@ export function DashboardScreen() {
   }
 
   const dashboard = dashboardQuery.data;
+  const summary = dashboard.summary || { readyChecks: 0, totalChecks: 0, nextSteps: [], warnings: [] };
+  const database = dashboard.database || {
+    available: false,
+    detail: "Статус базы недоступен.",
+    sqlitePath: null,
+  };
+  const providerApi = dashboard.providerApi || {
+    providerName: null,
+    reason: "Статус provider недоступен.",
+  };
+  const quickActions = safeArray(dashboard.quickActions);
+  const astraNow = safeArray(dashboard.astraNow);
+  const statusCards = safeArray(dashboard.statusCards);
+  const activity = safeArray(dashboard.activity);
+  const attention = safeArray(dashboard.attention);
+  const errors = safeArray(dashboard.errors);
+  const processes = safeArray(dashboard.processes);
 
   const handleQuickAction = (actionId: string) => {
     switch (actionId) {
@@ -155,7 +170,7 @@ export function DashboardScreen() {
         description="Здесь видно, в каком состоянии Astra, что уже готово и какой следующий полезный шаг лучше сделать."
         action={
           <div className="flex flex-wrap gap-2">
-            {dashboard.quickActions.map((action) => (
+            {quickActions.map((action) => (
               <Button
                 key={action.id}
                 variant={action.kind === "primary" ? "default" : action.kind === "secondary" ? "secondary" : "outline"}
@@ -172,20 +187,20 @@ export function DashboardScreen() {
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <MetricCard
               label="Готовность"
-              value={`${dashboard.summary.readyChecks}/${dashboard.summary.totalChecks}`}
+              value={`${summary.readyChecks || 0}/${summary.totalChecks || 0}`}
               note="Проверки operational-контура."
               icon={Bot}
             />
             <MetricCard
               label="База"
-              value={dashboard.database.available ? "доступна" : "недоступна"}
-              note={dashboard.database.sqlitePath || dashboard.database.detail}
+              value={database.available ? "доступна" : "недоступна"}
+              note={database.sqlitePath || database.detail}
               icon={Database}
             />
             <MetricCard
               label="Provider"
-              value={dashboard.providerApi.providerName || "deterministic"}
-              note={dashboard.providerApi.reason || "Refine включается только когда реально нужен."}
+              value={providerApi.providerName || "deterministic"}
+              note={providerApi.reason || "Refine включается только когда реально нужен."}
               icon={MessagesSquare}
             />
           </div>
@@ -196,7 +211,7 @@ export function DashboardScreen() {
             className="bg-black/14"
           >
             <div className="flex flex-col gap-3">
-              {dashboard.astraNow.map((item) => (
+              {astraNow.map((item) => (
                 <div key={item} className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3 text-sm leading-6 text-slate-200">
                   {item}
                 </div>
@@ -207,7 +222,7 @@ export function DashboardScreen() {
       </SectionCard>
 
       <div className="grid gap-4 xl:grid-cols-3">
-        {dashboard.statusCards.map((item) => (
+        {statusCards.map((item) => (
           <StatusCard key={item.key} item={item} />
         ))}
       </div>
@@ -218,7 +233,7 @@ export function DashboardScreen() {
           description="Что в системе произошло недавно."
         >
           <div className="flex flex-col gap-3">
-            {dashboard.activity.map((item) => (
+            {activity.map((item) => (
               <div key={`${item.title}-${item.timestamp}`} className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="text-sm font-medium text-white">{item.title}</div>
@@ -254,7 +269,7 @@ export function DashboardScreen() {
           description="Следующие шаги и предупреждения, которые реально важны."
         >
           <div className="flex flex-col gap-3">
-            {dashboard.attention.map((item, index) => (
+            {attention.map((item, index) => (
               <div
                 key={`${item.text}-${index}`}
                 className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3 text-sm leading-6 text-slate-200"
@@ -270,8 +285,8 @@ export function DashboardScreen() {
           description="Критичные сигналы вынесены отдельно, чтобы не ловить их в хвостах логов."
         >
           <div className="flex flex-col gap-3">
-            {dashboard.errors.some((item) => item.tone !== "success") ? (
-              dashboard.errors.map((item) => (
+            {errors.some((item) => item.tone !== "success") ? (
+              errors.map((item) => (
                 <div
                   key={`${item.title}-${item.text}`}
                   className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3"
@@ -295,7 +310,7 @@ export function DashboardScreen() {
         description="Bot и worker остаются прежними, desktop лишь аккуратно управляет ими."
       >
         <div className="grid gap-3 lg:grid-cols-2">
-          {dashboard.processes.map((process) => (
+          {processes.map((process) => (
             <div key={process.component} className="rounded-[20px] border border-white/6 bg-black/12 px-4 py-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-medium text-white">{process.component}</div>

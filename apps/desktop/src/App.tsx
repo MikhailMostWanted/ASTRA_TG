@@ -5,10 +5,13 @@ import { AlertTriangle, Bot, RefreshCw } from "lucide-react";
 
 import { AppShell } from "@/components/system/AppShell";
 import { LoadingState } from "@/components/system/LoadingState";
+import { ScreenErrorBoundary } from "@/components/system/ScreenErrorBoundary";
 import { Button } from "@/components/ui/button";
 import { api, getApiUrl, setApiUrl } from "@/lib/api";
 import { navigationItems } from "@/lib/navigation";
-import { useAppStore } from "@/stores/app-store";
+import type { ScreenId } from "@/lib/types";
+import { coerceScreenId } from "@/lib/runtime-guards";
+import { resetPersistedDesktopState, useAppStore } from "@/stores/app-store";
 
 const DashboardScreen = lazy(() =>
   import("@/screens/DashboardScreen").then((module) => ({ default: module.DashboardScreen })),
@@ -34,6 +37,17 @@ const RemindersScreen = lazy(() =>
 const LogsScreen = lazy(() =>
   import("@/screens/LogsScreen").then((module) => ({ default: module.LogsScreen })),
 );
+
+const screenComponents: Record<ScreenId, typeof DashboardScreen> = {
+  dashboard: DashboardScreen,
+  chats: ChatsScreen,
+  sources: SourcesScreen,
+  fullaccess: FullAccessScreen,
+  memory: MemoryScreen,
+  digest: DigestScreen,
+  reminders: RemindersScreen,
+  logs: LogsScreen,
+};
 
 type DesktopLaunchStatus = {
   apiUrl: string;
@@ -185,6 +199,7 @@ function AppContent() {
   const queryClient = useQueryClient();
   const activeScreen = useAppStore((state) => state.activeScreen);
   const setActiveScreen = useAppStore((state) => state.setActiveScreen);
+  const safeActiveScreen = coerceScreenId(activeScreen);
 
   const healthQuery = useQuery({
     queryKey: ["health"],
@@ -198,11 +213,18 @@ function AppContent() {
     refetchInterval: 10_000,
   });
 
-  const currentScreen = navigationItems.find((item) => item.id === activeScreen) || navigationItems[0];
+  useEffect(() => {
+    if (activeScreen !== safeActiveScreen) {
+      startTransition(() => setActiveScreen(safeActiveScreen));
+    }
+  }, [activeScreen, safeActiveScreen, setActiveScreen]);
+
+  const currentScreen = navigationItems.find((item) => item.id === safeActiveScreen) || navigationItems[0];
+  const ActiveScreen = screenComponents[safeActiveScreen];
 
   return (
     <AppShell
-      activeScreen={activeScreen}
+      activeScreen={safeActiveScreen}
       onSelectScreen={(screen) => startTransition(() => setActiveScreen(screen))}
       title={currentScreen.label}
       description={currentScreen.description}
@@ -214,23 +236,33 @@ function AppContent() {
     >
       <AnimatePresence mode="wait">
         <motion.div
-          key={activeScreen}
+          key={safeActiveScreen}
           initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
           transition={{ duration: 0.22, ease: "easeOut" }}
           className="h-full min-h-0"
         >
-          <Suspense fallback={<LoadingState />}>
-            {activeScreen === "dashboard" ? <DashboardScreen /> : null}
-            {activeScreen === "chats" ? <ChatsScreen /> : null}
-            {activeScreen === "sources" ? <SourcesScreen /> : null}
-            {activeScreen === "fullaccess" ? <FullAccessScreen /> : null}
-            {activeScreen === "memory" ? <MemoryScreen /> : null}
-            {activeScreen === "digest" ? <DigestScreen /> : null}
-            {activeScreen === "reminders" ? <RemindersScreen /> : null}
-            {activeScreen === "logs" ? <LogsScreen /> : null}
-          </Suspense>
+          <ScreenErrorBoundary
+            screenId={safeActiveScreen}
+            screenLabel={currentScreen.label}
+            onRetry={() => {
+              void queryClient.invalidateQueries();
+            }}
+            onGoDashboard={() => {
+              startTransition(() => setActiveScreen("dashboard"));
+              void queryClient.invalidateQueries();
+            }}
+            onResetState={() => {
+              resetPersistedDesktopState();
+              startTransition(() => setActiveScreen("dashboard"));
+              void queryClient.resetQueries();
+            }}
+          >
+            <Suspense fallback={<LoadingState />}>
+              <ActiveScreen />
+            </Suspense>
+          </ScreenErrorBoundary>
         </motion.div>
       </AnimatePresence>
     </AppShell>
