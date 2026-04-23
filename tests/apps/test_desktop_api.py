@@ -344,6 +344,10 @@ def test_desktop_api_lifecycle_writes_and_removes_pid_file(monkeypatch, tmp_path
         with TestClient(app) as client:
             response = client.get("/health")
             assert response.status_code == 200
+            runtime_payload = response.json()["runtime"]
+            assert runtime_payload["targetRegistered"] is False
+            assert runtime_payload["routes"]["chatRoster"]["effective"] == "legacy"
+            assert runtime_payload["routes"]["sendPath"]["effective"] == "legacy"
             assert pid_path.exists() is True
             assert pid_path.read_text(encoding="utf-8").strip() == str(os.getpid())
 
@@ -710,7 +714,7 @@ async def _seed_runtime(monkeypatch, tmp_path: Path):
             raw_text="Смотрю бюджет и вернусь чуть позже.",
             normalized_text="Смотрю бюджет и вернусь чуть позже.",
         )
-        inbound_one = await messages.create_message(
+        await messages.create_message(
             chat_id=team_chat.id,
             telegram_message_id=2,
             sender_id=11,

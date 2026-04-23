@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# LEGACY_RUNTIME: temporary full-access history sync. New history refresh should
+# be implemented behind `astra_runtime.contracts.MessageHistory`.
+
 from dataclasses import dataclass
 from datetime import UTC, datetime
 

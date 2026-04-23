@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     fullaccess_phone: str | None = None
     fullaccess_readonly: bool = True
     fullaccess_sync_limit: int = 200
+    runtime_chat_roster_backend: str = "legacy"
+    runtime_message_workspace_backend: str = "legacy"
+    runtime_reply_generation_backend: str = "legacy"
+    runtime_send_path_backend: str = "legacy"
+    runtime_autopilot_control_backend: str = "legacy"
 
     model_config = SettingsConfigDict(
         env_file=".env",

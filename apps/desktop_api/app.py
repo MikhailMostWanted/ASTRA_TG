@@ -78,6 +78,8 @@ def create_app(
     settings: Settings | None = None,
     *,
     runtime=None,
+    target_runtime=None,
+    runtime_switches=None,
 ) -> FastAPI:
     effective_settings = settings or Settings()
     owned_runtime = runtime is None
@@ -92,6 +94,8 @@ def create_app(
         _app.state.bridge = DesktopBridge(
             settings=effective_settings,
             runtime=effective_runtime,
+            target_runtime=target_runtime,
+            runtime_switches=runtime_switches,
         )
         try:
             yield
@@ -120,6 +124,7 @@ def create_app(
             "ok": True,
             "name": "astra-desktop-api",
             "version": "0.1.0",
+            "runtime": _bridge(app).describe_runtime(),
         }
 
     @app.get("/api/media/avatars/{telegram_chat_id}")

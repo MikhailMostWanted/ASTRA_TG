@@ -766,6 +766,8 @@ def _build_fullaccess_auth_service(session: AsyncSession) -> FullAccessAuthServi
 
 
 def _build_fullaccess_sync_service(session: AsyncSession) -> FullAccessSyncService:
+    # LEGACY_RUNTIME: bot commands still expose the old fullaccess sync adapter.
+    # New Telegram runtime wiring belongs behind astra_runtime contracts.
     return FullAccessSyncService(
         settings=Settings(),
         chat_repository=ChatRepository(session),
@@ -789,6 +791,8 @@ def _build_memory_service(session: AsyncSession) -> MemoryService:
 
 
 def _build_reply_service(session: AsyncSession) -> ReplyEngineService:
+    # LEGACY_RUNTIME: bot /reply uses the pre-pivot reply engine until the new
+    # DraftReplyWorkspace is wired into bot control surfaces.
     message_repository = MessageRepository(session)
     chat_memory_repository = ChatMemoryRepository(session)
     person_memory_repository = PersonMemoryRepository(session)

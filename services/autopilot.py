@@ -56,6 +56,13 @@ class AutopilotRunResult:
 
 @dataclass(slots=True)
 class AutopilotService:
+    """Legacy autopilot state machine behind AutopilotControlSurface.
+
+    Keep this service stable while the new reply/send/autopilot contour is
+    introduced next to it. New autonomous behavior should enter via the runtime
+    contracts, not by growing this legacy service.
+    """
+
     chat_repository: Any
     setting_repository: Any
     send_service: FullAccessSendService

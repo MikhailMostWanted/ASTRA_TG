@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import sys
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
 from aiogram import Bot
 
+from astra_runtime.contracts import TelegramRuntime
+from astra_runtime.legacy import LegacyAstraRuntime
+from astra_runtime.router import RuntimeRouter
+from astra_runtime.switches import RuntimeSwitches
 from apps.cli.processes import inspect_process, start_component, stop_component
 from apps.cli.runtime import (
     COMPONENTS,
@@ -55,6 +59,7 @@ from services.system_health import SystemHealthService
 from services.system_readiness import OperationalFacts, OperationalReport, SystemReadinessService
 from services.telegram_lookup import TelegramChatResolver
 from services.workflow_journal import WorkflowJournalService
+from models import Message
 from storage.database import DatabaseRuntime
 from storage.repositories import (
     ChatMemoryRepository,
@@ -73,7 +78,6 @@ from storage.repositories import (
 
 from .serializers import (
     build_chat_reference,
-    message_preview,
     serialize_chat,
     serialize_datetime,
     serialize_digest,
@@ -103,8 +107,27 @@ class ChatTailRefreshStatus:
 
 @dataclass(slots=True)
 class DesktopBridge:
+    """Desktop control shell with explicit routing to legacy or target runtime.
+
+    The public methods below are routing points. The `_legacy_*` methods keep
+    the old contour alive until the new runtime implements the same contracts.
+    """
+
     settings: Settings
     runtime: DatabaseRuntime
+    target_runtime: TelegramRuntime | None = None
+    runtime_switches: RuntimeSwitches | None = None
+    _runtime_router: RuntimeRouter = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._runtime_router = RuntimeRouter(
+            legacy=LegacyAstraRuntime(self),
+            target=self.target_runtime,
+            switches=self.runtime_switches or RuntimeSwitches.from_settings(self.settings),
+        )
+
+    def describe_runtime(self) -> dict[str, object]:
+        return self._runtime_router.describe()
 
     async def get_dashboard(self) -> dict[str, Any]:
         async with self.runtime.session_factory() as session:
@@ -192,6 +215,21 @@ class DesktopBridge:
         filter_key: str = "all",
         sort_key: str = "activity",
     ) -> dict[str, Any]:
+        return await self._runtime_router.chat_roster.list_chats(
+            search=search,
+            filter_key=filter_key,
+            sort_key=sort_key,
+        )
+
+    async def _legacy_list_chats(
+        self,
+        *,
+        search: str | None = None,
+        filter_key: str = "all",
+        sort_key: str = "activity",
+    ) -> dict[str, Any]:
+        # LEGACY_RUNTIME: pre-pivot roster comes from local DB projections.
+        # New chat discovery and roster semantics should implement ChatRoster.
         async with self.runtime.session_factory() as session:
             chat_repository = ChatRepository(session)
             message_repository = MessageRepository(session)
@@ -264,6 +302,11 @@ class DesktopBridge:
         }
 
     async def get_chat_workspace(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
+        return await self._runtime_router.message_history.get_chat_workspace(chat_id, limit=limit)
+
+    async def _legacy_get_chat_workspace(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
+        # LEGACY_RUNTIME: workspace refresh still uses fullaccess tail sync.
+        # Future message workspace implementations should live behind MessageHistory.
         async with self.runtime.session_factory() as session:
             chat_repository = ChatRepository(session)
             chat = await chat_repository.get_by_id(chat_id)
@@ -283,6 +326,10 @@ class DesktopBridge:
             )
 
     async def get_chat_messages(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
+        return await self._runtime_router.message_history.get_chat_messages(chat_id, limit=limit)
+
+    async def _legacy_get_chat_messages(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
+        # LEGACY_RUNTIME: direct local message-store read.
         async with self.runtime.session_factory() as session:
             chat_repository = ChatRepository(session)
             message_repository = MessageRepository(session)
@@ -316,14 +363,27 @@ class DesktopBridge:
         *,
         use_provider_refinement: bool | None = None,
     ) -> dict[str, Any]:
+        return await self._runtime_router.reply_workspace.get_reply_preview(
+            chat_id,
+            use_provider_refinement=use_provider_refinement,
+        )
+
+    async def _legacy_get_reply_preview(
+        self,
+        chat_id: int,
+        *,
+        use_provider_refinement: bool | None = None,
+    ) -> dict[str, Any]:
+        # LEGACY_RUNTIME: old deterministic/provider reply engine.
+        # New reply generation must replace DraftReplyWorkspace instead.
         async with self.runtime.session_factory() as session:
             chat_repository = ChatRepository(session)
             chat = await chat_repository.get_by_id(chat_id)
             if chat is None:
                 raise LookupError("Чат не найден.")
 
-            service = self._build_reply_service(session)
-            result = await service.build_reply(
+            result = await self._legacy_build_reply_result(
+                session,
                 build_chat_reference(chat),
                 use_provider_refinement=use_provider_refinement,
             )
@@ -341,6 +401,23 @@ class DesktopBridge:
         source_message_id: int | None = None,
         reply_to_source_message_id: int | None = None,
     ) -> dict[str, Any]:
+        return await self._runtime_router.message_sender.send_chat_message(
+            chat_id,
+            text=text,
+            source_message_id=source_message_id,
+            reply_to_source_message_id=reply_to_source_message_id,
+        )
+
+    async def _legacy_send_chat_message(
+        self,
+        chat_id: int,
+        *,
+        text: str,
+        source_message_id: int | None = None,
+        reply_to_source_message_id: int | None = None,
+    ) -> dict[str, Any]:
+        # LEGACY_RUNTIME: writes still go through fullaccess.send.
+        # New send-path should implement MessageSender and keep this method untouched.
         async with self.runtime.session_factory() as session:
             chat_repository = ChatRepository(session)
             message_repository = MessageRepository(session)
@@ -393,6 +470,18 @@ class DesktopBridge:
         master_enabled: bool | None = None,
         allow_channels: bool | None = None,
     ) -> dict[str, Any]:
+        return await self._runtime_router.autopilot.update_autopilot_global(
+            master_enabled=master_enabled,
+            allow_channels=allow_channels,
+        )
+
+    async def _legacy_update_autopilot_global(
+        self,
+        *,
+        master_enabled: bool | None = None,
+        allow_channels: bool | None = None,
+    ) -> dict[str, Any]:
+        # LEGACY_RUNTIME: settings-only autopilot control surface.
         async with self.runtime.session_factory() as session:
             payload = await self._build_autopilot_service(session).update_global_settings(
                 master_enabled=master_enabled,
@@ -408,6 +497,20 @@ class DesktopBridge:
         trusted: bool | None = None,
         mode: str | None = None,
     ) -> dict[str, Any]:
+        return await self._runtime_router.autopilot.update_chat_autopilot(
+            chat_id,
+            trusted=trusted,
+            mode=mode,
+        )
+
+    async def _legacy_update_chat_autopilot(
+        self,
+        chat_id: int,
+        *,
+        trusted: bool | None = None,
+        mode: str | None = None,
+    ) -> dict[str, Any]:
+        # LEGACY_RUNTIME: chat flags and draft overview are still old service state.
         async with self.runtime.session_factory() as session:
             chat_repository = ChatRepository(session)
             message_repository = MessageRepository(session)
@@ -421,7 +524,9 @@ class DesktopBridge:
             )
             await session.commit()
             fullaccess_status = await self._build_fullaccess_auth_service(session).build_status_report()
-            reply_result = await self._build_reply_service(session).build_reply(build_chat_reference(updated_chat))
+            reply_result = await self._runtime_router.reply_workspace.build_reply_result(
+                build_chat_reference(updated_chat)
+            )
             overview = await self._build_autopilot_service(session).build_chat_overview(
                 chat=updated_chat,
                 reply_result=reply_result,
@@ -1005,6 +1110,28 @@ class DesktopBridge:
             formatter=MemoryFormatter(),
         )
 
+    async def _legacy_build_reply_result(
+        self,
+        session,
+        reference: str,
+        *,
+        use_provider_refinement: bool | None = None,
+        workspace_messages=None,
+    ):
+        # LEGACY_RUNTIME: this is the old reply core boundary. Do not add new
+        # product behavior here; implement DraftReplyWorkspace on the new runtime.
+        service = self._build_reply_service(session)
+        if workspace_messages is None:
+            return await service.build_reply(
+                reference,
+                use_provider_refinement=use_provider_refinement,
+            )
+        return await service.build_reply(
+            reference,
+            use_provider_refinement=use_provider_refinement,
+            workspace_messages=workspace_messages,
+        )
+
     def _build_reply_service(self, session) -> ReplyEngineService:
         message_repository = MessageRepository(session)
         chat_memory_repository = ChatMemoryRepository(session)
@@ -1084,7 +1211,7 @@ class DesktopBridge:
         messages = list(reversed(recent_desc))
         last_message = recent_desc[0] if recent_desc else None
         message_count = await message_repository.count_messages_for_chat(chat_id=chat.id)
-        reply_result = await self._build_reply_service(session).build_reply(
+        reply_result = await self._runtime_router.reply_workspace.build_reply_result(
             build_chat_reference(chat),
             workspace_messages=tuple(messages),
         )

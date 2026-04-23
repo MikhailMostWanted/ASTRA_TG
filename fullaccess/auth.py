@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# LEGACY_RUNTIME: local Telethon session/auth management for the temporary
+# full-access contour. Do not add new runtime behavior here.
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime

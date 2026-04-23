@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# LEGACY_RUNTIME: temporary full-access send path. New outbound writes should
+# be implemented behind `astra_runtime.contracts.MessageSender`.
+
 from dataclasses import dataclass
 
 from config.settings import Settings

@@ -53,4 +53,5 @@ include = [
     "telegram_bot*",
     "business*",
     "fullaccess*",
+    "astra_runtime*",
 ]

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+# LEGACY_RUNTIME: Telethon transport for the temporary full-access contour.
+# New Telegram runtime work should implement `astra_runtime.contracts.TelegramRuntime`
+# instead of expanding this module.
+
 import asyncio
 import hashlib
 from collections.abc import AsyncIterator, Callable

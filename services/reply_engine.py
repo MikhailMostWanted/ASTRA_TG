@@ -31,6 +31,13 @@ LOGGER = get_logger(__name__)
 
 @dataclass(slots=True)
 class ReplyEngineService:
+    """Legacy deterministic reply builder kept behind DraftReplyWorkspace.
+
+    The migration target is a replaceable reply workspace/runtime. Keep new
+    routing and product behavior outside this class unless it is required to
+    preserve the current legacy path.
+    """
+
     chat_repository: ChatRepository
     message_repository: MessageRepository
     chat_memory_repository: ChatMemoryRepository
