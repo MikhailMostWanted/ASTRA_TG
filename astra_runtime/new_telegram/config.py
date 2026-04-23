@@ -9,6 +9,7 @@ class NewTelegramRuntimeConfig:
     enabled: bool
     session_path: Path
     device_name: str
+    asset_session_files: tuple[Path, ...] = ()
     api_id: int | None = None
     api_hash: str | None = None
     phone: str | None = None
@@ -23,6 +24,10 @@ class NewTelegramRuntimeConfig:
             phone=settings.runtime_new_phone,
             session_path=settings.runtime_new_session_file,
             device_name=settings.runtime_new_device_name,
+            asset_session_files=(
+                settings.runtime_new_session_file,
+                settings.fullaccess_session_file,
+            ),
             product_surfaces_enabled=bool(settings.runtime_new_product_surfaces_enabled),
         )
 
@@ -42,5 +47,6 @@ class NewTelegramRuntimeConfig:
             "phoneConfigured": self.phone_configured,
             "sessionPath": str(self.session_path),
             "deviceName": self.device_name,
+            "assetSessionFiles": [str(path) for path in self.asset_session_files],
             "productSurfacesEnabled": self.product_surfaces_enabled,
         }

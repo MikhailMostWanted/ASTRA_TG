@@ -173,6 +173,7 @@ export interface RuntimeStatusPayload {
   backends: Record<string, RuntimeBackendPayload>;
   legacy: RuntimeBackendPayload | null;
   newRuntime: RuntimeBackendPayload | null;
+  chatRoster?: ChatRosterStatePayload | null;
   managedProcess?: ProcessState;
 }
 
@@ -184,8 +185,32 @@ export interface ChatMemorySummary {
   topics: Array<string | Record<string, unknown>>;
 }
 
+export interface ChatIdentityPayload {
+  id: number;
+  localChatId: number | null;
+  runtimeChatId: number;
+  chatKey: string;
+  workspaceAvailable: boolean;
+}
+
+export interface ChatRosterFreshnessPayload {
+  mode: string;
+  label: string;
+  lastActivityAt: string | null;
+}
+
+export interface ChatAssetHintsPayload {
+  avatarCached: boolean;
+  avatarSource: string | null;
+}
+
 export interface ChatItem {
   id: number;
+  localChatId: number | null;
+  runtimeChatId: number;
+  chatKey: string;
+  workspaceAvailable: boolean;
+  identity: ChatIdentityPayload;
   telegramChatId: number;
   reference: string;
   title: string;
@@ -211,11 +236,38 @@ export interface ChatItem {
   syncStatus: "fullaccess" | "local" | "empty";
   memory: ChatMemorySummary | null;
   favorite: boolean;
+  rosterSource: "legacy" | "new" | string;
+  rosterLastActivityAt: string | null;
+  rosterLastMessagePreview: string;
+  rosterLastDirection: string | null;
+  rosterLastSenderName: string | null;
+  rosterFreshness: ChatRosterFreshnessPayload;
+  unreadCount: number;
+  unreadMentionCount: number;
+  pinned: boolean;
+  muted: boolean;
+  archived: boolean;
+  assetHints: ChatAssetHintsPayload;
+}
+
+export interface ChatRosterStatePayload {
+  source: "legacy" | "new" | "fallback_to_legacy" | string;
+  requestedBackend: "legacy" | "new" | string | null;
+  effectiveBackend: "legacy" | "new" | string | null;
+  degraded: boolean;
+  degradedReason: string | null;
+  lastUpdatedAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  route: RuntimeRoutePayload | Record<string, unknown>;
 }
 
 export interface ChatsPayload {
   items: ChatItem[];
   count: number;
+  source: "legacy" | "new" | "fallback_to_legacy" | string;
+  roster: ChatRosterStatePayload;
   refreshedAt: string | null;
   filters: {
     active: string;

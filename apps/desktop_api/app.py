@@ -16,6 +16,7 @@ from apps.cli.desktop import DESKTOP_API_PID_PATH
 from config.settings import Settings
 from fullaccess.cache import avatar_base_path, find_cached_variant, media_preview_base_path
 from fullaccess.client import close_managed_fullaccess_clients
+from astra_runtime.new_telegram import close_managed_new_telegram_clients
 from storage.database import bootstrap_database, build_database_runtime
 
 from .bridge import DesktopBridge
@@ -113,6 +114,7 @@ def create_app(
             await _app.state.bridge.shutdown_runtime_layer()
             pid_path.unlink(missing_ok=True)
             await close_managed_fullaccess_clients()
+            await close_managed_new_telegram_clients()
             if owned_runtime:
                 await effective_runtime.dispose()
 
@@ -178,8 +180,9 @@ def create_app(
 
     @app.get("/api/media/avatars/{telegram_chat_id}")
     async def media_avatar(telegram_chat_id: int):
-        cached = find_cached_variant(
-            avatar_base_path(effective_settings.fullaccess_session_file, telegram_chat_id)
+        cached = _find_cached_avatar(
+            effective_settings,
+            telegram_chat_id=telegram_chat_id,
         )
         if cached is None:
             raise HTTPException(status_code=404, detail="Аватар пока не кеширован.")
@@ -217,10 +220,13 @@ def create_app(
         filter_key: str = Query(default="all", alias="filter"),
         sort_key: str = Query(default="activity", alias="sort"),
     ) -> dict[str, Any]:
-        return await _bridge(app).list_chats(
-            search=search,
-            filter_key=filter_key,
-            sort_key=sort_key,
+        return await _call_with_value_error(
+            app,
+            lambda: _bridge(app).list_chats(
+                search=search,
+                filter_key=filter_key,
+                sort_key=sort_key,
+            ),
         )
 
     @app.get("/api/chats/{chat_id}/messages")
@@ -455,6 +461,17 @@ def _desktop_api_pid_path() -> Path:
     if raw_path:
         return Path(raw_path).expanduser()
     return DESKTOP_API_PID_PATH
+
+
+def _find_cached_avatar(settings: Settings, *, telegram_chat_id: int) -> Path | None:
+    for session_file in (
+        settings.fullaccess_session_file,
+        settings.runtime_new_session_file,
+    ):
+        cached = find_cached_variant(avatar_base_path(session_file, telegram_chat_id))
+        if cached is not None:
+            return cached
+    return None
 
 
 async def _call_with_lookup(app: FastAPI, fn):

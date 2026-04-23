@@ -36,7 +36,7 @@ def test_runtime_manager_keeps_legacy_effective_when_new_runtime_is_not_route_re
         assert route["effective"] == "legacy"
         assert route["targetAvailable"] is True
         assert route["targetReady"] is False
-        assert route["reason"] == "New runtime is registered but not route-ready; legacy remains effective."
+        assert route["reason"] == "Нужно задать RUNTIME_NEW_API_ID и RUNTIME_NEW_API_HASH."
         assert status["newRuntime"]["active"] is True
         assert status["newRuntime"]["ready"] is False
 
@@ -63,6 +63,26 @@ def test_runtime_manager_can_route_to_registered_route_ready_target() -> None:
         assert manager.active_backend_for_surface("chatRoster") == "new"
         assert route["effective"] == "new"
         assert route["targetReady"] is True
+
+    asyncio.run(run_assertions())
+
+
+def test_runtime_manager_keeps_unimplemented_surfaces_on_legacy_even_when_chat_roster_is_ready() -> None:
+    async def run_assertions() -> None:
+        manager = RuntimeManager(
+            RuntimeSwitches(
+                chat_roster="new",
+                send_path="new",
+            )
+        )
+        manager.register_backend(LegacyRuntimeBackend(_FakeRuntime("legacy")))
+        manager.register_backend(_SurfaceAwareBackend())
+
+        assert manager.active_backend_for_surface("chatRoster") == "new"
+        assert manager.active_backend_for_surface("sendPath") == "legacy"
+        assert manager.describe_routes()["routes"]["sendPath"]["reason"] == (
+            "New runtime пока не реализует этот surface; legacy remains effective."
+        )
 
     asyncio.run(run_assertions())
 
@@ -108,3 +128,41 @@ class _FakeRuntime:
 
     async def list_chats(self, **_kwargs):
         return {"runtime": self.name}
+
+
+class _SurfaceAwareBackend:
+    backend = "new"
+    runtime = _FakeRuntime("new")
+    route_available = True
+
+    async def start(self):
+        return await self.status()
+
+    async def stop(self):
+        return await self.status()
+
+    async def health(self):
+        return await self.status()
+
+    async def status(self):
+        from astra_runtime.status import RuntimeBackendStatus
+
+        return RuntimeBackendStatus(
+            backend="new",
+            name="surface-aware-runtime",
+            registered=True,
+            lifecycle="running",
+            active=True,
+            healthy=True,
+            ready=True,
+            route_available=True,
+            capabilities=("chat-roster",),
+        )
+
+    def route_available_for(self, surface: str) -> bool:
+        return surface == "chatRoster"
+
+    def route_reason_for(self, surface: str) -> str | None:
+        if surface == "chatRoster":
+            return None
+        return "New runtime пока не реализует этот surface; legacy remains effective."

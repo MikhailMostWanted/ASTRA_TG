@@ -42,6 +42,7 @@ export function ChatsScreen() {
   const [sort, setSort] = useState("activity");
   const deferredSearch = useDeferredValue(search);
   const lastWorkspaceSyncAtRef = useRef<string | null>(null);
+  const lastSelectedChatKeyRef = useRef<string | null>(null);
 
   const chatsQuery = useQuery({
     queryKey: ["chats", deferredSearch, filter, sort],
@@ -60,6 +61,14 @@ export function ChatsScreen() {
     refetchInterval: 15_000,
   });
   const chatItems = safeArray(chatsQuery.data?.items);
+  const rosterState = chatsQuery.data?.roster ?? null;
+
+  useEffect(() => {
+    const currentlySelected = chatItems.find((item) => item.id === selectedChatId) || null;
+    if (currentlySelected?.chatKey) {
+      lastSelectedChatKeyRef.current = currentlySelected.chatKey;
+    }
+  }, [chatItems, selectedChatId]);
 
   useEffect(() => {
     if (chatItems.length === 0) {
@@ -71,7 +80,10 @@ export function ChatsScreen() {
 
     const stillExists = chatItems.some((item) => item.id === selectedChatId);
     if (!stillExists) {
-      startTransition(() => setSelectedChatId(chatItems[0]?.id ?? null));
+      const sameChatByKey = lastSelectedChatKeyRef.current
+        ? chatItems.find((item) => item.chatKey === lastSelectedChatKeyRef.current)
+        : null;
+      startTransition(() => setSelectedChatId(sameChatByKey?.id ?? chatItems[0]?.id ?? null));
     }
   }, [chatItems, selectedChatId, setSelectedChatId]);
 
@@ -80,14 +92,15 @@ export function ChatsScreen() {
   }, [selectedChatId]);
 
   const selectedChat = chatItems.find((item) => item.id === selectedChatId) || null;
+  const selectedLocalChatId = selectedChat?.localChatId ?? null;
   const selectedChatWorkspace = selectedChatId !== null ? chatWorkspace[selectedChatId] || null : null;
   const fullaccessReady = Boolean(fullaccessQuery.data?.status.readyForManualSync);
   const fullaccessWriteReady = Boolean(fullaccessQuery.data?.status.readyForManualSend);
 
   const workspaceQuery = useQuery({
-    queryKey: ["chat-workspace", selectedChatId],
-    queryFn: () => api.chatWorkspace(selectedChatId as number, 60),
-    enabled: selectedChatId !== null,
+    queryKey: ["chat-workspace", selectedLocalChatId],
+    queryFn: () => api.chatWorkspace(selectedLocalChatId as number, 60),
+    enabled: selectedLocalChatId !== null,
     refetchInterval:
       selectedChat?.syncStatus === "fullaccess"
         ? FULLACCESS_WORKSPACE_POLL_MS
@@ -125,23 +138,24 @@ export function ChatsScreen() {
   });
   const sendMessageMutation = useMutation({
     mutationFn: ({
-      chatId,
+      localChatId,
       text,
       sourceMessageId,
     }: {
-      chatId: number;
+      localChatId: number;
+      rosterChatId: number;
       text: string;
       sourceMessageId: number | null;
     }) =>
-      api.sendChatMessage(chatId, {
+      api.sendChatMessage(localChatId, {
         text,
         source_message_id: sourceMessageId,
         reply_to_source_message_id: sourceMessageId,
       }),
     onSuccess: async (payload, variables) => {
-      queryClient.setQueryData(["chat-workspace", variables.chatId], payload.workspace);
-      markReplySent(variables.chatId, variables.sourceMessageId);
-      clearReplyDraft(variables.chatId);
+      queryClient.setQueryData(["chat-workspace", variables.localChatId], payload.workspace);
+      markReplySent(variables.rosterChatId, variables.sourceMessageId);
+      clearReplyDraft(variables.rosterChatId);
       toast.success("Сообщение отправлено через Desktop.");
       await Promise.all([
         queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
@@ -156,7 +170,7 @@ export function ChatsScreen() {
     mutationFn: (enabled: boolean) => api.updateAutopilotGlobal({ master_enabled: enabled }),
     onSuccess: async () => {
       toast.success("Глобальный режим автопилота обновлён.");
-      await queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedChatId], exact: true });
+      await queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedLocalChatId], exact: true });
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Не удалось обновить master switch.");
@@ -164,16 +178,16 @@ export function ChatsScreen() {
   });
   const autopilotChatMutation = useMutation({
     mutationFn: ({
-      chatId,
+      localChatId,
       payload,
     }: {
-      chatId: number;
+      localChatId: number;
       payload: { trusted?: boolean; mode?: string };
-    }) => api.updateChatAutopilot(chatId, payload),
+    }) => api.updateChatAutopilot(localChatId, payload),
     onSuccess: async (_payload, variables) => {
       toast.success("Настройки автопилота для чата обновлены.");
       await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatId], exact: true }),
+        queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.localChatId], exact: true }),
         queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
       ]);
     },
@@ -207,16 +221,16 @@ export function ChatsScreen() {
   }, [freshness?.lastSyncAt, queryClient, selectedChat]);
 
   const refreshWorkspace = async () => {
-    if (selectedChat) {
-      if (selectedChat.syncStatus === "fullaccess" && fullaccessReady) {
-        try {
-          await syncChatMutation.mutateAsync({
-            chatId: selectedChat.id,
-            chatTitle: selectedChat.title,
-            trigger: "manual",
-          });
-        } catch {
-          return;
+      if (selectedChat) {
+        if (selectedChat.syncStatus === "fullaccess" && fullaccessReady) {
+          try {
+            await syncChatMutation.mutateAsync({
+              chatId: selectedChat.localChatId ?? selectedChat.id,
+              chatTitle: selectedChat.title,
+              trigger: "manual",
+            });
+          } catch {
+            return;
         }
         return;
       }
@@ -224,7 +238,7 @@ export function ChatsScreen() {
 
     await Promise.all([
       queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
-      queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedChatId], exact: true }),
+      queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedLocalChatId], exact: true }),
     ]);
     toast.success("Контекст обновлён.");
   };
@@ -238,7 +252,11 @@ export function ChatsScreen() {
           : freshness?.updatedNow
             ? "Активный чат только что обновлён"
             : freshness?.label || null
-      : null;
+      : rosterState?.source === "new"
+        ? "Roster идёт из new runtime"
+        : rosterState?.source === "fallback_to_legacy"
+          ? "New runtime roster деградировал, поэтому сейчас используется legacy"
+          : null;
 
   const handleCopy = async (value: string) => {
     if (!value) {
@@ -276,6 +294,7 @@ export function ChatsScreen() {
         refreshing={chatsQuery.isFetching || syncChatMutation.isPending}
         refreshedAt={chatsQuery.data?.refreshedAt || null}
         syncIndicator={syncIndicator}
+        roster={rosterState}
         onSearchChange={setSearch}
         onFilterChange={setFilter}
         onSortChange={setSort}
@@ -307,7 +326,7 @@ export function ChatsScreen() {
             return;
           }
           syncChatMutation.mutate({
-            chatId: selectedChat.id,
+            chatId: selectedChat.localChatId ?? selectedChat.id,
             chatTitle: selectedChat.title,
             trigger: "manual",
           });
@@ -352,12 +371,17 @@ export function ChatsScreen() {
           if (selectedChatId === null) {
             return;
           }
+          if (selectedLocalChatId === null) {
+            toast.error("Для этого чата пока доступен только new runtime roster. Сначала подтяни legacy workspace через sync.");
+            return;
+          }
           if (!fullaccessWriteReady) {
             toast.error("Режим записи выключен. Включи FULLACCESS_READONLY=false и авторизуй full-access.");
             return;
           }
           sendMessageMutation.mutate({
-            chatId: selectedChatId,
+            localChatId: selectedLocalChatId,
+            rosterChatId: selectedChatId,
             text,
             sourceMessageId,
           });
@@ -381,10 +405,10 @@ export function ChatsScreen() {
           autopilotGlobalMutation.mutate(enabled);
         }}
         onUpdateChatAutopilot={(payload) => {
-          if (selectedChatId === null) {
+          if (selectedLocalChatId === null) {
             return;
           }
-          autopilotChatMutation.mutate({ chatId: selectedChatId, payload });
+          autopilotChatMutation.mutate({ localChatId: selectedLocalChatId, payload });
         }}
       />
     </div>

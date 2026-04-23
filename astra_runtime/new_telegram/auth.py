@@ -50,6 +50,7 @@ NewTelegramAuthClientFactory = Callable[
     [NewTelegramRuntimeConfig],
     NewTelegramAuthClientProtocol,
 ]
+RuntimeTransportAvailabilityCheck = Callable[[], bool]
 
 
 class NewTelegramAuthActionError(ValueError):
@@ -109,10 +110,16 @@ class NewTelegramAuthController:
     config: NewTelegramRuntimeConfig
     store: NewTelegramAuthSessionStore
     client_factory: NewTelegramAuthClientFactory = build_new_telegram_auth_client
+    transport_available_check: RuntimeTransportAvailabilityCheck | None = None
     _lock: asyncio.Lock = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._lock = asyncio.Lock()
+        if self.transport_available_check is None:
+            if self.client_factory is build_new_telegram_auth_client:
+                self.transport_available_check = telethon_is_available
+            else:
+                self.transport_available_check = lambda: True
 
     async def status(self, *, force_refresh: bool = False) -> RuntimeAuthSessionState:
         async with self._lock:
@@ -320,7 +327,11 @@ class NewTelegramAuthController:
             await self.store.save(started)
 
             warning: str | None = None
-            if self.config.api_credentials_configured and telethon_is_available() and self.config.session_path.exists():
+            if (
+                self.config.api_credentials_configured
+                and self._transport_available()
+                and self.config.session_path.exists()
+            ):
                 try:
                     await self.client_factory(self.config).logout()
                 except NewTelegramAuthClientError as error:
@@ -394,7 +405,7 @@ class NewTelegramAuthController:
                 updated_at=current.updated_at or _now_utc(),
             )
 
-        if not telethon_is_available():
+        if not self._transport_available():
             return _set_state(
                 current,
                 state="idle",
@@ -524,7 +535,7 @@ class NewTelegramAuthController:
                 "Сначала задай RUNTIME_NEW_API_ID и RUNTIME_NEW_API_HASH.",
                 status=current,
             )
-        if not telethon_is_available():
+        if not self._transport_available():
             raise NewTelegramAuthActionError(
                 "telethon_unavailable",
                 "Telethon не установлен. Установи optional dependency: pip install -e '.[fullaccess]'.",
@@ -547,6 +558,12 @@ class NewTelegramAuthController:
                 status=current,
             )
         return phone
+
+    def _transport_available(self) -> bool:
+        check = self.transport_available_check
+        if check is None:
+            return True
+        return bool(check())
 
     def _handle_submit_code_error(
         self,

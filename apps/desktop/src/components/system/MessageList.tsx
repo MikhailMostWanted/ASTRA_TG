@@ -48,6 +48,7 @@ export function MessageList({
 }: MessageListProps) {
   const endRef = useRef<HTMLDivElement | null>(null);
   const safeMessages = safeArray(messages);
+  const displayActivityAt = chat?.rosterLastActivityAt || chat?.lastMessageAt || null;
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
@@ -103,6 +104,14 @@ export function MessageList({
               <Badge variant="outline" className="border-0 bg-cyan-400/10 text-cyan-100 ring-1 ring-cyan-300/10">
                 {chat.syncStatus}
               </Badge>
+              <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
+                {chat.rosterSource === "new" ? "new runtime" : "legacy roster"}
+              </Badge>
+              {chat.unreadCount > 0 ? (
+                <Badge variant="outline" className="border-0 bg-cyan-400/12 text-cyan-100 ring-1 ring-cyan-300/15">
+                  {chat.unreadCount} непрочит.
+                </Badge>
+              ) : null}
               {chat.lastDirection === "inbound" ? (
                 <Badge variant="outline" className="border-0 bg-rose-400/12 text-rose-100 ring-1 ring-rose-300/15">
                   Нужен ответ
@@ -111,9 +120,9 @@ export function MessageList({
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-slate-400">
-              <span>Последнее сообщение {formatRelativeTime(chat.lastMessageAt)}</span>
+              <span>Последняя активность {formatRelativeTime(displayActivityAt)}</span>
               <span>UI обновлён {lastUpdatedAt ? formatDateTime(lastUpdatedAt) : "только открылся"}</span>
-              <span>{formatDateTime(chat.lastMessageAt)} • {chat.messageCount} сообщений</span>
+              <span>{formatDateTime(displayActivityAt)} • {chat.messageCount} сообщений</span>
               {freshness ? <span>{freshness.label}</span> : null}
               {freshness?.syncTrigger ? <span>{freshness.syncTrigger === "auto" ? "auto-sync" : "manual sync"}</span> : null}
               {freshness?.updatedNow ? <span>хвост дочитан сейчас</span> : null}
@@ -148,7 +157,14 @@ export function MessageList({
         <div className="flex flex-col gap-4 px-4 py-4">
           {loading && safeMessages.length === 0 ? <MessageListSkeleton /> : null}
 
-          {!loading && safeMessages.length === 0 ? (
+          {!loading && safeMessages.length === 0 && !chat.workspaceAvailable ? (
+            <EmptyState
+              title="История пока остаётся на legacy"
+              description="Чат уже виден через new runtime roster, но локальный workspace для него ещё не подтянут. Нажми sync справа, если нужен legacy-хвост."
+            />
+          ) : null}
+
+          {!loading && safeMessages.length === 0 && chat.workspaceAvailable ? (
             <EmptyState
               title="Сообщений пока нет"
               description="Когда в выбранный чат придут данные, здесь появится рабочая лента сообщений."

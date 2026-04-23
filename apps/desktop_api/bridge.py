@@ -4,10 +4,12 @@ import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncIterator, cast
 
 from aiogram import Bot
 
+from astra_runtime.chat_identity import parse_runtime_only_chat_id
 from astra_runtime.contracts import TelegramRuntime
 from astra_runtime.legacy import LegacyAstraRuntime
 from astra_runtime.manager import LegacyRuntimeBackend, RuntimeManager, StaticRuntimeBackend
@@ -110,6 +112,13 @@ class ChatTailRefreshStatus:
     trigger: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedChatHandle:
+    requested_chat_id: int
+    local_chat_id: int | None
+    runtime_chat_id: int | None
+
+
 @dataclass(slots=True)
 class DesktopBridge:
     """Desktop control shell with explicit routing to legacy or target runtime.
@@ -162,6 +171,7 @@ class DesktopBridge:
     async def get_runtime_status(self) -> dict[str, Any]:
         status = await self._runtime_manager.status()
         status["managedProcess"] = serialize_process_state(inspect_process("new-runtime"))
+        status["chatRoster"] = await self._get_chat_roster_state()
         return status
 
     async def get_new_runtime_health(self) -> dict[str, Any]:
@@ -282,11 +292,51 @@ class DesktopBridge:
         filter_key: str = "all",
         sort_key: str = "activity",
     ) -> dict[str, Any]:
-        return await self._runtime_manager.surface("chatRoster").list_chats(
-            search=search,
-            filter_key=filter_key,
-            sort_key=sort_key,
+        route = self._runtime_manager.route_status("chatRoster")
+        effective_backend = route.effective
+        payload: dict[str, Any]
+        roster_error: str | None = None
+
+        try:
+            payload = await self._runtime_manager.surface("chatRoster").list_chats(
+                search=search,
+                filter_key=filter_key,
+                sort_key=sort_key,
+            )
+        except Exception as error:
+            if route.requested == "new" and route.effective == "new":
+                roster_error = str(error)
+                effective_backend = "legacy"
+                payload = await self._legacy_list_chats(
+                    search=search,
+                    filter_key=filter_key,
+                    sort_key=sort_key,
+                )
+            else:
+                raise
+
+        source = _resolve_chat_roster_source(
+            requested=route.requested,
+            effective=effective_backend,
         )
+        runtime_meta = payload.get("runtimeMeta") if isinstance(payload.get("runtimeMeta"), dict) else {}
+        payload.pop("runtimeMeta", None)
+        route_payload = route.to_payload()
+        if effective_backend != route.effective:
+            route_payload["effective"] = effective_backend
+            route_payload["reason"] = roster_error or route_payload.get("reason")
+        roster_state = self._build_chat_roster_state(
+            route=route_payload,
+            source=source,
+            effective_backend=effective_backend,
+            refreshed_at=payload.get("refreshedAt"),
+            runtime_meta=runtime_meta,
+            last_error=roster_error,
+        )
+        payload["source"] = source
+        payload["roster"] = roster_state
+        await self._record_chat_roster_state(roster_state)
+        return payload
 
     async def _legacy_list_chats(
         self,
@@ -325,6 +375,7 @@ class DesktopBridge:
                         memory=memory_map.get(chat.id),
                         is_digest_target=digest_target.chat_id == chat.telegram_chat_id,
                         session_file=self.settings.fullaccess_session_file,
+                        asset_session_files=self._asset_session_files(),
                     )
                 )
 
@@ -378,16 +429,23 @@ class DesktopBridge:
         # LEGACY_RUNTIME: workspace refresh still uses fullaccess tail sync.
         # Future message workspace implementations should live behind MessageHistory.
         async with self.runtime.session_factory() as session:
-            chat_repository = ChatRepository(session)
-            chat = await chat_repository.get_by_id(chat_id)
-            if chat is None:
-                raise LookupError("Чат не найден.")
+            chat = await self._require_local_chat(
+                session,
+                chat_id,
+                runtime_only_message=(
+                    "История этого чата пока живёт только в runtime roster. "
+                    "Сначала подтяни его через sync."
+                ),
+            )
+            local_chat_id = chat.id
 
             tail_refresh = await self._maybe_refresh_chat_tail(session, chat=chat)
             if tail_refresh.error:
-                chat = await chat_repository.get_by_id(chat_id)
-                if chat is None:
-                    raise LookupError("Чат не найден.")
+                chat = await self._require_local_chat(
+                    session,
+                    local_chat_id,
+                    runtime_only_message="Чат пропал из локального storage после refresh.",
+                )
             return await self._build_workspace_payload(
                 session,
                 chat=chat,
@@ -404,11 +462,15 @@ class DesktopBridge:
     async def _legacy_get_chat_messages(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
         # LEGACY_RUNTIME: direct local message-store read.
         async with self.runtime.session_factory() as session:
-            chat_repository = ChatRepository(session)
             message_repository = MessageRepository(session)
-            chat = await chat_repository.get_by_id(chat_id)
-            if chat is None:
-                raise LookupError("Чат не найден.")
+            chat = await self._require_local_chat(
+                session,
+                chat_id,
+                runtime_only_message=(
+                    "Локальная message history для этого чата ещё не собрана. "
+                    "Сначала подтяни чат через sync."
+                ),
+            )
 
             recent_desc = await message_repository.get_recent_messages(chat_id=chat.id, limit=max(1, limit))
             messages = list(reversed(recent_desc))
@@ -418,6 +480,7 @@ class DesktopBridge:
                     message_count=await message_repository.count_messages_for_chat(chat_id=chat.id),
                     last_message=recent_desc[0] if recent_desc else None,
                     session_file=self.settings.fullaccess_session_file,
+                    asset_session_files=self._asset_session_files(),
                 ),
                 "messages": [
                     serialize_message(
@@ -611,6 +674,7 @@ class DesktopBridge:
                     message_count=await message_repository.count_messages_for_chat(chat_id=updated_chat.id),
                     last_message=await _load_last_message(message_repository, updated_chat.id),
                     session_file=self.settings.fullaccess_session_file,
+                    asset_session_files=self._asset_session_files(),
                 ),
                 "autopilot": overview,
             }
@@ -653,6 +717,7 @@ class DesktopBridge:
                     message_count=await MessageRepository(session).count_messages_for_chat(chat_id=result.chat.id),
                     last_message=await _load_last_message(MessageRepository(session), result.chat.id),
                     session_file=self.settings.fullaccess_session_file,
+                    asset_session_files=self._asset_session_files(),
                 ),
             }
 
@@ -679,17 +744,24 @@ class DesktopBridge:
                     message_count=await MessageRepository(session).count_messages_for_chat(chat_id=chat_id),
                     last_message=await _load_last_message(MessageRepository(session), chat_id),
                     session_file=self.settings.fullaccess_session_file,
+                    asset_session_files=self._asset_session_files(),
                 ),
             }
 
     async def sync_source(self, chat_id: int) -> dict[str, Any]:
         async with self.runtime.session_factory() as session:
-            chat_repository = ChatRepository(session)
-            chat = await chat_repository.get_by_id(chat_id)
-            if chat is None:
+            resolved = await self._resolve_chat_handle(session, chat_id)
+            if resolved.local_chat_id is not None:
+                chat = await ChatRepository(session).get_by_id(resolved.local_chat_id)
+                if chat is None:
+                    raise LookupError("Источник не найден.")
+                reference = build_chat_reference(chat)
+            elif resolved.runtime_chat_id is not None:
+                reference = str(resolved.runtime_chat_id)
+            else:
                 raise LookupError("Источник не найден.")
 
-            result = await self._build_fullaccess_sync_service(session).sync_chat(build_chat_reference(chat))
+            result = await self._build_fullaccess_sync_service(session).sync_chat(reference)
             await session.commit()
             return serialize_fullaccess_sync_result(
                 result,
@@ -1305,6 +1377,7 @@ class DesktopBridge:
                 message_count=message_count,
                 last_message=last_message,
                 session_file=self.settings.fullaccess_session_file,
+                asset_session_files=self._asset_session_files(),
             ),
             "messages": [
                 serialize_message(
@@ -1706,6 +1779,105 @@ class DesktopBridge:
             items.append("Full-access готов к ручной синхронизации нужных чатов.")
         return items[:4]
 
+    async def _record_chat_roster_state(self, roster_state: dict[str, Any]) -> None:
+        async with self.runtime.session_factory() as session:
+            await OperationalStateService(SettingRepository(session)).record_chat_roster_status(
+                payload=roster_state,
+            )
+            await session.commit()
+
+    async def _get_chat_roster_state(self) -> dict[str, Any] | None:
+        async with self.runtime.session_factory() as session:
+            event = await OperationalStateService(SettingRepository(session)).get_chat_roster_status()
+        if event is None:
+            return None
+        payload = event.payload.get("payload")
+        return payload if isinstance(payload, dict) else None
+
+    def _build_chat_roster_state(
+        self,
+        *,
+        route: dict[str, Any],
+        source: str,
+        effective_backend: str,
+        refreshed_at: Any,
+        runtime_meta: dict[str, Any],
+        last_error: str | None,
+    ) -> dict[str, Any]:
+        route_reason = route.get("reason") if isinstance(route.get("reason"), str) else None
+        degraded_reason = (
+            last_error
+            or route_reason
+            or (
+                runtime_meta.get("routeReason")
+                if isinstance(runtime_meta.get("routeReason"), str)
+                else None
+            )
+        )
+        return {
+            "source": source,
+            "requestedBackend": route.get("requested"),
+            "effectiveBackend": effective_backend,
+            "degraded": source == "fallback_to_legacy" or bool(degraded_reason),
+            "degradedReason": degraded_reason,
+            "lastUpdatedAt": refreshed_at if isinstance(refreshed_at, str) or refreshed_at is None else serialize_datetime(refreshed_at),
+            "lastSuccessAt": runtime_meta.get("lastSuccessAt"),
+            "lastError": last_error or runtime_meta.get("lastError"),
+            "lastErrorAt": runtime_meta.get("lastErrorAt"),
+            "route": route,
+        }
+
+    async def _resolve_chat_handle(
+        self,
+        session,
+        chat_id: int,
+    ) -> ResolvedChatHandle:
+        if chat_id > 0:
+            return ResolvedChatHandle(
+                requested_chat_id=chat_id,
+                local_chat_id=chat_id,
+                runtime_chat_id=None,
+            )
+
+        runtime_chat_id = parse_runtime_only_chat_id(chat_id)
+        if runtime_chat_id is None:
+            return ResolvedChatHandle(
+                requested_chat_id=chat_id,
+                local_chat_id=None,
+                runtime_chat_id=None,
+            )
+
+        local_chat = await ChatRepository(session).get_by_telegram_chat_id(runtime_chat_id)
+        return ResolvedChatHandle(
+            requested_chat_id=chat_id,
+            local_chat_id=local_chat.id if local_chat is not None else None,
+            runtime_chat_id=runtime_chat_id,
+        )
+
+    async def _require_local_chat(
+        self,
+        session,
+        chat_id: int,
+        *,
+        runtime_only_message: str,
+    ):
+        resolved = await self._resolve_chat_handle(session, chat_id)
+        if resolved.local_chat_id is None:
+            if resolved.runtime_chat_id is not None:
+                raise LookupError(runtime_only_message)
+            raise LookupError("Чат не найден.")
+
+        chat = await ChatRepository(session).get_by_id(resolved.local_chat_id)
+        if chat is None:
+            raise LookupError("Чат не найден.")
+        return chat
+
+    def _asset_session_files(self) -> tuple[Path, ...]:
+        return (
+            self.settings.fullaccess_session_file,
+            self.settings.runtime_new_session_file,
+        )
+
     def _require_new_runtime_service(self) -> NewTelegramRuntimeService:
         if self._new_runtime_service is None:
             raise ValueError("Управление auth доступно только для встроенного managed new runtime.")
@@ -1728,6 +1900,14 @@ def _event_item(timestamp_value, title: str, detail: str | None) -> dict[str, An
         "title": title,
         "detail": detail,
     }
+
+
+def _resolve_chat_roster_source(*, requested: str, effective: str) -> str:
+    if requested == "new" and effective == "legacy":
+        return "fallback_to_legacy"
+    if effective == "new":
+        return "new"
+    return "legacy"
 
 
 def _resolve_targets(component: str | None, *, reverse: bool = False) -> list[str]:

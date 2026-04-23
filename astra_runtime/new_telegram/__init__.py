@@ -18,8 +18,12 @@ from astra_runtime.new_telegram.runtime import NewTelegramRuntimeService
 from astra_runtime.new_telegram.transport import (
     NewTelegramAccount,
     NewTelegramAuthClientError,
+    NewTelegramDialogMessage,
+    NewTelegramDialogSummary,
     NewTelegramPasswordRequiredError,
     build_new_telegram_auth_client,
+    build_new_telegram_roster_client,
+    close_managed_new_telegram_clients,
     delete_session_file,
     telethon_is_available,
 )
@@ -35,8 +39,12 @@ __all__ = [
     "NewTelegramAuthSessionStore",
     "NewTelegramRuntimeConfig",
     "NewTelegramRuntimeService",
+    "NewTelegramDialogMessage",
+    "NewTelegramDialogSummary",
     "NewTelegramPasswordRequiredError",
     "build_new_telegram_auth_client",
+    "build_new_telegram_roster_client",
+    "close_managed_new_telegram_clients",
     "delete_session_file",
     "telethon_is_available",
 ]

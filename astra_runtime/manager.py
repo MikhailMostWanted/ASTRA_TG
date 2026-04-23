@@ -41,6 +41,10 @@ class RuntimeBackendHandle(Protocol):
 
     async def status(self) -> RuntimeBackendStatus: ...
 
+    def route_available_for(self, surface: RuntimeSurfaceName) -> bool: ...
+
+    def route_reason_for(self, surface: RuntimeSurfaceName) -> str | None: ...
+
 
 @dataclass(slots=True)
 class LegacyRuntimeBackend:
@@ -77,6 +81,12 @@ class LegacyRuntimeBackend:
             ),
         )
 
+    def route_available_for(self, _surface: RuntimeSurfaceName) -> bool:
+        return self.route_available
+
+    def route_reason_for(self, _surface: RuntimeSurfaceName) -> str | None:
+        return None
+
 
 @dataclass(slots=True)
 class StaticRuntimeBackend:
@@ -106,6 +116,14 @@ class StaticRuntimeBackend:
             route_available=self.route_available,
             capabilities=("external-runtime",),
         )
+
+    def route_available_for(self, _surface: RuntimeSurfaceName) -> bool:
+        return self.route_available
+
+    def route_reason_for(self, _surface: RuntimeSurfaceName) -> str | None:
+        if self.route_available:
+            return None
+        return "External runtime backend is not route-ready."
 
 
 @dataclass(slots=True)
@@ -182,6 +200,9 @@ class RuntimeManager:
             },
         }
 
+    def route_status(self, surface: RuntimeSurfaceName) -> RuntimeRouteStatus:
+        return self._route_status(surface)
+
     def _route_status(self, surface: RuntimeSurfaceName) -> RuntimeRouteStatus:
         if surface not in SURFACE_TO_SWITCH:
             raise ValueError(f"Unknown runtime surface: {surface}")
@@ -192,7 +213,7 @@ class RuntimeManager:
         )
         target = self._registry.get("new")
         target_available = target is not None
-        target_ready = bool(target and target.route_available)
+        target_ready = bool(target and target.route_available_for(surface))
         effective: RuntimeBackend = "legacy"
         reason: str | None = None
 
@@ -202,7 +223,10 @@ class RuntimeManager:
             elif not target_available:
                 reason = "New runtime is not registered; legacy remains effective."
             else:
-                reason = "New runtime is registered but not route-ready; legacy remains effective."
+                reason = (
+                    target.route_reason_for(surface)
+                    or "New runtime is registered but not route-ready; legacy remains effective."
+                )
         elif "legacy" not in self._registry:
             reason = "Legacy runtime is not registered."
 

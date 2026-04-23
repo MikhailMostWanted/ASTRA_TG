@@ -121,6 +121,23 @@ class ChatRepository:
         )
         return result.scalar_one_or_none()
 
+    async def list_by_telegram_chat_ids(
+        self,
+        telegram_chat_ids: Sequence[int],
+    ) -> dict[int, Chat]:
+        normalized_chat_ids = [int(chat_id) for chat_id in telegram_chat_ids]
+        if not normalized_chat_ids:
+            return {}
+
+        result = await self.session.execute(
+            select(Chat).where(Chat.telegram_chat_id.in_(normalized_chat_ids))
+        )
+        chats = list(result.scalars().all())
+        return {
+            int(chat.telegram_chat_id): chat
+            for chat in chats
+        }
+
     async def list_chats(self) -> list[Chat]:
         result = await self.session.execute(
             select(Chat).order_by(
@@ -348,12 +365,23 @@ class MessageRepository:
         )
         return int(result.scalar_one())
 
-    async def count_messages_by_chat(self) -> dict[int, int]:
-        result = await self.session.execute(
+    async def count_messages_by_chat(
+        self,
+        *,
+        chat_ids: Sequence[int] | None = None,
+    ) -> dict[int, int]:
+        statement = (
             select(Message.chat_id, func.count(Message.id))
             .group_by(Message.chat_id)
             .order_by(Message.chat_id)
         )
+        normalized_chat_ids = [int(chat_id) for chat_id in chat_ids or []]
+        if chat_ids is not None:
+            if not normalized_chat_ids:
+                return {}
+            statement = statement.where(Message.chat_id.in_(normalized_chat_ids))
+
+        result = await self.session.execute(statement)
         return {
             int(chat_id): int(message_count)
             for chat_id, message_count in result.all()

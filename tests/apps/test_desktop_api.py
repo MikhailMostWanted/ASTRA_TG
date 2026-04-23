@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from astra_runtime.new_telegram import NewTelegramAuthActionResult
+from astra_runtime.switches import RuntimeSwitches
 from astra_runtime.status import RuntimeAuthSessionState
 from apps.desktop_api.app import create_app
 from apps.desktop_api.bridge import DesktopBridge
@@ -149,6 +150,69 @@ def test_desktop_api_memory_digest_reminders_sources_and_fullaccess(
             ops_payload = ops.json()
             assert "doctor" in ops_payload
             assert ops_payload["doctor"]["warnings"] is not None
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_desktop_api_chat_roster_reports_fallback_source_when_new_backend_is_requested(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        monkeypatch.setenv("RUNTIME_CHAT_ROSTER_BACKEND", "new")
+        settings, runtime, _ = await _seed_runtime(monkeypatch, tmp_path)
+        app = create_app(settings, runtime=runtime)
+
+        with TestClient(app) as client:
+            chats = client.get("/api/chats")
+            assert chats.status_code == 200
+            payload = chats.json()
+            assert payload["source"] == "fallback_to_legacy"
+            assert payload["roster"]["source"] == "fallback_to_legacy"
+            assert payload["roster"]["effectiveBackend"] == "legacy"
+            assert payload["roster"]["degraded"] is True
+            assert "RUNTIME_NEW_ENABLED" in payload["roster"]["degradedReason"]
+
+            runtime_payload = client.get("/api/runtime").json()
+            assert runtime_payload["chatRoster"]["source"] == "fallback_to_legacy"
+            assert runtime_payload["chatRoster"]["effectiveBackend"] == "legacy"
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_desktop_api_chat_roster_payload_exposes_new_runtime_source_and_identity(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, _ = await _seed_runtime(monkeypatch, tmp_path)
+        app = create_app(
+            settings,
+            runtime=runtime,
+            target_runtime=_FakeTargetRuntime(),
+            runtime_switches=RuntimeSwitches(chat_roster="new"),
+        )
+
+        with TestClient(app) as client:
+            chats = client.get("/api/chats")
+            assert chats.status_code == 200
+            payload = chats.json()
+            assert payload["source"] == "new"
+            assert payload["roster"]["source"] == "new"
+            assert payload["roster"]["effectiveBackend"] == "new"
+            assert payload["items"][0]["chatKey"] == "telegram:-100777"
+            assert payload["items"][0]["localChatId"] is None
+            assert payload["items"][0]["workspaceAvailable"] is False
+            assert payload["items"][0]["rosterSource"] == "new"
+            assert payload["items"][0]["unreadCount"] == 4
+
+            runtime_payload = client.get("/api/runtime").json()
+            assert runtime_payload["chatRoster"]["source"] == "new"
+            assert runtime_payload["chatRoster"]["effectiveBackend"] == "new"
 
         await runtime.dispose()
 
@@ -528,6 +592,95 @@ def test_desktop_api_new_runtime_auth_flow_endpoints(
         await runtime.dispose()
 
     asyncio.run(run_assertions())
+
+
+class _FakeTargetRuntime:
+    @property
+    def chat_roster(self):
+        return self
+
+    @property
+    def message_history(self):
+        return self
+
+    @property
+    def reply_workspace(self):
+        return self
+
+    @property
+    def message_sender(self):
+        return self
+
+    @property
+    def autopilot(self):
+        return self
+
+    async def list_chats(self, **_kwargs):
+        return {
+            "items": [
+                {
+                    "id": -200001,
+                    "localChatId": None,
+                    "runtimeChatId": -100777,
+                    "chatKey": "telegram:-100777",
+                    "workspaceAvailable": False,
+                    "identity": {
+                        "id": -200001,
+                        "localChatId": None,
+                        "runtimeChatId": -100777,
+                        "chatKey": "telegram:-100777",
+                        "workspaceAvailable": False,
+                    },
+                    "telegramChatId": -100777,
+                    "reference": "@runtime_chat",
+                    "title": "Runtime chat",
+                    "handle": "runtime_chat",
+                    "type": "group",
+                    "enabled": False,
+                    "category": "runtime_only",
+                    "summarySchedule": None,
+                    "replyAssistEnabled": False,
+                    "autoReplyMode": None,
+                    "excludeFromMemory": False,
+                    "excludeFromDigest": False,
+                    "isDigestTarget": False,
+                    "messageCount": 0,
+                    "lastMessageAt": None,
+                    "lastMessageId": None,
+                    "lastTelegramMessageId": None,
+                    "lastMessagePreview": "Сообщений пока нет",
+                    "lastDirection": None,
+                    "lastSourceAdapter": None,
+                    "lastSenderName": None,
+                    "avatarUrl": None,
+                    "syncStatus": "empty",
+                    "memory": None,
+                    "favorite": False,
+                    "rosterSource": "new",
+                    "rosterLastActivityAt": "2026-04-23T09:05:00+00:00",
+                    "rosterLastMessagePreview": "Новый runtime принёс этот roster.",
+                    "rosterLastDirection": "inbound",
+                    "rosterLastSenderName": "Анна",
+                    "rosterFreshness": {
+                        "mode": "fresh",
+                        "label": "свежее",
+                        "lastActivityAt": "2026-04-23T09:05:00+00:00",
+                    },
+                    "unreadCount": 4,
+                    "unreadMentionCount": 1,
+                    "pinned": True,
+                    "muted": False,
+                    "archived": False,
+                    "assetHints": {
+                        "avatarCached": False,
+                        "avatarSource": None,
+                    },
+                }
+            ],
+            "count": 1,
+            "filters": {"active": "all", "sort": "activity", "search": ""},
+            "refreshedAt": "2026-04-23T09:05:00+00:00",
+        }
 
 
 def test_desktop_api_fullaccess_auth_flow_endpoints(

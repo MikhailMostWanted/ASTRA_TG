@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCompactNumber, formatDateTime, formatRelativeTime, initials } from "@/lib/format";
 import { safeArray, safeRecord } from "@/lib/runtime-guards";
-import type { ChatItem } from "@/lib/types";
+import type { ChatItem, ChatRosterStatePayload } from "@/lib/types";
 import type { ChatWorkspaceState } from "@/stores/app-store";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +35,7 @@ interface ChatListProps {
   refreshing?: boolean;
   refreshedAt?: string | null;
   syncIndicator?: string | null;
+  roster?: ChatRosterStatePayload | null;
   onSearchChange: (value: string) => void;
   onFilterChange: (value: string) => void;
   onSortChange: (value: string) => void;
@@ -61,6 +62,7 @@ export function ChatList({
   refreshing = false,
   refreshedAt = null,
   syncIndicator = null,
+  roster = null,
   onSearchChange,
   onFilterChange,
   onSortChange,
@@ -73,6 +75,12 @@ export function ChatList({
     (item): item is number => typeof item === "number" && Number.isFinite(item),
   );
   const safeWorkspaceState = safeRecord<ChatWorkspaceState>(workspaceStateByChat);
+  const rosterSourceLabel =
+    roster?.source === "new"
+      ? "new runtime"
+      : roster?.source === "fallback_to_legacy"
+        ? "fallback на legacy"
+        : "legacy roster";
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/7 bg-white/[0.035]">
@@ -136,11 +144,32 @@ export function ChatList({
         </div>
 
         <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
-          <div>{formatCompactNumber(safeChats.length)} в выборке</div>
-          <div className="truncate">
-            {syncIndicator || (refreshedAt ? `Обновлено ${formatDateTime(refreshedAt)}` : "Ещё не обновлялось")}
+          <div className="flex min-w-0 items-center gap-2">
+            <span>{formatCompactNumber(safeChats.length)} в выборке</span>
+            <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
+              {rosterSourceLabel}
+            </Badge>
+            {roster?.degraded ? (
+              <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
+                fallback
+              </Badge>
+            ) : null}
+          </div>
+          <div className="truncate text-right">
+            {syncIndicator
+              || (roster?.lastUpdatedAt
+                ? `Обновлено ${formatDateTime(roster.lastUpdatedAt)}`
+                : refreshedAt
+                  ? `Обновлено ${formatDateTime(refreshedAt)}`
+                  : "Ещё не обновлялось")}
           </div>
         </div>
+
+        {roster?.degradedReason ? (
+          <div className="mt-3 rounded-2xl border border-amber-300/10 bg-amber-300/6 px-3 py-2 text-xs leading-5 text-amber-100/85">
+            {roster.degradedReason}
+          </div>
+        ) : null}
       </div>
 
       <ScrollArea className="min-h-0 flex-1">
@@ -176,6 +205,10 @@ export function ChatList({
               && chat.lastDirection === "inbound"
               && sentSourceMessageId !== chat.lastMessageId,
             );
+            const displayPreview = chat.rosterLastMessagePreview || chat.lastMessagePreview;
+            const displayActivityAt = chat.rosterLastActivityAt || chat.lastMessageAt;
+            const displaySender = chat.rosterLastSenderName || chat.lastSenderName;
+            const hasUnread = chat.unreadCount > 0;
 
             return (
               <div
@@ -230,6 +263,21 @@ export function ChatList({
                       <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
                         {syncLabelMap[chat.syncStatus] || chat.syncStatus}
                       </Badge>
+                      {chat.pinned ? (
+                        <Badge variant="outline" className="border-0 bg-cyan-400/10 text-cyan-100 ring-1 ring-cyan-300/12">
+                          Закреплён
+                        </Badge>
+                      ) : null}
+                      {chat.muted ? (
+                        <Badge variant="outline" className="border-0 bg-slate-400/10 text-slate-200 ring-1 ring-slate-300/10">
+                          Без звука
+                        </Badge>
+                      ) : null}
+                      {hasUnread ? (
+                        <Badge variant="outline" className="border-0 bg-cyan-400/12 text-cyan-100 ring-1 ring-cyan-300/15">
+                          {chat.unreadCount} непрочит.
+                        </Badge>
+                      ) : null}
                       {needsReply ? (
                         <Badge variant="outline" className="border-0 bg-rose-400/12 text-rose-100 ring-1 ring-rose-300/15">
                           Нужен ответ
@@ -248,17 +296,17 @@ export function ChatList({
                     </div>
 
                     <div className="mt-3 line-clamp-2 text-sm leading-6 text-slate-300">
-                      {chat.lastMessagePreview}
+                      {displayPreview}
                     </div>
 
                     <div className="mt-3 flex items-center justify-between gap-3">
                       <div className="truncate text-xs text-slate-500">
                         {formatCompactNumber(chat.messageCount)} сообщений
-                        {chat.lastSenderName ? ` • ${chat.lastSenderName}` : ""}
+                        {displaySender ? ` • ${displaySender}` : ""}
                       </div>
                       <div className="flex shrink-0 items-center gap-1 text-xs text-slate-500">
                         <Clock3 className="size-3" />
-                        {formatRelativeTime(chat.lastMessageAt)}
+                        {formatRelativeTime(displayActivityAt)}
                       </div>
                     </div>
 

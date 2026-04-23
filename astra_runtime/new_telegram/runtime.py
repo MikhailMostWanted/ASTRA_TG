@@ -8,15 +8,19 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from astra_runtime.new_telegram.auth import (
-    NewTelegramAuthActionResult,
     NewTelegramAuthActionError,
+    NewTelegramAuthActionResult,
     NewTelegramAuthController,
     NewTelegramAuthSessionStore,
 )
 from astra_runtime.new_telegram.config import NewTelegramRuntimeConfig
+from astra_runtime.new_telegram.roster import NewTelegramChatRoster
 from astra_runtime.new_telegram.transport import (
     NewTelegramAuthClientFactory,
+    NewTelegramRosterClientFactory,
     build_new_telegram_auth_client,
+    build_new_telegram_roster_client,
+    close_managed_new_telegram_clients,
 )
 from astra_runtime.status import (
     RuntimeAuthSessionState,
@@ -30,21 +34,18 @@ from storage.repositories import SettingRepository
 
 
 LOGGER = get_logger(__name__)
+CHAT_ROSTER_SURFACE = "chatRoster"
 
 
 @dataclass(slots=True)
 class NewTelegramRuntimeService:
-    """Lifecycle shell for the future Telegram runtime.
-
-    It is deliberately not a chat/message/send source yet. The service owns
-    runtime startup, shutdown, auth/session visibility and readiness reasons so
-    the rest of the product can observe it without switching product traffic.
-    """
+    """Managed new Telegram runtime with auth/session and chat roster routing."""
 
     config: NewTelegramRuntimeConfig
     auth_store: NewTelegramAuthSessionStore
     session_factory: async_sessionmaker[AsyncSession] | None = None
     client_factory: NewTelegramAuthClientFactory = build_new_telegram_auth_client
+    roster_client_factory: NewTelegramRosterClientFactory = build_new_telegram_roster_client
     _lifecycle: RuntimeLifecycle = "stopped"
     _started_at: datetime | None = None
     _stopped_at: datetime | None = None
@@ -52,12 +53,18 @@ class NewTelegramRuntimeService:
     _auth_session: RuntimeAuthSessionState | None = None
     _auth_controller: NewTelegramAuthController = field(init=False, repr=False)
     _surface: "_NewTelegramRuntimeSurface" = field(init=False, repr=False)
+    _chat_roster: NewTelegramChatRoster = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._auth_controller = NewTelegramAuthController(
             config=self.config,
             store=self.auth_store,
             client_factory=self.client_factory,
+        )
+        self._chat_roster = NewTelegramChatRoster(
+            config=self.config,
+            session_factory=self.session_factory,
+            client_factory=self.roster_client_factory,
         )
         self._surface = _NewTelegramRuntimeSurface(self)
 
@@ -71,10 +78,29 @@ class NewTelegramRuntimeService:
 
     @property
     def route_available(self) -> bool:
-        if not self.config.product_surfaces_enabled:
+        return self.route_available_for(CHAT_ROSTER_SURFACE)
+
+    def route_available_for(self, surface: str) -> bool:
+        if surface != CHAT_ROSTER_SURFACE:
             return False
-        status = self._build_status(self._auth_session)
-        return status.ready and status.healthy
+        if self._surface_prerequisites_reason(self._auth_session) is not None:
+            return False
+        return self._chat_roster.route_ready()
+
+    def route_reason_for(self, surface: str) -> str | None:
+        if surface != CHAT_ROSTER_SURFACE:
+            return (
+                "New Telegram runtime пока не реализует этот surface; "
+                "legacy remains effective."
+            )
+
+        prerequisite_reason = self._surface_prerequisites_reason(self._auth_session)
+        if prerequisite_reason is not None:
+            return prerequisite_reason
+        return self._chat_roster.route_reason()
+
+    def chat_roster_status_payload(self) -> dict[str, Any]:
+        return self._chat_roster.status_payload()
 
     async def bootstrap(self) -> RuntimeBackendStatus:
         return await self.start()
@@ -139,6 +165,7 @@ class NewTelegramRuntimeService:
             "New Telegram runtime lifecycle останавливается.",
         )
         self._stopped_at = datetime.now(timezone.utc)
+        await close_managed_new_telegram_clients()
         self._lifecycle = "stopped"
         status = self._build_status(self._auth_session)
         await self._record_status(status)
@@ -216,6 +243,7 @@ class NewTelegramRuntimeService:
                 self._auth_session = error.status
                 await self._record_status(self._build_status(self._auth_session))
             raise
+        await close_managed_new_telegram_clients()
         self._auth_session = result.status
         await self._record_status(self._build_status(self._auth_session))
         return result
@@ -228,6 +256,7 @@ class NewTelegramRuntimeService:
                 self._auth_session = error.status
                 await self._record_status(self._build_status(self._auth_session))
             raise
+        await close_managed_new_telegram_clients()
         self._auth_session = result.status
         await self._record_status(self._build_status(self._auth_session))
         return result
@@ -239,7 +268,7 @@ class NewTelegramRuntimeService:
         active = self.config.enabled and self._lifecycle == "running"
         healthy = self._lifecycle in {"running", "stopped"} and self._last_error is None
         auth_ready = bool(auth_session and auth_session.authorized)
-        surface_routing_ready = False
+        surface_routing_ready = self.route_available_for(CHAT_ROSTER_SURFACE)
         ready = active and healthy and auth_ready and surface_routing_ready
 
         unavailable_reason: str | None = None
@@ -250,16 +279,10 @@ class NewTelegramRuntimeService:
             unavailable_reason = "New Telegram runtime is disabled by RUNTIME_NEW_ENABLED."
         elif self._lifecycle != "running":
             unavailable_reason = "New Telegram runtime lifecycle is not running."
-        elif not auth_ready:
-            degraded_reason = (
-                auth_session.reason
-                if auth_session and auth_session.reason
-                else "New Telegram runtime is not authorized yet."
-            )
-        elif not surface_routing_ready:
-            degraded_reason = (
-                "Auth/session слой готов, но product surfaces пока намеренно остаются на legacy."
-            )
+        else:
+            route_reason = self.route_reason_for(CHAT_ROSTER_SURFACE)
+            if route_reason is not None:
+                degraded_reason = route_reason
 
         return RuntimeBackendStatus(
             backend="new",
@@ -269,7 +292,7 @@ class NewTelegramRuntimeService:
             active=active,
             healthy=healthy,
             ready=ready,
-            route_available=ready and self.config.product_surfaces_enabled,
+            route_available=surface_routing_ready,
             started_at=self._started_at,
             stopped_at=self._stopped_at,
             last_error=self._last_error,
@@ -286,8 +309,30 @@ class NewTelegramRuntimeService:
                 "auth-submit-password",
                 "auth-logout",
                 "auth-reset",
+                "chat-roster",
             ),
         )
+
+    def _surface_prerequisites_reason(
+        self,
+        auth_session: RuntimeAuthSessionState | None,
+    ) -> str | None:
+        if self._last_error:
+            return self._last_error
+        if not self.config.enabled:
+            return "New Telegram runtime is disabled by RUNTIME_NEW_ENABLED."
+        if self._lifecycle != "running":
+            return "New Telegram runtime lifecycle is not running."
+        if not auth_session or not auth_session.authorized:
+            if auth_session and auth_session.reason:
+                return auth_session.reason
+            return "New Telegram runtime is not authorized yet."
+        if not self.config.product_surfaces_enabled:
+            return (
+                "Auth/session слой готов, но product surfaces нового runtime выключены "
+                "через RUNTIME_NEW_PRODUCT_SURFACES_ENABLED."
+            )
+        return None
 
     async def _record_status(self, status: RuntimeBackendStatus) -> None:
         if self.session_factory is None:
@@ -334,33 +379,48 @@ class _NewTelegramRuntimeSurface:
     def autopilot(self) -> "_NewTelegramRuntimeSurface":
         return self
 
-    async def list_chats(self, **_kwargs) -> dict[str, Any]:
-        raise RuntimeUnavailableError(_surface_unavailable_message())
+    async def list_chats(self, **kwargs) -> dict[str, Any]:
+        self._ensure_surface_available(CHAT_ROSTER_SURFACE)
+        return await self.service._chat_roster.list_chats(**kwargs)
 
     async def get_chat_messages(self, *_args, **_kwargs) -> dict[str, Any]:
-        raise RuntimeUnavailableError(_surface_unavailable_message())
+        raise RuntimeUnavailableError(self._surface_unavailable_message("messageWorkspace"))
 
     async def get_chat_workspace(self, *_args, **_kwargs) -> dict[str, Any]:
-        raise RuntimeUnavailableError(_surface_unavailable_message())
+        raise RuntimeUnavailableError(self._surface_unavailable_message("messageWorkspace"))
 
     async def build_reply_result(self, *_args, **_kwargs):
-        raise RuntimeUnavailableError(_surface_unavailable_message())
+        raise RuntimeUnavailableError(self._surface_unavailable_message("replyGeneration"))
 
     async def get_reply_preview(self, *_args, **_kwargs) -> dict[str, Any]:
-        raise RuntimeUnavailableError(_surface_unavailable_message())
+        raise RuntimeUnavailableError(self._surface_unavailable_message("replyGeneration"))
 
     async def send_chat_message(self, *_args, **_kwargs) -> dict[str, Any]:
-        raise RuntimeUnavailableError(_surface_unavailable_message())
+        raise RuntimeUnavailableError(self._surface_unavailable_message("sendPath"))
 
     async def update_autopilot_global(self, **_kwargs) -> dict[str, Any]:
-        raise RuntimeUnavailableError(_surface_unavailable_message())
+        raise RuntimeUnavailableError(self._surface_unavailable_message("autopilotControl"))
 
     async def update_chat_autopilot(self, *_args, **_kwargs) -> dict[str, Any]:
-        raise RuntimeUnavailableError(_surface_unavailable_message())
+        raise RuntimeUnavailableError(self._surface_unavailable_message("autopilotControl"))
 
+    def _ensure_surface_available(self, surface: str) -> None:
+        if self.service.route_available_for(surface):
+            return
+        raise RuntimeUnavailableError(
+            self.service.route_reason_for(surface)
+            or self._surface_unavailable_message(surface)
+        )
 
-def _surface_unavailable_message() -> str:
-    return (
-        "New Telegram runtime product surfaces are not enabled yet. "
-        "Legacy remains the effective backend."
-    )
+    def _surface_unavailable_message(self, surface: str) -> str:
+        labels = {
+            "chatRoster": "chat roster",
+            "messageWorkspace": "message workspace",
+            "replyGeneration": "reply generation",
+            "sendPath": "send path",
+            "autopilotControl": "autopilot",
+        }
+        return (
+            f"New Telegram runtime {labels.get(surface, surface)} surface is not enabled yet. "
+            "Legacy remains the effective backend."
+        )

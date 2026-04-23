@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from astra_runtime.chat_identity import ChatIdentity
 from apps.cli.processes import ProcessState
 from fullaccess.cache import avatar_base_path, find_cached_variant, media_preview_base_path
 from fullaccess.models import FullAccessChatSummary, FullAccessStatusReport, FullAccessSyncResult
@@ -68,7 +69,12 @@ def serialize_chat(
     memory: ChatMemory | None = None,
     is_digest_target: bool = False,
     session_file: Path | None = None,
+    asset_session_files: tuple[Path, ...] | None = None,
 ) -> dict[str, Any]:
+    identity = ChatIdentity(
+        runtime_chat_id=chat.telegram_chat_id,
+        local_chat_id=chat.id,
+    )
     last_source_adapter = last_message.source_adapter if last_message is not None else None
     if chat.category == "fullaccess" or last_source_adapter == "fullaccess":
         sync_status = "fullaccess"
@@ -76,9 +82,19 @@ def serialize_chat(
         sync_status = "local"
     else:
         sync_status = "empty"
+    avatar_url = _build_avatar_url(
+        asset_session_files or ((session_file,) if session_file is not None else ()),
+        chat.telegram_chat_id,
+    )
+    roster_last_activity_at = serialize_datetime(last_message.sent_at if last_message is not None else None)
+    roster_last_preview = message_preview(
+        last_message.raw_text if last_message is not None else None,
+        fallback="Сообщений пока нет",
+    )
 
     return {
-        "id": chat.id,
+        **identity.to_payload(),
+        "identity": identity.to_payload(),
         "telegramChatId": chat.telegram_chat_id,
         "reference": build_chat_reference(chat),
         "title": chat.title,
@@ -105,7 +121,7 @@ def serialize_chat(
         "lastDirection": last_message.direction if last_message is not None else None,
         "lastSourceAdapter": last_source_adapter,
         "lastSenderName": last_message.sender_name if last_message is not None else None,
-        "avatarUrl": _build_avatar_url(session_file, chat.telegram_chat_id),
+        "avatarUrl": avatar_url,
         "syncStatus": sync_status,
         "memory": (
             {
@@ -119,6 +135,21 @@ def serialize_chat(
             else None
         ),
         "favorite": False,
+        "rosterSource": "legacy",
+        "rosterLastActivityAt": roster_last_activity_at,
+        "rosterLastMessagePreview": roster_last_preview,
+        "rosterLastDirection": last_message.direction if last_message is not None else None,
+        "rosterLastSenderName": last_message.sender_name if last_message is not None else None,
+        "rosterFreshness": build_roster_freshness(last_message.sent_at if last_message is not None else None),
+        "unreadCount": 0,
+        "unreadMentionCount": 0,
+        "pinned": False,
+        "muted": False,
+        "archived": False,
+        "assetHints": {
+            "avatarCached": avatar_url is not None,
+            "avatarSource": "cache" if avatar_url is not None else None,
+        },
     }
 
 
@@ -330,15 +361,26 @@ def serialize_reminder(reminder: Reminder) -> dict[str, Any]:
     }
 
 
-def _build_avatar_url(session_file: Path | None, telegram_chat_id: int) -> str | None:
-    if session_file is None or telegram_chat_id == 0:
-        return None
+def _build_avatar_url(
+    session_file: Path | tuple[Path, ...] | None,
+    telegram_chat_id: int,
+) -> str | None:
+    if isinstance(session_file, tuple):
+        session_files = session_file
+    elif session_file is None:
+        session_files = ()
+    else:
+        session_files = (session_file,)
 
-    cached = find_cached_variant(avatar_base_path(session_file, telegram_chat_id))
-    if cached is None:
+    if telegram_chat_id == 0:
         return None
-    version = int(cached.stat().st_mtime)
-    return f"/api/media/avatars/{telegram_chat_id}?v={version}"
+    for candidate in session_files:
+        cached = find_cached_variant(avatar_base_path(candidate, telegram_chat_id))
+        if cached is None:
+            continue
+        version = int(cached.stat().st_mtime)
+        return f"/api/media/avatars/{telegram_chat_id}?v={version}"
+    return None
 
 
 def _build_media_preview_url(
@@ -364,6 +406,37 @@ def _build_media_preview_url(
         f"/api/media/messages/{telegram_chat_id}/{telegram_message_id}"
         f"?v={version}"
     )
+
+
+def build_roster_freshness(last_activity_at: datetime | None) -> dict[str, Any]:
+    if last_activity_at is None:
+        return {
+            "mode": "empty",
+            "label": "без активности",
+            "lastActivityAt": None,
+        }
+
+    effective = last_activity_at
+    if effective.tzinfo is None:
+        effective = effective.replace(tzinfo=timezone.utc)
+    else:
+        effective = effective.astimezone(timezone.utc)
+
+    age_seconds = max(0.0, (datetime.now(timezone.utc) - effective).total_seconds())
+    if age_seconds <= 12 * 60 * 60:
+        mode = "fresh"
+        label = "свежее"
+    elif age_seconds <= 3 * 24 * 60 * 60:
+        mode = "recent"
+        label = "недавнее"
+    else:
+        mode = "stale"
+        label = "давно без апдейта"
+    return {
+        "mode": mode,
+        "label": label,
+        "lastActivityAt": serialize_datetime(effective),
+    }
 
 
 def _serialize_reply_llm_status(suggestion) -> dict[str, Any]:
