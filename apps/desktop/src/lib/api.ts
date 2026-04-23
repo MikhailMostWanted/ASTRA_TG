@@ -24,6 +24,7 @@ import type {
   RemindersOverviewPayload,
   ReminderScanPayload,
   ReplyPreviewPayload,
+  RuntimeStatusPayload,
   SourceMutationPayload,
   SourcesPayload,
 } from "@/lib/types";
@@ -93,6 +94,8 @@ export const api = {
     return apiUrl;
   },
   health: () => request<HealthPayload>("/health"),
+  runtime: () => request<RuntimeStatusPayload>("/api/runtime"),
+  newRuntimeHealth: () => request<RuntimeStatusPayload["newRuntime"]>("/api/runtime/new/health"),
   dashboard: () => request<DashboardPayload>("/api/dashboard"),
   ops: (tail = 80) => request<OpsOverviewPayload>(withQuery("/api/ops", { tail })),
   logs: (component?: string, tail = 80) =>

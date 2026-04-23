@@ -10,7 +10,6 @@ from services.reply_signal import (
     has_question_signal,
     has_request_signal,
     is_weak_reply_signal,
-    reply_tokens,
 )
 
 
@@ -99,7 +98,6 @@ class ReplyClassifier:
     ) -> ReplyClassification:
         normalized = " ".join(text.split()).strip()
         lowered = normalized.casefold()
-        tokens = reply_tokens(lowered)
 
         has_question = has_question_signal(normalized)
         has_request = has_request_signal(normalized)

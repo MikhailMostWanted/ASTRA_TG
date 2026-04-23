@@ -21,6 +21,7 @@ ERROR_KEY_MAP = {
     "worker": "ops.error.worker.last",
     "provider": "ops.error.provider.last",
     "fullaccess": "ops.error.fullaccess.last",
+    "new_runtime": "ops.error.runtime.new.last",
 }
 
 SNAPSHOT_KEY_MAP = {
@@ -30,6 +31,7 @@ SNAPSHOT_KEY_MAP = {
     "backup": "ops.backup.last",
     "export": "ops.export.last",
     "fullaccess_sync": "ops.fullaccess.last_sync",
+    "new_runtime": "ops.runtime.new.status",
 }
 
 FULLACCESS_CHAT_SYNC_PREFIX = "ops.fullaccess.chat_sync."
@@ -178,6 +180,22 @@ class OperationalStateService:
                 "updated_count": updated_count,
                 "skipped_count": skipped_count,
                 "trigger": trigger,
+            },
+        )
+
+    async def record_runtime_status(
+        self,
+        *,
+        backend: str,
+        status: dict[str, Any],
+    ) -> None:
+        if backend != "new":
+            return
+        await self._store_json(
+            SNAPSHOT_KEY_MAP["new_runtime"],
+            {
+                "timestamp": _serialize_timestamp(None),
+                "status": status,
             },
         )
 

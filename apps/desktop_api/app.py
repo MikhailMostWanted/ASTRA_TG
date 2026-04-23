@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from astra_runtime.status import RuntimeUnavailableError
 from apps.cli.desktop import DESKTOP_API_PID_PATH
 from config.settings import Settings
 from fullaccess.cache import avatar_base_path, find_cached_variant, media_preview_base_path
@@ -97,9 +98,11 @@ def create_app(
             target_runtime=target_runtime,
             runtime_switches=runtime_switches,
         )
+        await _app.state.bridge.startup_runtime_layer()
         try:
             yield
         finally:
+            await _app.state.bridge.shutdown_runtime_layer()
             pid_path.unlink(missing_ok=True)
             await close_managed_fullaccess_clients()
             if owned_runtime:
@@ -124,8 +127,16 @@ def create_app(
             "ok": True,
             "name": "astra-desktop-api",
             "version": "0.1.0",
-            "runtime": _bridge(app).describe_runtime(),
+            "runtime": await _bridge(app).get_runtime_status(),
         }
+
+    @app.get("/api/runtime")
+    async def runtime_status() -> dict[str, Any]:
+        return await _bridge(app).get_runtime_status()
+
+    @app.get("/api/runtime/new/health")
+    async def new_runtime_health() -> dict[str, Any]:
+        return await _bridge(app).get_new_runtime_health()
 
     @app.get("/api/media/avatars/{telegram_chat_id}")
     async def media_avatar(telegram_chat_id: int):
@@ -413,6 +424,8 @@ async def _call_with_lookup(app: FastAPI, fn):
         return await fn()
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except RuntimeUnavailableError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -420,5 +433,7 @@ async def _call_with_lookup(app: FastAPI, fn):
 async def _call_with_value_error(app: FastAPI, fn):
     try:
         return await fn()
+    except RuntimeUnavailableError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

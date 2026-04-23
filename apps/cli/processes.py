@@ -15,6 +15,7 @@ from apps.cli.runtime import ComponentName, ensure_runtime_dirs, get_component_f
 INTERNAL_COMPONENT_COMMANDS: dict[ComponentName, str] = {
     "bot": "_run-bot",
     "worker": "_run-worker",
+    "new-runtime": "_run-new-runtime",
 }
 
 

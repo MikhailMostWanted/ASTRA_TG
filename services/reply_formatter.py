@@ -23,7 +23,6 @@ class ReplyFormatter:
         if result.kind != "suggestion" or result.suggestion is None:
             return "\n".join([title, "", *_reply_error_lines(result)])
 
-        suggestion = result.suggestion
         lines = [
             title,
             "",

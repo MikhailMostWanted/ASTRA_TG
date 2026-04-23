@@ -41,7 +41,7 @@ from services.inline_navigation import (
     fullaccess_login_route,
     memory_rebuild_route,
     memory_chat_route,
-    memory_pick_route,
+    memory_pick_route,  # noqa: F401 - imported to register the callback route.
     reminders_list_route,
     reminders_scan_route,
     reminders_tasks_route,

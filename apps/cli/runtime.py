@@ -4,16 +4,25 @@ import argparse
 import os
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from astra_runtime.manager import LegacyRuntimeBackend, RuntimeManager
+from astra_runtime.new_telegram import (
+    DatabaseNewTelegramAuthSessionStore,
+    NewTelegramRuntimeConfig,
+    NewTelegramRuntimeService,
+)
+from astra_runtime.switches import RuntimeSwitches
 from apps.ops.app import run_ops as run_ops_app
 from config.settings import Settings
 from fullaccess.auth import FullAccessAuthService
 from services.providers.manager import ProviderManager
+from services.operational_state import OperationalStateService
 from services.system_health import DoctorReport, SystemHealthService
 from services.system_readiness import OperationalReport, SystemReadinessService
 from storage.database import bootstrap_database, build_database_runtime
@@ -33,8 +42,9 @@ from storage.repositories import (
 )
 
 
-ComponentName = Literal["bot", "worker"]
+ComponentName = Literal["bot", "worker", "new-runtime"]
 COMPONENTS: tuple[ComponentName, ...] = ("bot", "worker")
+PROCESS_COMPONENTS: tuple[ComponentName, ...] = ("bot", "worker", "new-runtime")
 DEFAULT_WORKER_INTERVAL_SECONDS = 60.0
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -72,6 +82,20 @@ class DoctorSnapshot:
     readiness: OperationalReport | None
     doctor: DoctorReport | None
     error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeDiagnosticSnapshot:
+    status: dict[str, Any]
+    process: Any
+    database: DatabaseCheckResult
+    checked_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeManagerBundle:
+    manager: RuntimeManager
+    database: Any
 
 
 def get_repository_root() -> Path:
@@ -206,7 +230,142 @@ async def run_ops_command(command: str, *, stdout: bool = False) -> int:
     return await run_ops_app(argparse.Namespace(command=command, stdout=stdout))
 
 
+async def build_new_runtime_manager(settings: Settings | None = None) -> RuntimeManagerBundle:
+    effective_settings = settings or Settings()
+    runtime = build_database_runtime(effective_settings)
+    await bootstrap_database(runtime)
+
+    class _UnavailableLegacy:
+        @property
+        def chat_roster(self):
+            return self
+
+        @property
+        def message_history(self):
+            return self
+
+        @property
+        def reply_workspace(self):
+            return self
+
+        @property
+        def message_sender(self):
+            return self
+
+        @property
+        def autopilot(self):
+            return self
+
+    manager = RuntimeManager(RuntimeSwitches.from_settings(effective_settings))
+    manager.register_backend(LegacyRuntimeBackend(_UnavailableLegacy()))
+    manager.register_backend(
+        NewTelegramRuntimeService(
+            config=NewTelegramRuntimeConfig.from_settings(effective_settings),
+            auth_store=DatabaseNewTelegramAuthSessionStore(runtime.session_factory),
+            session_factory=runtime.session_factory,
+        )
+    )
+    return RuntimeManagerBundle(manager=manager, database=runtime)
+
+
+async def build_new_runtime_status(settings: Settings | None = None) -> dict[str, Any]:
+    bundle = await build_new_runtime_manager(settings)
+    try:
+        status = await bundle.manager.status()
+        from apps.cli.processes import inspect_process
+
+        process = inspect_process("new-runtime")
+        status["managedProcess"] = _serialize_process_state(process)
+        async with bundle.database.session_factory() as session:
+            snapshot = await OperationalStateService(SettingRepository(session)).get_named_snapshot(
+                "new_runtime"
+            )
+        if snapshot is not None:
+            status["operationalSnapshot"] = snapshot.payload
+            snapshot_status = snapshot.payload.get("status")
+            if (
+                isinstance(snapshot_status, dict)
+                and process.running
+                and _snapshot_matches_process(snapshot_status, process)
+            ):
+                refreshed_snapshot = _refresh_runtime_uptime(snapshot_status)
+                status["newRuntime"] = refreshed_snapshot
+                backends = status.get("backends")
+                if isinstance(backends, dict):
+                    backends["new"] = refreshed_snapshot
+        return status
+    finally:
+        await bundle.database.dispose()
+
+
+async def build_new_runtime_diagnostics(settings: Settings | None = None) -> RuntimeDiagnosticSnapshot:
+    effective_settings = settings or Settings()
+    from apps.cli.processes import inspect_process
+
+    database = await check_database(effective_settings)
+    status = await build_new_runtime_status(effective_settings)
+    return RuntimeDiagnosticSnapshot(
+        status=status,
+        process=inspect_process("new-runtime"),
+        database=database,
+        checked_at=datetime.now(timezone.utc),
+    )
+
+
 def _validate_component(component: str) -> ComponentName:
-    if component not in COMPONENTS:
+    if component not in PROCESS_COMPONENTS:
         raise ValueError(f"Неизвестный component: {component}")
-    return component
+    return component  # type: ignore[return-value]
+
+
+def _serialize_process_state(state) -> dict[str, Any]:
+    return {
+        "component": state.component,
+        "running": state.running,
+        "managed": state.managed,
+        "stalePidFile": state.stale_pid_file,
+        "pid": state.pid,
+        "command": state.command,
+        "detail": state.detail,
+        "pidPath": str(state.pid_path),
+        "logPath": str(state.log_path),
+    }
+
+
+def _refresh_runtime_uptime(status: dict[str, Any]) -> dict[str, Any]:
+    refreshed = dict(status)
+    started_at = refreshed.get("startedAt")
+    if refreshed.get("lifecycle") != "running" or not isinstance(started_at, str):
+        return refreshed
+    try:
+        started = datetime.fromisoformat(started_at)
+    except ValueError:
+        return refreshed
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    else:
+        started = started.astimezone(timezone.utc)
+    refreshed["uptimeSeconds"] = max(
+        0.0,
+        (datetime.now(timezone.utc) - started).total_seconds(),
+    )
+    return refreshed
+
+
+def _snapshot_matches_process(status: dict[str, Any], state) -> bool:
+    started_at = status.get("startedAt")
+    if not isinstance(started_at, str):
+        return False
+    try:
+        started = datetime.fromisoformat(started_at)
+    except ValueError:
+        return False
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    else:
+        started = started.astimezone(timezone.utc)
+    try:
+        pid_updated_at = datetime.fromtimestamp(state.pid_path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return False
+    return started >= pid_updated_at - timedelta(seconds=2)

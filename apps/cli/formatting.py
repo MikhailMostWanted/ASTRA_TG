@@ -3,12 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from apps.cli.processes import ProcessState, StartResult, StopResult
-from apps.cli.runtime import DatabaseCheckResult, DoctorSnapshot, ProviderCheckResult
+from apps.cli.runtime import DatabaseCheckResult, DoctorSnapshot, ProviderCheckResult, RuntimeDiagnosticSnapshot
 
 
 COMPONENT_LABELS = {
     "bot": "Bot",
     "worker": "Worker",
+    "new-runtime": "New runtime",
 }
 
 
@@ -121,6 +122,55 @@ def format_logs(
     return "\n".join(lines)
 
 
+def format_runtime_status(status: dict[str, object]) -> str:
+    new_runtime = _dict(status.get("newRuntime"))
+    routes = _dict(status.get("routes")).get("routes")
+    process = _dict(status.get("managedProcess"))
+    backends = [str(item) for item in status.get("registeredBackends", []) or []]
+    lines = ["Astra CLI / Runtime"]
+    lines.append(f"registered_backends: {', '.join(backends)}")
+    if process:
+        lines.append(
+            "managed_process: "
+            f"{'running' if process.get('running') else 'stopped'} "
+            f"pid={process.get('pid') or 'нет'}"
+        )
+
+    if new_runtime:
+        lines.extend(_format_runtime_backend("new", new_runtime))
+
+    if isinstance(routes, dict):
+        lines.append("")
+        lines.append("Routes:")
+        for surface, route in routes.items():
+            if not isinstance(route, dict):
+                continue
+            reason = route.get("reason") or "ok"
+            lines.append(
+                f"- {surface}: requested={route.get('requested')} "
+                f"effective={route.get('effective')} reason={reason}"
+            )
+
+    return "\n".join(lines)
+
+
+def format_runtime_health(health: dict[str, object]) -> str:
+    lines = ["Astra CLI / Runtime health"]
+    lines.extend(_format_runtime_backend("new", health))
+    return "\n".join(lines)
+
+
+def format_runtime_diagnostics(snapshot: RuntimeDiagnosticSnapshot) -> str:
+    lines = ["Astra CLI / Runtime diagnostics"]
+    lines.append(f"checked_at: {snapshot.checked_at.isoformat()}")
+    lines.append(f"database: {_ready_marker(snapshot.database.available)} {snapshot.database.detail}")
+    lines.append("")
+    lines.extend(_format_component_status("New runtime process", snapshot.process))
+    lines.append("")
+    lines.append(format_runtime_status(snapshot.status))
+    return "\n".join(lines)
+
+
 def _format_component_status(label: str, state: ProcessState) -> list[str]:
     marker = "[OK]" if state.running else "[WARN]" if state.stale_pid_file else "[OFF]"
     status_text = "запущен" if state.running else "не запущен"
@@ -137,6 +187,27 @@ def _format_component_status(label: str, state: ProcessState) -> list[str]:
     return lines
 
 
+def _format_runtime_backend(label: str, backend: dict[str, object]) -> list[str]:
+    auth = _dict(backend.get("auth"))
+    lines = [
+        f"{label}: {_ready_marker(bool(backend.get('healthy')))} {backend.get('lifecycle')}",
+        f"active: {backend.get('active')}",
+        f"ready: {backend.get('ready')}",
+        f"route_available: {backend.get('routeAvailable')}",
+        f"uptime_seconds: {backend.get('uptimeSeconds')}",
+        f"degraded_reason: {backend.get('degradedReason') or 'нет'}",
+        f"unavailable_reason: {backend.get('unavailableReason') or 'нет'}",
+        f"last_error: {backend.get('lastError') or 'нет'}",
+    ]
+    if auth:
+        lines.append(f"auth_state: {auth.get('authState')}")
+        lines.append(f"session_state: {auth.get('sessionState')}")
+        session = _dict(auth.get("session"))
+        lines.append(f"session_path: {session.get('path')}")
+        lines.append(f"auth_reason: {auth.get('reason') or 'нет'}")
+    return lines
+
+
 def _ready_marker(ready: bool) -> str:
     return "[OK]" if ready else "[WARN]"
 
@@ -147,3 +218,7 @@ def _provider_marker(provider: ProviderCheckResult) -> str:
     if provider.available:
         return "[OK]"
     return "[WARN]"
+
+
+def _dict(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}

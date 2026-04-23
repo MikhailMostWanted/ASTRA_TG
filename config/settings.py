@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     runtime_reply_generation_backend: str = "legacy"
     runtime_send_path_backend: str = "legacy"
     runtime_autopilot_control_backend: str = "legacy"
+    runtime_new_enabled: bool = False
+    runtime_new_session_path: str = "./var/new_telegram_runtime.session"
+    runtime_new_device_name: str = "Astra Desktop new runtime"
+    runtime_new_product_surfaces_enabled: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",

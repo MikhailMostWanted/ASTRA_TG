@@ -20,6 +20,7 @@ export interface HealthPayload {
   ok: boolean;
   name: string;
   version: string;
+  runtime?: RuntimeStatusPayload;
 }
 
 export interface ProcessState {
@@ -71,6 +72,70 @@ export interface DashboardPayload {
   astraNow: string[];
   quickActions: Array<{ id: string; label: string; kind: string; enabled: boolean }>;
   processes: ProcessState[];
+  runtime?: RuntimeStatusPayload;
+}
+
+export interface RuntimeAuthPayload {
+  authState: string;
+  sessionState: string;
+  authorized: boolean;
+  user: {
+    id: number | null;
+    username: string | null;
+    phoneHint: string | null;
+  };
+  device: {
+    id: string | null;
+    name: string | null;
+  };
+  session: {
+    path: string | null;
+    stored: boolean;
+  };
+  updatedAt: string | null;
+  reason: string | null;
+}
+
+export interface RuntimeBackendPayload {
+  backend: "legacy" | "new" | string;
+  name: string;
+  registered: boolean;
+  lifecycle: string;
+  active: boolean;
+  healthy: boolean;
+  ready: boolean;
+  routeAvailable: boolean;
+  startedAt: string | null;
+  stoppedAt: string | null;
+  uptimeSeconds: number | null;
+  lastError: string | null;
+  degradedReason: string | null;
+  unavailableReason: string | null;
+  auth: RuntimeAuthPayload | null;
+  capabilities: string[];
+}
+
+export interface RuntimeRoutePayload {
+  surface: string;
+  requested: "legacy" | "new" | string;
+  effective: "legacy" | "new" | string;
+  targetAvailable: boolean;
+  targetReady: boolean;
+  reason: string | null;
+}
+
+export interface RuntimeStatusPayload {
+  generatedAt: string;
+  defaultBackend: string;
+  registeredBackends: string[];
+  routes: {
+    targetRegistered: boolean;
+    routes: Record<string, RuntimeRoutePayload>;
+  };
+  backends: Record<string, RuntimeBackendPayload>;
+  legacy: RuntimeBackendPayload | null;
+  newRuntime: RuntimeBackendPayload | null;
+  managedProcess?: ProcessState;
 }
 
 export interface ChatMemorySummary {

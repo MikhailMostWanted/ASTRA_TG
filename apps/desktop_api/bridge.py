@@ -10,7 +10,12 @@ from aiogram import Bot
 
 from astra_runtime.contracts import TelegramRuntime
 from astra_runtime.legacy import LegacyAstraRuntime
-from astra_runtime.router import RuntimeRouter
+from astra_runtime.manager import LegacyRuntimeBackend, RuntimeManager, StaticRuntimeBackend
+from astra_runtime.new_telegram import (
+    DatabaseNewTelegramAuthSessionStore,
+    NewTelegramRuntimeConfig,
+    NewTelegramRuntimeService,
+)
 from astra_runtime.switches import RuntimeSwitches
 from apps.cli.processes import inspect_process, start_component, stop_component
 from apps.cli.runtime import (
@@ -117,17 +122,50 @@ class DesktopBridge:
     runtime: DatabaseRuntime
     target_runtime: TelegramRuntime | None = None
     runtime_switches: RuntimeSwitches | None = None
-    _runtime_router: RuntimeRouter = field(init=False, repr=False)
+    _runtime_manager: RuntimeManager = field(init=False, repr=False)
+    _new_runtime_service: NewTelegramRuntimeService | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
-        self._runtime_router = RuntimeRouter(
-            legacy=LegacyAstraRuntime(self),
-            target=self.target_runtime,
+        self._runtime_manager = RuntimeManager(
             switches=self.runtime_switches or RuntimeSwitches.from_settings(self.settings),
         )
+        self._runtime_manager.register_backend(
+            LegacyRuntimeBackend(LegacyAstraRuntime(self))
+        )
+        if self.target_runtime is not None:
+            self._runtime_manager.register_backend(
+                StaticRuntimeBackend(
+                    backend="new",
+                    runtime=self.target_runtime,
+                    name="external-target-runtime",
+                    route_available=True,
+                )
+            )
+            return
+
+        self._new_runtime_service = NewTelegramRuntimeService(
+            config=NewTelegramRuntimeConfig.from_settings(self.settings),
+            auth_store=DatabaseNewTelegramAuthSessionStore(self.runtime.session_factory),
+            session_factory=self.runtime.session_factory,
+        )
+        self._runtime_manager.register_backend(self._new_runtime_service)
+
+    async def startup_runtime_layer(self) -> None:
+        await self._runtime_manager.bootstrap()
+
+    async def shutdown_runtime_layer(self) -> None:
+        await self._runtime_manager.shutdown()
 
     def describe_runtime(self) -> dict[str, object]:
-        return self._runtime_router.describe()
+        return self._runtime_manager.describe_routes()
+
+    async def get_runtime_status(self) -> dict[str, Any]:
+        status = await self._runtime_manager.status()
+        status["managedProcess"] = serialize_process_state(inspect_process("new-runtime"))
+        return status
+
+    async def get_new_runtime_health(self) -> dict[str, Any]:
+        return await self._runtime_manager.health("new")
 
     async def get_dashboard(self) -> dict[str, Any]:
         async with self.runtime.session_factory() as session:
@@ -138,6 +176,7 @@ class DesktopBridge:
         process_states = [inspect_process(component) for component in COMPONENTS]
         database = await check_database(self.settings)
         provider_api = await check_provider(self.settings)
+        runtime_status = await self.get_runtime_status()
 
         return {
             "repositoryRoot": str(get_repository_root()),
@@ -164,6 +203,7 @@ class DesktopBridge:
                 facts=facts,
                 process_states=process_states,
                 database=database,
+                runtime_status=runtime_status,
             ),
             "attention": self._build_attention_items(report),
             "activity": self._build_activity_items(facts, last_digest),
@@ -179,6 +219,7 @@ class DesktopBridge:
                 {"id": "digest", "label": "Запустить дайджест", "kind": "secondary", "enabled": True},
             ],
             "processes": [serialize_process_state(state) for state in process_states],
+            "runtime": runtime_status,
         }
 
     async def get_ops_overview(self, *, tail: int = DEFAULT_LOG_TAIL) -> dict[str, Any]:
@@ -206,6 +247,7 @@ class DesktopBridge:
                 {"id": "doctor", "label": "Doctor", "enabled": True},
                 {"id": "status", "label": "Status", "enabled": True},
             ],
+            "runtime": await self.get_runtime_status(),
         }
 
     async def list_chats(
@@ -215,7 +257,7 @@ class DesktopBridge:
         filter_key: str = "all",
         sort_key: str = "activity",
     ) -> dict[str, Any]:
-        return await self._runtime_router.chat_roster.list_chats(
+        return await self._runtime_manager.surface("chatRoster").list_chats(
             search=search,
             filter_key=filter_key,
             sort_key=sort_key,
@@ -302,7 +344,10 @@ class DesktopBridge:
         }
 
     async def get_chat_workspace(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
-        return await self._runtime_router.message_history.get_chat_workspace(chat_id, limit=limit)
+        return await self._runtime_manager.surface("messageWorkspace").get_chat_workspace(
+            chat_id,
+            limit=limit,
+        )
 
     async def _legacy_get_chat_workspace(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
         # LEGACY_RUNTIME: workspace refresh still uses fullaccess tail sync.
@@ -326,7 +371,10 @@ class DesktopBridge:
             )
 
     async def get_chat_messages(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
-        return await self._runtime_router.message_history.get_chat_messages(chat_id, limit=limit)
+        return await self._runtime_manager.surface("messageWorkspace").get_chat_messages(
+            chat_id,
+            limit=limit,
+        )
 
     async def _legacy_get_chat_messages(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
         # LEGACY_RUNTIME: direct local message-store read.
@@ -363,7 +411,7 @@ class DesktopBridge:
         *,
         use_provider_refinement: bool | None = None,
     ) -> dict[str, Any]:
-        return await self._runtime_router.reply_workspace.get_reply_preview(
+        return await self._runtime_manager.surface("replyGeneration").get_reply_preview(
             chat_id,
             use_provider_refinement=use_provider_refinement,
         )
@@ -401,7 +449,7 @@ class DesktopBridge:
         source_message_id: int | None = None,
         reply_to_source_message_id: int | None = None,
     ) -> dict[str, Any]:
-        return await self._runtime_router.message_sender.send_chat_message(
+        return await self._runtime_manager.surface("sendPath").send_chat_message(
             chat_id,
             text=text,
             source_message_id=source_message_id,
@@ -470,7 +518,7 @@ class DesktopBridge:
         master_enabled: bool | None = None,
         allow_channels: bool | None = None,
     ) -> dict[str, Any]:
-        return await self._runtime_router.autopilot.update_autopilot_global(
+        return await self._runtime_manager.surface("autopilotControl").update_autopilot_global(
             master_enabled=master_enabled,
             allow_channels=allow_channels,
         )
@@ -497,7 +545,7 @@ class DesktopBridge:
         trusted: bool | None = None,
         mode: str | None = None,
     ) -> dict[str, Any]:
-        return await self._runtime_router.autopilot.update_chat_autopilot(
+        return await self._runtime_manager.surface("autopilotControl").update_chat_autopilot(
             chat_id,
             trusted=trusted,
             mode=mode,
@@ -524,7 +572,7 @@ class DesktopBridge:
             )
             await session.commit()
             fullaccess_status = await self._build_fullaccess_auth_service(session).build_status_report()
-            reply_result = await self._runtime_router.reply_workspace.build_reply_result(
+            reply_result = await self._runtime_manager.surface("replyGeneration").build_reply_result(
                 build_chat_reference(updated_chat)
             )
             overview = await self._build_autopilot_service(session).build_chat_overview(
@@ -1211,7 +1259,7 @@ class DesktopBridge:
         messages = list(reversed(recent_desc))
         last_message = recent_desc[0] if recent_desc else None
         message_count = await message_repository.count_messages_for_chat(chat_id=chat.id)
-        reply_result = await self._runtime_router.reply_workspace.build_reply_result(
+        reply_result = await self._runtime_manager.surface("replyGeneration").build_reply_result(
             build_chat_reference(chat),
             workspace_messages=tuple(messages),
         )
@@ -1428,9 +1476,19 @@ class DesktopBridge:
         facts: OperationalFacts,
         process_states,
         database,
+        runtime_status: dict[str, Any],
     ) -> list[dict[str, Any]]:
         process_lookup = {item.component: item for item in process_states}
         fullaccess_status = facts.fullaccess_status
+        new_runtime = runtime_status.get("newRuntime")
+        new_runtime_payload = new_runtime if isinstance(new_runtime, dict) else {}
+        runtime_ready = bool(new_runtime_payload.get("ready"))
+        runtime_active = bool(new_runtime_payload.get("active"))
+        runtime_detail = (
+            str(new_runtime_payload.get("degradedReason") or new_runtime_payload.get("unavailableReason") or "OK")
+            if new_runtime_payload
+            else "New runtime status недоступен."
+        )
         return [
             {
                 "key": "bot",
@@ -1477,6 +1535,13 @@ class DesktopBridge:
                     else "требует вход"
                 ),
                 "detail": fullaccess_status.reason if fullaccess_status is not None else "Слой выключен.",
+            },
+            {
+                "key": "newRuntime",
+                "label": "New runtime",
+                "status": "online" if runtime_ready else "warning" if runtime_active else "muted",
+                "value": "готов" if runtime_ready else "активен" if runtime_active else "inactive",
+                "detail": runtime_detail,
             },
             {
                 "key": "db",

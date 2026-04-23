@@ -16,11 +16,22 @@ from apps.cli.desktop import (
     open_desktop_app,
     stop_desktop_app,
 )
-from apps.cli.formatting import format_action_results, format_doctor, format_logs, format_status
+from apps.cli.formatting import (
+    format_action_results,
+    format_doctor,
+    format_logs,
+    format_runtime_diagnostics,
+    format_runtime_health,
+    format_runtime_status,
+    format_status,
+)
 from apps.cli.processes import inspect_process, start_component, stop_component
 from apps.cli.runtime import (
     COMPONENTS,
     DEFAULT_WORKER_INTERVAL_SECONDS,
+    build_new_runtime_diagnostics,
+    build_new_runtime_manager,
+    build_new_runtime_status,
     build_doctor_snapshot,
     check_database,
     check_provider,
@@ -183,6 +194,35 @@ def build_parser() -> argparse.ArgumentParser:
         "logout",
         help="Локально удалить session и pending auth.",
     )
+
+    runtime_parser = subparsers.add_parser(
+        "runtime",
+        help="Управление новым Telegram runtime без переключения продукта.",
+    )
+    runtime_subparsers = runtime_parser.add_subparsers(
+        dest="runtime_command",
+        required=True,
+    )
+    runtime_subparsers.add_parser(
+        "status",
+        help="Показать status/readiness/auth state нового runtime.",
+    )
+    runtime_subparsers.add_parser(
+        "start",
+        help="Запустить отдельный managed process нового runtime.",
+    )
+    runtime_subparsers.add_parser(
+        "stop",
+        help="Остановить отдельный managed process нового runtime.",
+    )
+    runtime_subparsers.add_parser(
+        "health",
+        help="Выполнить health-check нового runtime.",
+    )
+    runtime_subparsers.add_parser(
+        "diagnose",
+        help="Краткая диагностика процесса, БД и readiness нового runtime.",
+    )
     return parser
 
 
@@ -222,11 +262,16 @@ async def run_cli(args: argparse.Namespace) -> int:
             args.fullaccess_command,
             code=getattr(args, "code", None),
         )
+    if args.command == "runtime":
+        return await _handle_runtime(args.runtime_command)
     if args.command == "_run-bot":
         await _run_managed_bot()
         return 0
     if args.command == "_run-worker":
         await _run_managed_worker()
+        return 0
+    if args.command == "_run-new-runtime":
+        await _run_managed_new_runtime()
         return 0
 
     raise ValueError(f"Неизвестная команда: {args.command}")
@@ -400,6 +445,31 @@ async def _handle_desktop_stop() -> int:
     return 0
 
 
+async def _handle_runtime(command: str) -> int:
+    if command == "status":
+        print(format_runtime_status(await build_new_runtime_status(Settings())))
+        return 0
+    if command == "health":
+        status = await build_new_runtime_status(Settings())
+        health = status.get("newRuntime")
+        if not isinstance(health, dict):
+            raise ValueError("New runtime backend не зарегистрирован.")
+        print(format_runtime_health(health))
+        return 0 if bool(health.get("healthy")) else 1
+    if command == "diagnose":
+        print(format_runtime_diagnostics(await build_new_runtime_diagnostics(Settings())))
+        return 0
+    if command == "start":
+        result = start_component("new-runtime", python_executable=sys.executable)
+        print(format_action_results("runtime start", [result]))
+        return 0 if result.ok else 1
+    if command == "stop":
+        result = stop_component("new-runtime")
+        print(format_action_results("runtime stop", [result]))
+        return 0 if result.ok else 1
+    raise ValueError(f"Неизвестная runtime-команда: {command}")
+
+
 async def _run_managed_bot() -> None:
     settings = Settings()
     configure_logging(settings.log_level)
@@ -427,6 +497,31 @@ async def _run_managed_worker() -> None:
         interval_seconds=DEFAULT_WORKER_INTERVAL_SECONDS,
     )
     await _run_with_signals(_worker_loop(settings))
+
+
+async def _run_managed_new_runtime() -> None:
+    settings = Settings()
+    configure_logging(settings.log_level)
+    log_event(
+        LOGGER,
+        20,
+        "cli.new_runtime.started",
+        "astratg new Telegram runtime process запущен.",
+        repository_root=get_repository_root(),
+        python_executable=sys.executable,
+    )
+    bundle = await build_new_runtime_manager(settings)
+    try:
+        await bundle.manager.bootstrap()
+        await _run_with_signals(_idle_new_runtime())
+    finally:
+        await bundle.manager.shutdown()
+        await bundle.database.dispose()
+
+
+async def _idle_new_runtime() -> None:
+    while True:
+        await asyncio.sleep(3600)
 
 
 async def _worker_loop(settings: Settings) -> None:
@@ -502,6 +597,6 @@ def pathlib_from_sys_executable():
 
 
 def _parse_args() -> argparse.Namespace:
-    if len(sys.argv) > 1 and sys.argv[1] in {"_run-bot", "_run-worker"}:
+    if len(sys.argv) > 1 and sys.argv[1] in {"_run-bot", "_run-worker", "_run-new-runtime"}:
         return argparse.Namespace(command=sys.argv[1])
     return build_parser().parse_args()

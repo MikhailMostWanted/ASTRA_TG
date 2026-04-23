@@ -345,11 +345,36 @@ def test_desktop_api_lifecycle_writes_and_removes_pid_file(monkeypatch, tmp_path
             response = client.get("/health")
             assert response.status_code == 200
             runtime_payload = response.json()["runtime"]
-            assert runtime_payload["targetRegistered"] is False
-            assert runtime_payload["routes"]["chatRoster"]["effective"] == "legacy"
-            assert runtime_payload["routes"]["sendPath"]["effective"] == "legacy"
+            assert runtime_payload["routes"]["targetRegistered"] is True
+            assert runtime_payload["routes"]["routes"]["chatRoster"]["effective"] == "legacy"
+            assert runtime_payload["routes"]["routes"]["sendPath"]["effective"] == "legacy"
+            assert runtime_payload["legacy"]["ready"] is True
+            assert runtime_payload["newRuntime"]["registered"] is True
+            assert runtime_payload["newRuntime"]["active"] is False
+            assert runtime_payload["newRuntime"]["ready"] is False
+            assert runtime_payload["newRuntime"]["auth"]["authState"] == "unauthorized"
+            assert runtime_payload["newRuntime"]["unavailableReason"] == (
+                "New Telegram runtime is disabled by RUNTIME_NEW_ENABLED."
+            )
             assert pid_path.exists() is True
             assert pid_path.read_text(encoding="utf-8").strip() == str(os.getpid())
+
+            runtime_status = client.get("/api/runtime")
+            assert runtime_status.status_code == 200
+            runtime_status_payload = runtime_status.json()
+            assert runtime_status_payload["managedProcess"]["component"] == "new-runtime"
+            assert runtime_status_payload["newRuntime"]["healthy"] is True
+
+            new_runtime_health = client.get("/api/runtime/new/health")
+            assert new_runtime_health.status_code == 200
+            assert new_runtime_health.json()["routeAvailable"] is False
+
+            dashboard = client.get("/api/dashboard")
+            assert dashboard.status_code == 200
+            assert any(
+                card["key"] == "newRuntime"
+                for card in dashboard.json()["statusCards"]
+            )
 
         assert pid_path.exists() is False
         await runtime.dispose()
@@ -680,6 +705,10 @@ def test_desktop_api_workspace_keeps_shell_alive_when_auto_refresh_fails(
 async def _seed_runtime(monkeypatch, tmp_path: Path):
     database_path = tmp_path / "desktop-api" / "astra.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+    monkeypatch.setenv(
+        "RUNTIME_NEW_SESSION_PATH",
+        str(tmp_path / "desktop-api" / "new-runtime.session"),
+    )
     settings = Settings()
     runtime = build_database_runtime(settings)
     await bootstrap_database(runtime)
