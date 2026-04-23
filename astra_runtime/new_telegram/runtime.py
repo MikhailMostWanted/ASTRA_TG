@@ -15,6 +15,7 @@ from astra_runtime.new_telegram.auth import (
 )
 from astra_runtime.new_telegram.config import NewTelegramRuntimeConfig
 from astra_runtime.new_telegram.history import NewTelegramMessageHistory
+from astra_runtime.new_telegram.reply import NewTelegramReplyWorkspace
 from astra_runtime.new_telegram.roster import NewTelegramChatRoster
 from astra_runtime.new_telegram.transport import (
     NewTelegramAuthClientFactory,
@@ -39,6 +40,7 @@ from storage.repositories import SettingRepository
 LOGGER = get_logger(__name__)
 CHAT_ROSTER_SURFACE = "chatRoster"
 MESSAGE_WORKSPACE_SURFACE = "messageWorkspace"
+REPLY_GENERATION_SURFACE = "replyGeneration"
 
 
 @dataclass(slots=True)
@@ -51,6 +53,7 @@ class NewTelegramRuntimeService:
     client_factory: NewTelegramAuthClientFactory = build_new_telegram_auth_client
     roster_client_factory: NewTelegramRosterClientFactory = build_new_telegram_roster_client
     history_client_factory: NewTelegramHistoryClientFactory = build_new_telegram_history_client
+    settings: Any | None = None
     _lifecycle: RuntimeLifecycle = "stopped"
     _started_at: datetime | None = None
     _stopped_at: datetime | None = None
@@ -60,6 +63,7 @@ class NewTelegramRuntimeService:
     _surface: "_NewTelegramRuntimeSurface" = field(init=False, repr=False)
     _chat_roster: NewTelegramChatRoster = field(init=False, repr=False)
     _message_history: NewTelegramMessageHistory = field(init=False, repr=False)
+    _reply_workspace: NewTelegramReplyWorkspace = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._auth_controller = NewTelegramAuthController(
@@ -76,6 +80,11 @@ class NewTelegramRuntimeService:
             config=self.config,
             session_factory=self.session_factory,
             client_factory=self.history_client_factory,
+        )
+        self._reply_workspace = NewTelegramReplyWorkspace(
+            settings=self.settings,
+            session_factory=self.session_factory,
+            history=self._message_history,
         )
         self._surface = _NewTelegramRuntimeSurface(self)
 
@@ -98,6 +107,8 @@ class NewTelegramRuntimeService:
             return self._chat_roster.route_ready()
         if surface == MESSAGE_WORKSPACE_SURFACE:
             return self._message_history.route_ready()
+        if surface == REPLY_GENERATION_SURFACE:
+            return self._reply_workspace.route_ready()
         return False
 
     def route_reason_for(self, surface: str) -> str | None:
@@ -108,6 +119,8 @@ class NewTelegramRuntimeService:
             return self._chat_roster.route_reason()
         if surface == MESSAGE_WORKSPACE_SURFACE:
             return self._message_history.route_reason()
+        if surface == REPLY_GENERATION_SURFACE:
+            return self._reply_workspace.route_reason()
         return (
             "New Telegram runtime пока не реализует этот surface; "
             "legacy remains effective."
@@ -325,6 +338,7 @@ class NewTelegramRuntimeService:
                 "auth-reset",
                 "chat-roster",
                 "message-history",
+                "reply-workspace",
             ),
         )
 
@@ -404,13 +418,18 @@ class _NewTelegramRuntimeSurface:
 
     async def get_chat_workspace(self, *_args, **_kwargs) -> dict[str, Any]:
         self._ensure_surface_available(MESSAGE_WORKSPACE_SURFACE)
-        return await self.service._message_history.get_chat_workspace(*_args, **_kwargs)
+        payload = await self.service._message_history.get_chat_workspace(*_args, **_kwargs)
+        if self.service.route_available_for(REPLY_GENERATION_SURFACE):
+            payload = await self.service._reply_workspace.enrich_workspace_payload(payload)
+        return payload
 
     async def build_reply_result(self, *_args, **_kwargs):
-        raise RuntimeUnavailableError(self._surface_unavailable_message("replyGeneration"))
+        self._ensure_surface_available(REPLY_GENERATION_SURFACE)
+        return await self.service._reply_workspace.build_reply_result(*_args, **_kwargs)
 
     async def get_reply_preview(self, *_args, **_kwargs) -> dict[str, Any]:
-        raise RuntimeUnavailableError(self._surface_unavailable_message("replyGeneration"))
+        self._ensure_surface_available(REPLY_GENERATION_SURFACE)
+        return await self.service._reply_workspace.get_reply_preview(*_args, **_kwargs)
 
     async def send_chat_message(self, *_args, **_kwargs) -> dict[str, Any]:
         raise RuntimeUnavailableError(self._surface_unavailable_message("sendPath"))

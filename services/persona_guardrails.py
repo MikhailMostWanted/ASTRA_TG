@@ -71,18 +71,31 @@ class PersonaGuardrails:
             if repaired
             else 0
         )
-        if (
-            len(repaired) > guardrails.max_messages
-            or average_length > guardrails.max_average_message_length
-            or max(len(message) for message in repaired) > guardrails.max_message_length
-        ):
+        if len(repaired) > guardrails.max_messages:
+            repaired = repaired[: guardrails.max_messages]
+            flags.append("слишком_длинно")
+        if any(len(message) > guardrails.max_message_length for message in repaired):
+            repaired = [
+                _trim_message(message, guardrails.max_message_length)
+                for message in repaired
+            ]
+            flags.append("слишком_длинно")
+        average_length = (
+            sum(len(message) for message in repaired) / len(repaired)
+            if repaired
+            else 0
+        )
+        if average_length > guardrails.max_average_message_length:
+            repaired = [
+                _trim_message(message, guardrails.max_average_message_length)
+                for message in repaired
+            ]
             flags.append("слишком_длинно")
 
         hard_flags = {
             "слишком_литературно",
             "слишком_ботски",
             "слишком_грубо",
-            "слишком_длинно",
             "анти_паттерн",
         }
         unique_flags = tuple(dict.fromkeys(flags))
@@ -112,6 +125,18 @@ def _contains_patterns(messages: list[str] | tuple[str, ...], patterns: tuple[st
 def _count_strong_profanity(messages: list[str] | tuple[str, ...]) -> int:
     text = "\n".join(message.casefold() for message in messages)
     return sum(text.count(token) for token in STRONG_PROFANITY_TOKENS)
+
+
+def _trim_message(message: str, limit: int) -> str:
+    if len(message) <= limit:
+        return message
+    shortened = message[:limit].rstrip(" ,;:-")
+    for separator in (". ", "! ", "? ", ", "):
+        split_index = shortened.rfind(separator)
+        if split_index >= max(16, int(limit * 0.55)):
+            shortened = shortened[:split_index].rstrip(" ,;:-")
+            break
+    return shortened.strip()
 
 
 def _reduce_repeated_openers(

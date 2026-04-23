@@ -36,6 +36,7 @@ class ReplyExamplesRetrievalResult:
     strategy_bias: str | None
     length_hint: str | None
     rhythm_hint: str | None
+    opener_hint: str | None
     dominant_topic_hint: str | None
     notes: tuple[str, ...]
 

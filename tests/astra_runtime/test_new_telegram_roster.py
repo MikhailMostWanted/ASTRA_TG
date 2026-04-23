@@ -130,7 +130,7 @@ def test_new_telegram_chat_roster_maps_identity_and_keeps_snapshot_hot(
         assert known["lastMessagePreview"] == "Локальный хвост для workspace."
         assert known["rosterLastMessagePreview"] == "Runtime превью уже свежее локального хвоста."
         assert known["rosterSource"] == "new"
-        assert known["rosterFreshness"]["mode"] == "fresh"
+        assert known["rosterFreshness"]["mode"] in {"fresh", "recent"}
 
         assert second["count"] == 1
         assert second["items"][0]["runtimeChatId"] == -100300

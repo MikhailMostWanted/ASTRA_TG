@@ -61,6 +61,10 @@ class ReplyEngineService:
         *,
         use_provider_refinement: bool | None = None,
         workspace_messages=None,
+        source_backend: str | None = None,
+        history_payload: dict[str, object] | None = None,
+        freshness_payload: dict[str, object] | None = None,
+        status_payload: dict[str, object] | None = None,
     ) -> ReplyResult:
         should_try_provider = await self._should_use_provider_refinement(use_provider_refinement)
         log_event(
@@ -88,16 +92,45 @@ class ReplyEngineService:
                 error_message="Источник не найден. Проверь chat_id или @username.",
             )
 
+        return await self.build_reply_for_chat(
+            chat,
+            reference=reference,
+            use_provider_refinement=use_provider_refinement,
+            workspace_messages=workspace_messages,
+            source_backend=source_backend,
+            history_payload=history_payload,
+            freshness_payload=freshness_payload,
+            status_payload=status_payload,
+        )
+
+    async def build_reply_for_chat(
+        self,
+        chat,
+        *,
+        reference: str | None = None,
+        use_provider_refinement: bool | None = None,
+        workspace_messages=None,
+        source_backend: str | None = None,
+        history_payload: dict[str, object] | None = None,
+        freshness_payload: dict[str, object] | None = None,
+        status_payload: dict[str, object] | None = None,
+    ) -> ReplyResult:
+        chat_reference = reference or _build_chat_reference(chat)
+        should_try_provider = await self._should_use_provider_refinement(use_provider_refinement)
         context_or_issue = await self.context_builder.build(
             chat,
             recent_messages=workspace_messages,
+            source_backend=source_backend,
+            history_payload=history_payload,
+            freshness_payload=freshness_payload,
+            status_payload=status_payload,
         )
         if isinstance(context_or_issue, ReplyContextIssue):
             return ReplyResult(
                 kind=context_or_issue.code,
                 chat_id=chat.id,
                 chat_title=chat.title,
-                chat_reference=_build_chat_reference(chat),
+                chat_reference=chat_reference,
                 error_message=context_or_issue.message,
             )
 
@@ -111,6 +144,7 @@ class ReplyEngineService:
                 strategy_bias=None,
                 length_hint=None,
                 rhythm_hint=None,
+                opener_hint=None,
                 dominant_topic_hint=None,
                 notes=("Похожих реальных ответов не нашёл.",),
             )
@@ -129,6 +163,7 @@ class ReplyEngineService:
             draft_text=draft.base_reply_text,
             profile=style_selection.profile,
             strategy=draft.strategy,
+            few_shot_support=few_shot_support,
         )
         persona_state = await self.persona_core_service.load_state()
         final_messages = styled_reply.messages
@@ -203,15 +238,19 @@ class ReplyEngineService:
                     30,
                     "reply.provider.fallback",
                     "Улучшение ответа провайдером не применено, оставлена детерминированная база.",
-                    reference=reference,
+                    reference=chat_reference,
                     provider_name=llm_provider_name,
                 )
 
-        variants = self.variant_builder.build(
-            final_messages=final_messages,
-            baseline_messages=llm_baseline_messages,
-            provider_variants=llm_variants,
-            few_shot_support=few_shot_support,
+        variants = (
+            self.variant_builder.build(
+                final_messages=final_messages,
+                baseline_messages=llm_baseline_messages,
+                provider_variants=llm_variants,
+                few_shot_support=few_shot_support,
+            )
+            if classification.should_reply and draft.strategy != "не отвечать"
+            else ()
         )
 
         log_event(
@@ -219,7 +258,7 @@ class ReplyEngineService:
             20,
             "reply.build.completed",
             "Reply собран.",
-            reference=reference,
+            reference=chat_reference,
             applied_provider=llm_applied,
             style_profile=style_selection.profile.key,
         )
@@ -227,7 +266,7 @@ class ReplyEngineService:
             kind="suggestion",
             chat_id=chat.id,
             chat_title=chat.title,
-            chat_reference=_build_chat_reference(chat),
+            chat_reference=chat_reference,
             suggestion=ReplySuggestion(
                 base_reply_text=draft.base_reply_text,
                 reply_messages=styled_reply.messages,
@@ -248,11 +287,24 @@ class ReplyEngineService:
                 source_message_preview=draft.source_message_preview,
                 focus_label=draft.focus_label,
                 focus_reason=draft.focus_reason,
+                focus_score=draft.focus_score,
+                selection_message_count=draft.selection_message_count,
+                source_message_key=draft.source_message_key,
+                source_local_message_id=draft.source_local_message_id,
+                source_runtime_message_id=draft.source_runtime_message_id,
+                source_backend=draft.source_backend,
                 reply_opportunity_mode=context_or_issue.reply_opportunity_mode,
                 reply_opportunity_reason=context_or_issue.reply_opportunity_reason,
+                reply_recommended=classification.should_reply and draft.strategy != "не отвечать",
                 few_shot_found=few_shot_support.support_used,
                 few_shot_match_count=draft.few_shot_match_count,
                 few_shot_notes=draft.few_shot_notes or few_shot_support.notes,
+                few_shot_matches=draft.few_shot_matches,
+                few_shot_strategy_bias=draft.few_shot_strategy_bias,
+                few_shot_length_hint=draft.few_shot_length_hint,
+                few_shot_rhythm_hint=draft.few_shot_rhythm_hint,
+                few_shot_dominant_topic_hint=draft.few_shot_dominant_topic_hint,
+                style_source_reason=style_selection.source_reason,
                 alternative_action=draft.alternative_action,
                 llm_refine_requested=llm_requested,
                 llm_refine_applied=llm_applied,

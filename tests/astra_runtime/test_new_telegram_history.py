@@ -6,6 +6,7 @@ from astra_runtime.chat_identity import build_runtime_only_chat_id
 from astra_runtime.new_telegram import (
     NewTelegramChatSummary,
     NewTelegramMessageHistory,
+    NewTelegramReplyWorkspace,
     NewTelegramRemoteMessage,
     NewTelegramRuntimeConfig,
 )
@@ -212,6 +213,78 @@ def test_new_telegram_message_history_reads_runtime_only_chat_without_legacy_wor
         assert workspace["replyContext"]["available"] is True
         assert workspace["replyContext"]["sourceMessageKey"] == "telegram:-100777:41"
         assert workspace["reply"]["actions"]["send"] is False
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_new_telegram_reply_workspace_builds_reply_from_same_runtime_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    async def run_assertions() -> None:
+        runtime = await _build_runtime(tmp_path, monkeypatch)
+        fake_client = _FakeHistoryClient(
+            chat=NewTelegramChatSummary(
+                telegram_chat_id=-100888,
+                title="Runtime reply",
+                chat_type="group",
+                username="runtime_reply",
+            ),
+            messages=(
+                _remote_message(
+                    41,
+                    direction="inbound",
+                    sender_id=11,
+                    sender_name="Анна",
+                    text="Сможешь посмотреть это сегодня?",
+                ),
+                _remote_message(
+                    52,
+                    direction="outbound",
+                    sender_id=7,
+                    sender_name="Михаил",
+                    text="Да, смотрю сейчас.",
+                    reply_to_telegram_message_id=41,
+                ),
+                _remote_message(
+                    53,
+                    direction="inbound",
+                    sender_id=11,
+                    sender_name="Анна",
+                    text="Если что, дай короткий апдейт.",
+                ),
+            ),
+        )
+        history = NewTelegramMessageHistory(
+            config=_build_config(tmp_path),
+            session_factory=runtime.session_factory,
+            client_factory=lambda _config: fake_client,
+            snapshot_ttl_seconds=60,
+        )
+        reply_workspace = NewTelegramReplyWorkspace(
+            settings=Settings(),
+            session_factory=runtime.session_factory,
+            history=history,
+        )
+
+        workspace = await history.get_chat_workspace(
+            build_runtime_only_chat_id(-100888),
+            limit=3,
+        )
+        reply_payload, reply_context = await reply_workspace.build_preview_from_workspace(workspace)
+
+        assert reply_payload["kind"] == "suggestion"
+        assert reply_payload["suggestion"] is not None
+        assert reply_context["available"] is True
+        assert reply_payload["suggestion"]["trigger"]["messageKey"] == reply_context["sourceMessageKey"]
+        assert reply_payload["suggestion"]["focus"]["label"] == reply_context["focusLabel"]
+        assert reply_payload["suggestion"]["opportunity"]["mode"] == reply_context["replyOpportunityMode"]
+        assert reply_payload["suggestion"]["sourceBackend"] == "new_runtime"
+        assert reply_payload["suggestion"]["trigger"]["messageKey"] in {
+            message["messageKey"] for message in workspace["messages"]
+        }
 
         await runtime.dispose()
 

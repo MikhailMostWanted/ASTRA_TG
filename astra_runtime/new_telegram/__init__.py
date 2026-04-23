@@ -15,6 +15,7 @@ from astra_runtime.new_telegram.auth import (
 )
 from astra_runtime.new_telegram.config import NewTelegramRuntimeConfig
 from astra_runtime.new_telegram.history import NewTelegramMessageHistory
+from astra_runtime.new_telegram.reply import NewTelegramReplyWorkspace
 from astra_runtime.new_telegram.runtime import NewTelegramRuntimeService
 from astra_runtime.new_telegram.transport import (
     NewTelegramAccount,
@@ -48,6 +49,7 @@ __all__ = [
     "NewTelegramDialogSummary",
     "NewTelegramMessageHistory",
     "NewTelegramPasswordRequiredError",
+    "NewTelegramReplyWorkspace",
     "NewTelegramRemoteMessage",
     "build_new_telegram_auth_client",
     "build_new_telegram_history_client",

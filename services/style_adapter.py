@@ -29,17 +29,30 @@ class StyleAdapter:
         draft_text: str,
         profile: StyleProfileSnapshot,
         strategy: str,
+        few_shot_support=None,
     ) -> StyledReply:
         original = _normalize_spaces(draft_text)
         if not original:
             return StyledReply(messages=(), notes=("Базовый черновик пустой.",))
 
-        compact = self._compact_text(original, profile)
+        compact = self._compact_text(
+            original,
+            profile,
+            prefer_short=bool(getattr(few_shot_support, "length_hint", None) == "short"),
+        )
         punctuation_changed = compact != original
-        segments = self._split_into_messages(compact, profile)
+        segments = self._split_into_messages(
+            compact,
+            profile,
+            prefer_series=bool(getattr(few_shot_support, "rhythm_hint", None) == "series"),
+        )
         opener_added = False
         if segments:
-            updated_first = self._ensure_opener(segments[0], profile)
+            updated_first = self._ensure_opener(
+                segments[0],
+                profile,
+                opener_hint=getattr(few_shot_support, "opener_hint", None),
+            )
             opener_added = updated_first != segments[0]
             segments[0] = updated_first
 
@@ -62,11 +75,20 @@ class StyleAdapter:
 
         return StyledReply(messages=tuple(segments), notes=tuple(notes))
 
-    def _compact_text(self, text: str, profile: StyleProfileSnapshot) -> str:
+    def _compact_text(
+        self,
+        text: str,
+        profile: StyleProfileSnapshot,
+        *,
+        prefer_short: bool,
+    ) -> str:
         compact = text
         for source, target in SHORT_REPLACEMENTS.items():
             compact = compact.replace(source, target)
             compact = compact.replace(source.capitalize(), target)
+        if prefer_short:
+            compact = compact.replace(" и вернусь с ответом", " и вернусь")
+            compact = compact.replace(" и вернусь коротко", " и вернусь")
 
         compact = re.sub(r"\.{2,}", ".", compact)
         if profile.punctuation_level == "low":
@@ -82,6 +104,8 @@ class StyleAdapter:
         self,
         text: str,
         profile: StyleProfileSnapshot,
+        *,
+        prefer_series: bool,
     ) -> list[str]:
         if profile.message_mode == "one":
             return [text]
@@ -98,7 +122,7 @@ class StyleAdapter:
         for part in parts:
             expanded.extend(self._split_long_part(part, profile))
 
-        if len(expanded) == 1 and profile.target_message_count > 1:
+        if len(expanded) == 1 and (profile.target_message_count > 1 or prefer_series):
             expanded = self._split_long_part(expanded[0], profile, aggressive=True)
         return [part for part in expanded if part]
 
@@ -122,17 +146,30 @@ class StyleAdapter:
             return [part]
         return cleaned
 
-    def _ensure_opener(self, message: str, profile: StyleProfileSnapshot) -> str:
-        if not profile.preferred_openers:
-            return message
-
+    def _ensure_opener(
+        self,
+        message: str,
+        profile: StyleProfileSnapshot,
+        *,
+        opener_hint: str | None,
+    ) -> str:
         lowered = message.casefold()
-        if any(lowered.startswith(f"{opener} ") or lowered == opener for opener in profile.preferred_openers):
+        opener_bank = tuple(
+            dict.fromkeys(
+                [
+                    *(profile.preferred_openers or ()),
+                    *((opener_hint,) if opener_hint else ()),
+                ]
+            )
+        )
+        if not opener_bank:
+            return message
+        if any(lowered.startswith(f"{opener} ") or lowered == opener for opener in opener_bank):
             return message
 
         if len(message) < 10:
             return message
-        return f"{profile.preferred_openers[0]} {message}"
+        return f"{opener_bank[0]} {message}"
 
     def _finalize_segment(self, segment: str, profile: StyleProfileSnapshot) -> str:
         finalized = _strip_edge_punctuation(_normalize_spaces(segment))

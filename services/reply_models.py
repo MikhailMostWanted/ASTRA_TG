@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from models import Chat, ChatMemory, Message, PersonMemory
 from services.providers.models import LLMDecisionReason
+from services.reply_examples_models import ReplyExampleMatch
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,9 +21,13 @@ class ReplyContext:
     broader_tail_messages: tuple[Message, ...]
     latest_message: Message
     target_message: Message
+    target_message_key: str | None
+    target_local_message_id: int | None
+    target_runtime_message_id: int | None
     focus_label: str
     focus_reason: str
     focus_score: float
+    selection_message_count: int
     chat_memory: ChatMemory | None
     person_memory: PersonMemory | None
     linked_people: tuple[PersonMemory, ...]
@@ -35,6 +40,15 @@ class ReplyContext:
     local_dynamics: tuple[str, ...]
     reply_opportunity_mode: str
     reply_opportunity_reason: str
+    workspace_source: str
+    history_limit: int | None
+    history_returned_count: int | None
+    freshness_mode: str | None
+    freshness_label: str | None
+    freshness_detail: str | None
+    availability_flags: tuple[str, ...]
+    workspace_degraded: bool
+    workspace_degraded_reason: str | None
 
     @property
     def has_memory_support(self) -> bool:
@@ -60,14 +74,25 @@ class ReplyDraft:
     risk_label: str
     confidence: float
     strategy: str
-    source_message_id: int
+    source_message_id: int | None
     chat_id: int
     situation: str
     source_message_preview: str
     focus_label: str
     focus_reason: str
+    focus_score: float | None = None
+    selection_message_count: int = 0
+    source_message_key: str | None = None
+    source_local_message_id: int | None = None
+    source_runtime_message_id: int | None = None
+    source_backend: str | None = None
     few_shot_match_count: int = 0
     few_shot_notes: tuple[str, ...] = ()
+    few_shot_matches: tuple[ReplyExampleMatch, ...] = ()
+    few_shot_strategy_bias: str | None = None
+    few_shot_length_hint: str | None = None
+    few_shot_rhythm_hint: str | None = None
+    few_shot_dominant_topic_hint: str | None = None
     alternative_action: str | None = None
 
 
@@ -94,18 +119,33 @@ class ReplySuggestion:
     risk_label: str
     confidence: float
     strategy: str
-    source_message_id: int
+    source_message_id: int | None
     chat_id: int
     situation: str
     source_message_preview: str
     focus_label: str
     focus_reason: str
+    focus_score: float | None
+    selection_message_count: int
+    source_message_key: str | None
+    source_local_message_id: int | None
+    source_runtime_message_id: int | None
+    source_backend: str | None
     reply_opportunity_mode: str
     reply_opportunity_reason: str
+    reply_recommended: bool
     few_shot_found: bool
     few_shot_match_count: int
     few_shot_notes: tuple[str, ...]
+    few_shot_matches: tuple[ReplyExampleMatch, ...] = ()
+    few_shot_strategy_bias: str | None = None
+    few_shot_length_hint: str | None = None
+    few_shot_rhythm_hint: str | None = None
+    few_shot_dominant_topic_hint: str | None = None
+    style_source_reason: str | None = None
     alternative_action: str | None = None
+    fallback_code: str | None = None
+    fallback_reason: str | None = None
     llm_refine_requested: bool = False
     llm_refine_applied: bool = False
     llm_refine_provider: str | None = None

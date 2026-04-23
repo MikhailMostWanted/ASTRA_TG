@@ -59,14 +59,27 @@ class ReplyStrategyResolver:
             risk_label=risk_label,
             confidence=confidence,
             strategy=strategy,
-            source_message_id=context.target_message.id,
+            source_message_id=context.target_local_message_id,
             chat_id=context.chat.id,
             situation=classification.situation,
             source_message_preview=source_preview,
             focus_label=focus_label,
             focus_reason=focus_reason,
+            focus_score=context.focus_score,
+            selection_message_count=context.selection_message_count,
+            source_message_key=context.target_message_key,
+            source_local_message_id=context.target_local_message_id,
+            source_runtime_message_id=context.target_runtime_message_id,
+            source_backend=context.workspace_source,
             few_shot_match_count=few_shot_support.match_count if few_shot_support else 0,
             few_shot_notes=few_shot_support.notes if few_shot_support else (),
+            few_shot_matches=few_shot_support.matches if few_shot_support else (),
+            few_shot_strategy_bias=few_shot_support.strategy_bias if few_shot_support else None,
+            few_shot_length_hint=few_shot_support.length_hint if few_shot_support else None,
+            few_shot_rhythm_hint=few_shot_support.rhythm_hint if few_shot_support else None,
+            few_shot_dominant_topic_hint=(
+                few_shot_support.dominant_topic_hint if few_shot_support else None
+            ),
             alternative_action=alternative_action,
         )
 
@@ -137,78 +150,66 @@ class ReplyStrategyResolver:
         follow_up_after_self = context.reply_opportunity_mode == "follow_up_after_self"
         if strategy == "не отвечать":
             return (
-                "Сейчас лучше не отвечать сразу. Тут нет явного запроса, "
-                "а быстрый ответ только добавит шума."
+                "Сейчас лучше не писать. Явного повода нет, а лишний follow-up тут только собьёт темп."
             )
         if follow_up_after_self:
             if strategy == "снять напряжение":
                 return (
-                    f"Не пропал{topic_chunk}. Держу хвост в работе и вернусь с коротким "
-                    "спокойным апдейтом без лишней резкости."
+                    f"Не пропал{topic_chunk}. Хвост держу в работе, вернусь коротко и спокойно."
                 )
             if strategy == "уточнить":
                 if short_mode:
                     return (
-                        f"Чтобы не потерять хвост{topic_chunk}, уточню одно: "
-                        "что для тебя сейчас самое срочное?"
+                        f"Чтобы не потерять хвост{topic_chunk}, уточню одно: что сейчас важнее всего?"
                     )
                 return (
-                    f"Чтобы не потерять хвост{topic_chunk}, уточни, пожалуйста, "
-                    "что сейчас самое срочное, и я вернусь точнее."
+                    f"Чтобы не потерять хвост{topic_chunk}, уточни одно: что сейчас важнее всего? "
+                    "Тогда вернусь точнее."
                 )
             if strategy == "поддержать":
                 return (
-                    f"По теме{topic_chunk} я всё ещё в контексте. Если нужен короткий follow-up, "
-                    "добью его без лишней воды."
+                    f"По теме{topic_chunk} я в контексте. Если нужен отдельный follow-up, добью его коротко."
                 )
             if strategy_bias == "promise_update":
                 return (
-                    f"По теме{topic_chunk} хвост у меня в работе. Если приоритет сдвинулся, "
-                    "дай знак, и я вернусь коротким апдейтом."
+                    f"По теме{topic_chunk} хвост у меня в работе. Если приоритет сдвинулся, дай знак."
                 )
             return (
-                f"По теме{topic_chunk} хвост у меня в работе. Если нужен отдельный follow-up, "
-                "вернусь коротко и по делу."
+                f"По теме{topic_chunk} хвост у меня в работе. Если нужен отдельный follow-up, вернусь коротко."
             )
         if strategy == "снять напряжение":
             if strategy_bias == "promise_update":
                 return (
-                    f"Понял{topic_chunk}. Спокойно проверю детали и вернусь с коротким апдейтом "
-                    "без лишней резкости."
+                    f"Понял{topic_chunk}. Спокойно гляну и вернусь коротким апдейтом."
                 )
             return (
-                f"Понял{topic_chunk}. Спокойно проверю детали и вернусь с конкретным апдейтом "
-                "без лишних эмоций."
+                f"Понял{topic_chunk}. Спокойно гляну детали и вернусь коротко."
             )
         if strategy == "уточнить":
             if short_mode:
                 return (
-                    f"Понял{topic_chunk}. Что для тебя сейчас самое срочное? "
-                    "Тогда отвечу точнее и без лишней воды."
+                    f"Понял{topic_chunk}. Что сейчас важнее всего? Тогда отвечу точнее."
                 )
             return (
-                f"Вижу вопрос{topic_chunk}. Уточни, пожалуйста, что для тебя сейчас самое срочное, "
-                "и я отвечу точнее."
+                f"Тут вопрос{topic_chunk}. Уточни одно: что сейчас важнее всего? Тогда отвечу точнее."
             )
         if strategy == "поддержать":
-            return f"Да, понял{topic_chunk}. Я на связи, если нужно, продолжим отсюда."
+            return f"Да, понял{topic_chunk}. Если что, продолжим отсюда."
         if strategy == "поставить границу":
             return (
-                f"Вижу запрос{topic_chunk}. Давай без резкости: я отвечу по делу, "
-                "как только проверю детали."
+                f"Тут запрос{topic_chunk}. Давай спокойно: отвечу по делу, как только гляну детали."
             )
         if classification.has_request or classification.has_question:
             if strategy_bias == "promise_update":
                 return (
-                    f"Понял{topic_chunk}. Смотрю это сейчас и вернусь с коротким апдейтом "
-                    "чуть позже."
+                    f"Понял{topic_chunk}. Смотрю это сейчас и вернусь с апдейтом."
                 )
-            return (
-                f"Понял{topic_chunk}. Смотрю это сейчас и вернусь с конкретным апдейтом чуть позже."
-            )
+            if short_mode:
+                return f"Понял{topic_chunk}. Гляну и вернусь."
+            return f"Понял{topic_chunk}. Гляну и вернусь с ответом."
         if short_mode:
-            return f"Понял{topic_chunk}. Посмотрю и коротко вернусь."
-        return f"Понял{topic_chunk}. Я это посмотрю и коротко вернусь с ответом."
+            return f"Понял{topic_chunk}. Гляну и вернусь."
+        return f"Понял{topic_chunk}. Гляну и коротко вернусь."
 
     def _build_reason_short(
         self,

@@ -44,24 +44,16 @@ from services.memory_formatter import MemoryFormatter
 from services.operational_state import OperationalStateService
 from services.operational_tools import OperationalBackupService, OperationalExportService
 from services.people_memory_builder import PeopleMemoryBuilder
-from services.persona_adapter import PersonaAdapter
-from services.persona_core import PersonaCoreService
-from services.persona_guardrails import PersonaGuardrails
 from services.providers.digest_refiner import DigestLLMRefiner
 from services.providers.manager import ProviderManager
-from services.providers.reply_refiner import ReplyLLMRefiner
+from services.reply_payload import build_reply_context_payload, decorate_reply_payload
 from services.reminder_extractor import ReminderExtractor
 from services.reminder_formatter import ReminderFormatter
 from services.reminder_service import ReminderService
-from services.reply_classifier import ReplyClassifier
-from services.reply_context_builder import ReplyContextBuilder
 from services.reply_engine import ReplyEngineService
-from services.reply_examples_retriever import ReplyExamplesRetriever
-from services.reply_strategy import ReplyStrategyResolver
+from services.reply_service_factory import build_reply_service
 from services.source_registry import SourceRegistryService
 from services.status_summary import BotStatusService
-from services.style_adapter import StyleAdapter
-from services.style_selector import StyleSelectorService
 from services.system_health import SystemHealthService
 from services.system_readiness import OperationalFacts, OperationalReport, SystemReadinessService
 from services.telegram_lookup import TelegramChatResolver
@@ -156,6 +148,7 @@ class DesktopBridge:
             config=NewTelegramRuntimeConfig.from_settings(self.settings),
             auth_store=DatabaseNewTelegramAuthSessionStore(self.runtime.session_factory),
             session_factory=self.runtime.session_factory,
+            settings=self.settings,
         )
         self._runtime_manager.register_backend(self._new_runtime_service)
 
@@ -630,10 +623,9 @@ class DesktopBridge:
                 build_chat_reference(chat),
                 use_provider_refinement=use_provider_refinement,
             )
-            fullaccess_status = await self._build_fullaccess_auth_service(session).build_status_report()
-            return self._decorate_reply_payload(
+            return decorate_reply_payload(
                 serialize_reply_result(result),
-                write_ready=fullaccess_status.ready_for_manual_send,
+                send_enabled=False,
             )
 
     async def send_chat_message(
@@ -1385,42 +1377,7 @@ class DesktopBridge:
         )
 
     def _build_reply_service(self, session) -> ReplyEngineService:
-        message_repository = MessageRepository(session)
-        chat_memory_repository = ChatMemoryRepository(session)
-        person_memory_repository = PersonMemoryRepository(session)
-        setting_repository = SettingRepository(session)
-        provider_manager = ProviderManager.from_settings(
-            self.settings,
-            setting_repository=setting_repository,
-        )
-        return ReplyEngineService(
-            chat_repository=ChatRepository(session),
-            message_repository=message_repository,
-            chat_memory_repository=chat_memory_repository,
-            person_memory_repository=person_memory_repository,
-            context_builder=ReplyContextBuilder(
-                message_repository=message_repository,
-                chat_memory_repository=chat_memory_repository,
-                person_memory_repository=person_memory_repository,
-            ),
-            classifier=ReplyClassifier(),
-            strategy_resolver=ReplyStrategyResolver(),
-            style_selector=StyleSelectorService(
-                style_profile_repository=StyleProfileRepository(session),
-                chat_style_override_repository=ChatStyleOverrideRepository(session),
-                chat_memory_repository=chat_memory_repository,
-                person_memory_repository=person_memory_repository,
-            ),
-            style_adapter=StyleAdapter(),
-            persona_core_service=PersonaCoreService(setting_repository),
-            persona_adapter=PersonaAdapter(),
-            persona_guardrails=PersonaGuardrails(),
-            reply_examples_retriever=ReplyExamplesRetriever(
-                reply_example_repository=ReplyExampleRepository(session),
-            ),
-            reply_refiner=ReplyLLMRefiner(provider_manager=provider_manager),
-            setting_repository=setting_repository,
-        )
+        return build_reply_service(self.settings, session)
 
     def _build_digest_service(self, session) -> DigestEngineService:
         setting_repository = SettingRepository(session)
@@ -1475,13 +1432,14 @@ class DesktopBridge:
             )
             for message in messages
         ]
-        reply_payload = self._decorate_reply_payload(
+        reply_payload = decorate_reply_payload(
             serialize_reply_result(reply_result),
-            write_ready=fullaccess_status.ready_for_manual_send,
+            send_enabled=False,
         )
-        reply_context = self._build_reply_context_payload(
+        reply_context = build_reply_context_payload(
             reply_payload=reply_payload,
             message_payloads=serialized_messages,
+            source_backend="legacy",
         )
         freshness = await self._build_chat_freshness(
             session,
@@ -1549,103 +1507,17 @@ class DesktopBridge:
             "refreshedAt": serialize_datetime(datetime.now(timezone.utc)),
         }
 
-    def _decorate_reply_payload(
-        self,
-        payload: dict[str, Any],
-        *,
-        write_ready: bool,
-    ) -> dict[str, Any]:
-        payload["actions"] = {
-            "copy": True,
-            "refresh": True,
-            "pasteToTelegram": False,
-            "send": write_ready,
-            "markSent": True,
-            "variants": {
-                "short": True,
-                "normal": True,
-                "softer": True,
-                "harder": False,
-                "myStyle": True,
-            },
-            "disabledReason": None if write_ready else "Write-path через full-access сейчас недоступен.",
-        }
-        return payload
-
     def _build_reply_context_payload(
         self,
         *,
         reply_payload: dict[str, Any],
         message_payloads: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        suggestion = reply_payload.get("suggestion") if isinstance(reply_payload.get("suggestion"), dict) else None
-        if suggestion is None:
-            return {
-                "available": False,
-                "sourceBackend": "legacy",
-                "focusLabel": None,
-                "focusReason": reply_payload.get("errorMessage"),
-                "replyOpportunityMode": None,
-                "replyOpportunityReason": None,
-                "sourceMessageKey": None,
-                "sourceRuntimeMessageId": None,
-                "sourceLocalMessageId": None,
-                "sourceSenderName": reply_payload.get("sourceSenderName"),
-                "sourceMessagePreview": reply_payload.get("sourceMessagePreview"),
-                "sourceSentAt": None,
-                "draftScopeBasis": None,
-                "draftScopeKey": None,
-            }
-
-        source_message_id = suggestion.get("sourceMessageId")
-        source_message = next(
-            (
-                message
-                for message in message_payloads
-                if source_message_id is not None and message.get("localMessageId") == source_message_id
-            ),
-            None,
+        return build_reply_context_payload(
+            reply_payload=reply_payload,
+            message_payloads=message_payloads,
+            source_backend="legacy",
         )
-        source_message_preview = (
-            reply_payload.get("sourceMessagePreview")
-            or suggestion.get("sourceMessagePreview")
-            or (source_message.get("preview") if source_message is not None else None)
-        )
-        source_sender_name = (
-            reply_payload.get("sourceSenderName")
-            or (source_message.get("senderName") if source_message is not None else None)
-        )
-        draft_scope_basis = {
-            "sourceMessageKey": source_message.get("messageKey") if source_message is not None else None,
-            "sourceMessageId": source_message_id,
-            "runtimeMessageId": source_message.get("runtimeMessageId") if source_message is not None else None,
-            "focusLabel": suggestion.get("focusLabel"),
-            "sourceMessagePreview": source_message_preview,
-            "replyOpportunityMode": suggestion.get("replyOpportunityMode"),
-        }
-        return {
-            "available": True,
-            "sourceBackend": "legacy",
-            "focusLabel": suggestion.get("focusLabel"),
-            "focusReason": suggestion.get("focusReason"),
-            "replyOpportunityMode": suggestion.get("replyOpportunityMode"),
-            "replyOpportunityReason": suggestion.get("replyOpportunityReason"),
-            "sourceMessageKey": source_message.get("messageKey") if source_message is not None else None,
-            "sourceRuntimeMessageId": source_message.get("runtimeMessageId") if source_message is not None else None,
-            "sourceLocalMessageId": source_message_id,
-            "sourceSenderName": source_sender_name,
-            "sourceMessagePreview": draft_scope_basis["sourceMessagePreview"],
-            "sourceSentAt": source_message.get("sentAt") if source_message is not None else None,
-            "draftScopeBasis": draft_scope_basis,
-            "draftScopeKey": "::".join(
-                [
-                    str(draft_scope_basis["sourceMessageKey"] or draft_scope_basis["sourceMessageId"] or "none"),
-                    str(draft_scope_basis["focusLabel"] or "none"),
-                    str(draft_scope_basis["replyOpportunityMode"] or "none"),
-                    str(draft_scope_basis["sourceMessagePreview"] or "none"),
-                ]
-            ),
-        }
 
     def _build_history_payload_from_messages(
         self,

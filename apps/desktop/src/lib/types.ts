@@ -391,6 +391,68 @@ export interface LLMDecisionReasonPayload {
   flags: string[];
 }
 
+export interface ReplyTriggerPayload {
+  messageKey: string | null;
+  localMessageId: number | null;
+  runtimeMessageId: number | null;
+  senderName: string | null;
+  preview: string | null;
+  sentAt: string | null;
+  backend: string | null;
+}
+
+export interface ReplyFocusPayload {
+  label: string | null;
+  reason: string | null;
+  score: number | null;
+  selectionMessageCount: number;
+}
+
+export interface ReplyOpportunityPayload {
+  mode: string | null;
+  reason: string | null;
+  replyRecommended: boolean;
+}
+
+export interface ReplyRetrievalHitPayload {
+  id: number;
+  chatId: number;
+  chatTitle: string;
+  inboundText: string;
+  outboundText: string;
+  exampleType: string;
+  sourcePersonKey: string | null;
+  qualityScore: number | null;
+  score: number | null;
+  createdAt: string | null;
+  reasons: string[];
+}
+
+export interface ReplyRetrievalPayload {
+  used: boolean;
+  matchCount: number;
+  strategyBias: string | null;
+  lengthHint: string | null;
+  rhythmHint: string | null;
+  dominantTopicHint: string | null;
+  notes: string[];
+  hits: ReplyRetrievalHitPayload[];
+}
+
+export interface ReplyStylePayload {
+  profileKey: string | null;
+  source: string | null;
+  sourceReason: string | null;
+  notes: string[];
+  personaApplied: boolean;
+  personaNotes: string[];
+}
+
+export interface ReplyFallbackPayload {
+  code: string | null;
+  reason: string | null;
+}
+
 export interface ReplySuggestion {
   baseReplyText: string | null;
   replyMessages: string[];
@@ -412,12 +474,30 @@ export interface ReplySuggestion {
   sourceMessagePreview: string | null;
   focusLabel: string | null;
   focusReason: string | null;
+  focusScore?: number | null;
+  selectionMessageCount?: number;
+  sourceMessageKey?: string | null;
+  sourceLocalMessageId?: number | null;
+  sourceRuntimeMessageId?: number | null;
+  sourceBackend?: string | null;
   replyOpportunityMode: string | null;
   replyOpportunityReason: string | null;
+  replyRecommended?: boolean;
   fewShotFound: boolean;
   fewShotMatchCount: number;
   fewShotNotes: string[];
+  fewShotStrategyBias?: string | null;
+  fewShotLengthHint?: string | null;
+  fewShotRhythmHint?: string | null;
+  fewShotDominantTopicHint?: string | null;
+  styleSourceReason?: string | null;
   alternativeAction: string | null;
+  trigger?: ReplyTriggerPayload | null;
+  focus?: ReplyFocusPayload | null;
+  opportunity?: ReplyOpportunityPayload | null;
+  retrieval?: ReplyRetrievalPayload | null;
+  style?: ReplyStylePayload | null;
+  fallback?: ReplyFallbackPayload | null;
   llmRefineRequested: boolean;
   llmRefineApplied: boolean;
   llmRefineProvider: string | null;

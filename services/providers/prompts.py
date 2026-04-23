@@ -25,10 +25,23 @@ def build_reply_refine_request(
     recent_messages = tuple(context.working_messages[-MAX_CONTEXT_MESSAGES:])
     context_lines = [
         f"Чат: {context.chat.title}",
+        f"Источник: {context.workspace_source}",
         f"Фокус: {context.focus_label}",
         f"Последнее входящее: {context.target_message.sender_name or 'собеседник'}: {context.target_message.normalized_text or context.target_message.raw_text}",
         f"Почему сейчас: {context.reply_opportunity_reason}",
     ]
+    if context.target_message_key:
+        context_lines.append(f"Trigger key: {context.target_message_key}")
+    if context.history_returned_count is not None or context.history_limit is not None:
+        context_lines.append(
+            f"Хвост: {context.history_returned_count or 0}/{context.history_limit or len(context.recent_messages)}"
+        )
+    if context.freshness_label:
+        context_lines.append(f"Freshness: {context.freshness_label}")
+    if context.workspace_degraded and context.workspace_degraded_reason:
+        context_lines.append(f"Degraded: {context.workspace_degraded_reason}")
+    if context.availability_flags:
+        context_lines.append("Availability: " + ", ".join(context.availability_flags[:6]))
     if classification is not None:
         context_lines.append(f"Ситуация: {classification.situation}")
     if context.chat_memory and context.chat_memory.current_state:
@@ -55,8 +68,10 @@ def build_reply_refine_request(
     ]
     baseline_lines = [f"- {message}" for message in baseline_messages]
     retrieval_lines = _collect_reply_examples(few_shot_support)
+    retrieval_influence_lines = _collect_retrieval_influence(few_shot_support)
     persona_constraints = _collect_persona_constraints(persona_state)
     style_constraints = _collect_style_constraints(style_selection.profile)
+    style_constraints += _collect_style_influence(style_selection, few_shot_support)
 
     user_input = "\n".join(
         [
@@ -72,6 +87,9 @@ def build_reply_refine_request(
             "Похожие реальные ответы:",
             *(retrieval_lines or ["- нет"]),
             "",
+            "Как они должны повлиять:",
+            *(retrieval_influence_lines or ["- держись ближе к живому короткому тону без копипаста"]),
+            "",
             "Ограничения стиля:",
             *style_constraints,
             "",
@@ -80,10 +98,11 @@ def build_reply_refine_request(
         ]
     )
     system_instructions = (
-        "Ты пишешь живой ответ в обычном Telegram-чате от лица владельца аккаунта. "
-        "Не играй ассистента. Никакого канцелярита, литературщины, markdown и пояснений. "
-        "Опирайся только на контекст, открытые хвосты и стиль из примеров. "
-        "Не придумывай новые факты, сроки, числа, имена, обещания, ссылки или @username. "
+        "Пиши как живой человек в переписке. Ты не ассистент и не коуч. "
+        "Никакого markdown, канцелярита, литературщины, умных вступлений и пояснений. "
+        "Опирайся только на контекст, trigger, открытые хвосты и реальные ответы владельца. "
+        "Не выдумывай факты, сроки, числа, имена, обещания, ссылки, @username или новые темы. "
+        "Лучше короче и разговорнее, чем красивее. "
         "Верни только JSON-объект вида "
         "{\"primary\": [str], \"short\": [str], \"soft\": [str], \"style\": [str]}. "
         "В каждом поле 1-4 коротких телеграм-сообщения. "
@@ -188,4 +207,28 @@ def _collect_reply_examples(few_shot_support) -> tuple[str, ...]:
         lines.append(
             f"- пример {index}: входящее={match.inbound_text} | реальный ответ={match.outbound_text}"
         )
+    return tuple(lines)
+
+
+def _collect_retrieval_influence(few_shot_support) -> tuple[str, ...]:
+    if few_shot_support is None or not few_shot_support.support_used:
+        return ()
+    lines: list[str] = []
+    if few_shot_support.strategy_bias:
+        lines.append(f"- strategy_bias: {few_shot_support.strategy_bias}")
+    if few_shot_support.length_hint:
+        lines.append(f"- length_hint: {few_shot_support.length_hint}")
+    if few_shot_support.rhythm_hint:
+        lines.append(f"- rhythm_hint: {few_shot_support.rhythm_hint}")
+    if few_shot_support.opener_hint:
+        lines.append(f"- opener_hint: {few_shot_support.opener_hint}")
+    if few_shot_support.dominant_topic_hint:
+        lines.append(f"- dominant_topic_hint: {few_shot_support.dominant_topic_hint}")
+    return tuple(lines)
+
+
+def _collect_style_influence(style_selection, few_shot_support) -> tuple[str, ...]:
+    lines = [f"- source_reason: {style_selection.source_reason}"]
+    if few_shot_support is not None and few_shot_support.support_used and few_shot_support.opener_hint:
+        lines.append(f"- opener_hint_from_real_replies: {few_shot_support.opener_hint}")
     return tuple(lines)

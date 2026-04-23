@@ -113,7 +113,6 @@ class ReplyRefinementGuardrails:
             "слишком_ботски",
             "слишком_грубо",
             "анти_паттерн",
-            "слишком_длинно",
             "явный_оффтопик",
         }
         if persona_decision.used_fallback or any(flag in hard_flags for flag in combined_flags):

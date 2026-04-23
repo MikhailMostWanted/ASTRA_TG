@@ -79,7 +79,14 @@ export function normalizeReplySuggestion(value: unknown): ReplySuggestion | null
   const llmStatus = isPlainObject(value.llmStatus) ? value.llmStatus : null;
   const llmDebug = isPlainObject(value.llmDebug) ? value.llmDebug : null;
   const decisionReason = llmDebug && isPlainObject(llmDebug.decisionReason) ? llmDebug.decisionReason : null;
+  const trigger = isPlainObject(value.trigger) ? value.trigger : null;
+  const focus = isPlainObject(value.focus) ? value.focus : null;
+  const opportunity = isPlainObject(value.opportunity) ? value.opportunity : null;
+  const retrieval = isPlainObject(value.retrieval) ? value.retrieval : null;
+  const style = isPlainObject(value.style) ? value.style : null;
+  const fallback = isPlainObject(value.fallback) ? value.fallback : null;
   const rawVariants = Array.isArray(value.variants) ? value.variants : [];
+  const retrievalHits = retrieval && Array.isArray(retrieval.hits) ? retrieval.hits : [];
 
   return {
     baseReplyText: safeStringOrNull(value.baseReplyText),
@@ -102,12 +109,97 @@ export function normalizeReplySuggestion(value: unknown): ReplySuggestion | null
     sourceMessagePreview: safeStringOrNull(value.sourceMessagePreview),
     focusLabel: safeStringOrNull(value.focusLabel),
     focusReason: safeStringOrNull(value.focusReason),
+    focusScore: safeNumberOrNull(value.focusScore),
+    selectionMessageCount: safeNumberOrNull(value.selectionMessageCount) ?? 0,
+    sourceMessageKey: safeStringOrNull(value.sourceMessageKey),
+    sourceLocalMessageId: safeNumberOrNull(value.sourceLocalMessageId),
+    sourceRuntimeMessageId: safeNumberOrNull(value.sourceRuntimeMessageId),
+    sourceBackend: safeStringOrNull(value.sourceBackend),
     replyOpportunityMode: safeStringOrNull(value.replyOpportunityMode),
     replyOpportunityReason: safeStringOrNull(value.replyOpportunityReason),
+    replyRecommended: safeBoolean(value.replyRecommended, true),
     fewShotFound: safeBoolean(value.fewShotFound),
     fewShotMatchCount: safeNumberOrNull(value.fewShotMatchCount) ?? 0,
     fewShotNotes: safeStringArray(value.fewShotNotes),
+    fewShotStrategyBias: safeStringOrNull(value.fewShotStrategyBias),
+    fewShotLengthHint: safeStringOrNull(value.fewShotLengthHint),
+    fewShotRhythmHint: safeStringOrNull(value.fewShotRhythmHint),
+    fewShotDominantTopicHint: safeStringOrNull(value.fewShotDominantTopicHint),
+    styleSourceReason: safeStringOrNull(value.styleSourceReason),
     alternativeAction: safeStringOrNull(value.alternativeAction),
+    trigger: trigger
+      ? {
+          messageKey: safeStringOrNull(trigger.messageKey),
+          localMessageId: safeNumberOrNull(trigger.localMessageId),
+          runtimeMessageId: safeNumberOrNull(trigger.runtimeMessageId),
+          senderName: safeStringOrNull(trigger.senderName),
+          preview: safeStringOrNull(trigger.preview),
+          sentAt: safeStringOrNull(trigger.sentAt),
+          backend: safeStringOrNull(trigger.backend),
+        }
+      : null,
+    focus: focus
+      ? {
+          label: safeStringOrNull(focus.label),
+          reason: safeStringOrNull(focus.reason),
+          score: safeNumberOrNull(focus.score),
+          selectionMessageCount: safeNumberOrNull(focus.selectionMessageCount) ?? 0,
+        }
+      : null,
+    opportunity: opportunity
+      ? {
+          mode: safeStringOrNull(opportunity.mode),
+          reason: safeStringOrNull(opportunity.reason),
+          replyRecommended: safeBoolean(opportunity.replyRecommended, true),
+        }
+      : null,
+    retrieval: retrieval
+      ? {
+          used: safeBoolean(retrieval.used),
+          matchCount: safeNumberOrNull(retrieval.matchCount) ?? 0,
+          strategyBias: safeStringOrNull(retrieval.strategyBias),
+          lengthHint: safeStringOrNull(retrieval.lengthHint),
+          rhythmHint: safeStringOrNull(retrieval.rhythmHint),
+          dominantTopicHint: safeStringOrNull(retrieval.dominantTopicHint),
+          notes: safeStringArray(retrieval.notes),
+          hits: retrievalHits
+            .map((item) => {
+              if (!isPlainObject(item)) {
+                return null;
+              }
+              return {
+                id: safeNumberOrNull(item.id) ?? 0,
+                chatId: safeNumberOrNull(item.chatId) ?? 0,
+                chatTitle: safeString(item.chatTitle, "Без названия"),
+                inboundText: safeString(item.inboundText),
+                outboundText: safeString(item.outboundText),
+                exampleType: safeString(item.exampleType, "reply"),
+                sourcePersonKey: safeStringOrNull(item.sourcePersonKey),
+                qualityScore: safeNumberOrNull(item.qualityScore),
+                score: safeNumberOrNull(item.score),
+                createdAt: safeStringOrNull(item.createdAt),
+                reasons: safeStringArray(item.reasons),
+              };
+            })
+            .filter((item): item is NonNullable<typeof item> => Boolean(item)),
+        }
+      : null,
+    style: style
+      ? {
+          profileKey: safeStringOrNull(style.profileKey),
+          source: safeStringOrNull(style.source),
+          sourceReason: safeStringOrNull(style.sourceReason),
+          notes: safeStringArray(style.notes),
+          personaApplied: safeBoolean(style.personaApplied),
+          personaNotes: safeStringArray(style.personaNotes),
+        }
+      : null,
+    fallback: fallback
+      ? {
+          code: safeStringOrNull(fallback.code),
+          reason: safeStringOrNull(fallback.reason),
+        }
+      : null,
     llmRefineRequested: safeBoolean(value.llmRefineRequested),
     llmRefineApplied: safeBoolean(value.llmRefineApplied),
     llmRefineProvider: safeStringOrNull(value.llmRefineProvider),

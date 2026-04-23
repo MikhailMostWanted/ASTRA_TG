@@ -262,10 +262,30 @@ def serialize_reply_result(result: ReplyResult) -> dict[str, Any]:
         "focusReason": suggestion.focus_reason,
         "replyOpportunityMode": suggestion.reply_opportunity_mode,
         "replyOpportunityReason": suggestion.reply_opportunity_reason,
+        "replyRecommended": suggestion.reply_recommended,
         "fewShotFound": suggestion.few_shot_found,
         "fewShotMatchCount": suggestion.few_shot_match_count,
         "fewShotNotes": list(suggestion.few_shot_notes),
+        "sourceMessageKey": suggestion.source_message_key,
+        "sourceLocalMessageId": suggestion.source_local_message_id,
+        "sourceRuntimeMessageId": suggestion.source_runtime_message_id,
+        "sourceBackend": suggestion.source_backend,
+        "focusScore": suggestion.focus_score,
+        "selectionMessageCount": suggestion.selection_message_count,
+        "fewShotStrategyBias": suggestion.few_shot_strategy_bias,
+        "fewShotLengthHint": suggestion.few_shot_length_hint,
+        "fewShotRhythmHint": suggestion.few_shot_rhythm_hint,
+        "fewShotDominantTopicHint": suggestion.few_shot_dominant_topic_hint,
         "alternativeAction": suggestion.alternative_action,
+        "trigger": _serialize_reply_trigger(suggestion, result),
+        "focus": _serialize_reply_focus(suggestion),
+        "opportunity": _serialize_reply_opportunity(suggestion),
+        "retrieval": _serialize_reply_retrieval(suggestion),
+        "style": _serialize_reply_style(suggestion),
+        "fallback": {
+            "code": suggestion.fallback_code,
+            "reason": suggestion.fallback_reason,
+        },
         "llmRefineRequested": suggestion.llm_refine_requested,
         "llmRefineApplied": suggestion.llm_refine_applied,
         "llmRefineProvider": suggestion.llm_refine_provider,
@@ -613,3 +633,71 @@ def _build_concise_variant_text(suggestion) -> str:
     if len(sentences) >= 2:
         return sentences[0]
     return full_text
+
+
+def _serialize_reply_trigger(suggestion, result) -> dict[str, Any]:
+    return {
+        "messageKey": suggestion.source_message_key,
+        "localMessageId": suggestion.source_local_message_id,
+        "runtimeMessageId": suggestion.source_runtime_message_id,
+        "senderName": result.source_sender_name,
+        "preview": suggestion.source_message_preview,
+        "sentAt": None,
+        "backend": suggestion.source_backend,
+    }
+
+
+def _serialize_reply_focus(suggestion) -> dict[str, Any]:
+    return {
+        "label": suggestion.focus_label,
+        "reason": suggestion.focus_reason,
+        "score": suggestion.focus_score,
+        "selectionMessageCount": suggestion.selection_message_count,
+    }
+
+
+def _serialize_reply_opportunity(suggestion) -> dict[str, Any]:
+    return {
+        "mode": suggestion.reply_opportunity_mode,
+        "reason": suggestion.reply_opportunity_reason,
+        "replyRecommended": suggestion.reply_recommended,
+    }
+
+
+def _serialize_reply_retrieval(suggestion) -> dict[str, Any]:
+    return {
+        "used": suggestion.few_shot_found,
+        "matchCount": suggestion.few_shot_match_count,
+        "strategyBias": suggestion.few_shot_strategy_bias,
+        "lengthHint": suggestion.few_shot_length_hint,
+        "rhythmHint": suggestion.few_shot_rhythm_hint,
+        "dominantTopicHint": suggestion.few_shot_dominant_topic_hint,
+        "notes": list(suggestion.few_shot_notes),
+        "hits": [
+            {
+                "id": match.id,
+                "chatId": match.chat_id,
+                "chatTitle": match.chat_title,
+                "inboundText": match.inbound_text,
+                "outboundText": match.outbound_text,
+                "exampleType": match.example_type,
+                "sourcePersonKey": match.source_person_key,
+                "qualityScore": match.quality_score,
+                "score": match.score,
+                "createdAt": serialize_datetime(match.created_at),
+                "reasons": list(match.reasons),
+            }
+            for match in suggestion.few_shot_matches
+        ],
+    }
+
+
+def _serialize_reply_style(suggestion) -> dict[str, Any]:
+    return {
+        "profileKey": suggestion.style_profile_key,
+        "source": suggestion.style_source,
+        "sourceReason": suggestion.style_source_reason,
+        "notes": list(suggestion.style_notes),
+        "personaApplied": suggestion.persona_applied,
+        "personaNotes": list(suggestion.persona_notes),
+    }

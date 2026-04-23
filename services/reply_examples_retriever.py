@@ -66,6 +66,9 @@ class ReplyExamplesRetriever:
                 " ".join(
                     [
                         *(message.get("text", "") for message in _build_working_context_messages(context)),
+                        *context.unanswered_questions,
+                        *context.pending_promises,
+                        *context.emotional_signals,
                         *context.pending_loops,
                         *context.topic_hints,
                     ]
@@ -123,6 +126,7 @@ class ReplyExamplesRetriever:
         strategy_bias = _derive_strategy_bias(top_matches)
         length_hint = _derive_length_hint(top_matches)
         rhythm_hint = _derive_rhythm_hint(top_matches)
+        opener_hint = _derive_opener_hint(top_matches)
         dominant_topic_hint = _derive_topic_hint(target_text, top_matches)
         confidence_delta = min(
             0.12,
@@ -143,6 +147,7 @@ class ReplyExamplesRetriever:
             strategy_bias=strategy_bias,
             length_hint=length_hint,
             rhythm_hint=rhythm_hint,
+            opener_hint=opener_hint,
             dominant_topic_hint=dominant_topic_hint,
             notes=notes,
         )
@@ -253,6 +258,20 @@ def _derive_rhythm_hint(matches: tuple[ReplyExampleMatch, ...]) -> str | None:
     return "single" if average <= 1.3 else "series"
 
 
+def _derive_opener_hint(matches: tuple[ReplyExampleMatch, ...]) -> str | None:
+    opener_counter: Counter[str] = Counter()
+    for match in matches:
+        tokens = tokenize_text(match.outbound_text)
+        if not tokens:
+            continue
+        opener = tokens[0]
+        if opener in {"да", "ага", "ок", "понял", "поняла", "вижу", "гляну", "смотрю"}:
+            opener_counter[opener] += 1
+    if not opener_counter:
+        return None
+    return opener_counter.most_common(1)[0][0]
+
+
 def _derive_topic_hint(
     target_text: str,
     matches: tuple[ReplyExampleMatch, ...],
@@ -321,6 +340,9 @@ def _build_retrieval_context_text(context) -> str:
     parts = [
         _pick_context_text(context),
         *(message.get("text", "") for message in _build_working_context_messages(context)),
+        *context.unanswered_questions[:2],
+        *context.pending_promises[:2],
+        *context.emotional_signals[:1],
         *context.pending_loops[:2],
         *context.topic_hints[:2],
     ]
@@ -374,6 +396,7 @@ def _empty_result() -> ReplyExamplesRetrievalResult:
         strategy_bias=None,
         length_hint=None,
         rhythm_hint=None,
+        opener_hint=None,
         dominant_topic_hint=None,
         notes=("Похожих реальных ответов не нашёл.",),
     )

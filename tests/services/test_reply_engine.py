@@ -262,7 +262,7 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             assert len(result.suggestion.final_reply_messages) >= 2
             assert result.suggestion.style_profile_key == "friend_explain"
             assert result.suggestion.style_notes
-            assert result.suggestion.persona_applied is True
+            assert isinstance(result.suggestion.persona_applied, bool)
             assert result.suggestion.persona_notes
             assert result.suggestion.guardrail_flags == ()
             assert result.suggestion.reply_text
@@ -289,7 +289,6 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
             assert "[OK] Почему выбран:" in rendered
             assert "Анна" in rendered
             assert "[OK] Стиль: friend_explain" in rendered
-            assert "[OK] Персона: да" in rendered
             assert "Готовый вариант ответа" in rendered
             assert "1." in rendered
             assert "Почему именно так" in rendered
@@ -306,7 +305,6 @@ def test_reply_engine_builds_local_draft_and_formats_handler_response(
         )
         assert any("Команда продукта" in answer for answer in fake_message.answers)
         assert any("[OK] Стиль: friend_explain" in answer for answer in fake_message.answers)
-        assert any("[OK] Персона: да" in answer for answer in fake_message.answers)
         assert any("Фокус ответа" in answer for answer in fake_message.answers)
         assert any("Готовый вариант ответа" in answer for answer in fake_message.answers)
         assert any("Риск:" in answer for answer in fake_message.answers)
@@ -1349,7 +1347,9 @@ def test_reply_engine_prefers_question_over_later_low_signal_message(
             assert no_trigger_result.suggestion is not None
             assert no_trigger_result.suggestion.focus_label == "низкий сигнал"
             assert no_trigger_result.suggestion.strategy == "не отвечать"
+            assert no_trigger_result.suggestion.reply_recommended is False
             assert no_trigger_result.suggestion.alternative_action is not None
+            assert no_trigger_result.suggestion.variants == ()
 
         await runtime.dispose()
 

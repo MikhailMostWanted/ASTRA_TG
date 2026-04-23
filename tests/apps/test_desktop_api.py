@@ -74,6 +74,17 @@ def test_desktop_api_dashboard_chats_and_reply_preview(
             assert workspace_payload["reply"]["suggestion"]["llmDebug"]["baselineText"]
             assert workspace_payload["reply"]["suggestion"]["replyOpportunityReason"]
             assert workspace_payload["reply"]["suggestion"]["variants"]
+            assert (
+                workspace_payload["reply"]["suggestion"]["trigger"]["messageKey"]
+                == workspace_payload["replyContext"]["sourceMessageKey"]
+            )
+            assert workspace_payload["reply"]["suggestion"]["focus"]["label"] == workspace_payload["replyContext"]["focusLabel"]
+            assert (
+                workspace_payload["reply"]["suggestion"]["opportunity"]["mode"]
+                == workspace_payload["replyContext"]["replyOpportunityMode"]
+            )
+            assert workspace_payload["reply"]["suggestion"]["retrieval"]["hits"] == []
+            assert workspace_payload["reply"]["suggestion"]["style"]["profileKey"]
 
             reply = client.post(f"/api/chats/{seeded['chat_id']}/reply-preview")
             assert reply.status_code == 200
@@ -84,6 +95,8 @@ def test_desktop_api_dashboard_chats_and_reply_preview(
             assert reply_payload["suggestion"]["llmStatus"]["label"] == "Детерминированный"
             assert reply_payload["suggestion"]["llmDebug"]["rawCandidate"] is None
             assert reply_payload["suggestion"]["variants"][0]["label"] == "Основной"
+            assert reply_payload["suggestion"]["trigger"]["backend"] is not None
+            assert reply_payload["suggestion"]["opportunity"]["replyRecommended"] is True
             assert reply_payload["actions"]["copy"] is True
             assert reply_payload["actions"]["pasteToTelegram"] is False
 
@@ -347,8 +360,15 @@ def test_desktop_api_reply_payload_includes_rejected_llm_candidate_debug(
                         source_message_preview="Анна: Когда сможешь скинуть финальный файл по бюджету?",
                         focus_label="вопрос",
                         focus_reason="Выбран последний незакрытый вопрос.",
+                        focus_score=0.91,
+                        selection_message_count=12,
+                        source_message_key="telegram:-100300:3",
+                        source_local_message_id=3,
+                        source_runtime_message_id=3,
+                        source_backend="legacy_local_store",
                         reply_opportunity_mode="follow_up_after_self",
                         reply_opportunity_reason="Несмотря на последнее исходящее, в теме остался незакрытый хвост.",
+                        reply_recommended=True,
                         few_shot_found=False,
                         few_shot_match_count=0,
                         few_shot_notes=(),
@@ -480,7 +500,8 @@ def test_desktop_api_send_path_writes_message_and_refreshes_workspace(
             assert payload["sentMessage"]["text"] == "Да, вижу. Сейчас гляну и вернусь."
             assert payload["workspace"]["messages"][-1]["direction"] == "outbound"
             assert payload["workspace"]["messages"][-1]["text"] == "Да, вижу. Сейчас гляну и вернусь."
-            assert payload["workspace"]["reply"]["actions"]["send"] is True
+            assert payload["workspace"]["reply"]["actions"]["send"] is False
+            assert "Send-path" in payload["workspace"]["reply"]["actions"]["disabledReason"]
 
         async with runtime.session_factory() as session:
             journal = await SettingRepository(session).get_value(f"workflow.journal.chat.{seeded['chat_id']}")

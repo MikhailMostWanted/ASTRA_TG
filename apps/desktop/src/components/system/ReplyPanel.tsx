@@ -29,6 +29,8 @@ import type {
   ChatFreshnessPayload,
   ReplyContextPayload,
   ReplyPreviewPayload,
+  ReplyRetrievalPayload,
+  ReplyStylePayload,
   WorkspaceStatusPayload,
 } from "@/lib/types";
 import { buildReplyDraftScopeKey, type ChatWorkspaceState } from "@/stores/app-store";
@@ -83,29 +85,62 @@ export function ReplyPanel({
   const safeReply = normalizeReplyPreviewPayload(reply);
   const safeAutopilot = normalizeAutopilotPayload(autopilot);
   const suggestion = safeReply?.suggestion;
-  const contextFocusLabel = replyContext?.focusLabel ?? suggestion?.focusLabel ?? null;
-  const contextFocusReason = replyContext?.focusReason ?? suggestion?.focusReason ?? null;
-  const contextSourceMessageId = replyContext?.sourceLocalMessageId ?? suggestion?.sourceMessageId ?? null;
-  const contextSourceMessageKey = replyContext?.sourceMessageKey ?? null;
+  const triggerDetails = suggestion?.trigger ?? null;
+  const focusDetails = suggestion?.focus ?? null;
+  const opportunityDetails = suggestion?.opportunity ?? null;
+  const retrievalDetails = suggestion?.retrieval ?? null;
+  const styleDetails = suggestion?.style ?? null;
+  const fallbackDetails = suggestion?.fallback ?? null;
+  const contextFocusLabel =
+    replyContext?.focusLabel
+    || focusDetails?.label
+    || suggestion?.focusLabel
+    || null;
+  const contextFocusReason =
+    replyContext?.focusReason
+    || focusDetails?.reason
+    || suggestion?.focusReason
+    || null;
+  const contextSourceMessageId =
+    replyContext?.sourceLocalMessageId
+    ?? suggestion?.sourceLocalMessageId
+    ?? suggestion?.sourceMessageId
+    ?? null;
+  const contextSourceMessageKey =
+    replyContext?.sourceMessageKey
+    || suggestion?.sourceMessageKey
+    || triggerDetails?.messageKey
+    || null;
   const contextSourceMessagePreview =
     replyContext?.sourceMessagePreview
-    || safeReply?.sourceMessagePreview
+    || triggerDetails?.preview
     || suggestion?.sourceMessagePreview
+    || safeReply?.sourceMessagePreview
     || null;
   const contextSourceSenderName =
     replyContext?.sourceSenderName
+    || triggerDetails?.senderName
     || safeReply?.sourceSenderName
     || null;
   const contextReplyOpportunityMode =
     replyContext?.replyOpportunityMode
+    || opportunityDetails?.mode
     || suggestion?.replyOpportunityMode
     || null;
   const contextReplyOpportunityReason =
     replyContext?.replyOpportunityReason
+    || opportunityDetails?.reason
     || suggestion?.replyOpportunityReason
     || null;
+  const replyRecommended = suggestion
+    ? (opportunityDetails?.replyRecommended ?? suggestion.replyRecommended)
+    : false;
+  const isNoReply = Boolean(
+    suggestion
+      && (!replyRecommended || suggestion.strategy === "не отвечать"),
+  );
   const replyOptions = useMemo(() => {
-    if (!suggestion) {
+    if (!suggestion || isNoReply) {
       return [];
     }
 
@@ -130,7 +165,7 @@ export function ReplyPanel({
         description: "Рабочий текст ответа.",
         text,
       }));
-  }, [suggestion]);
+  }, [isNoReply, suggestion]);
 
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [showDebug, setShowDebug] = useState(false);
@@ -150,6 +185,9 @@ export function ReplyPanel({
   const llmDebug = suggestion?.llmDebug ?? null;
   const llmDecisionReason = llmDebug?.decisionReason ?? null;
   const llmStatusLabel = suggestion?.llmStatus?.label || "Детерминированный";
+  const triggerBackendLabel = compactWhitespace(triggerDetails?.backend || suggestion?.sourceBackend || null);
+  const retrievalSummary = buildRetrievalSummary(retrievalDetails);
+  const styleSummary = buildStyleSummary(styleDetails, suggestion);
   const currentDraftScopeKey =
     replyContext?.draftScopeKey
     || buildReplyDraftScopeKey({
@@ -250,7 +288,7 @@ export function ReplyPanel({
                 <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Контекст</div>
                 <div className="text-base font-semibold text-white">Astra Reply</div>
                 <div className="mt-1 text-sm leading-6 text-slate-400">
-                  Reply generation ещё не переведён на new runtime, но единый workspace уже отдал фокус и trigger.
+                  Workspace уже собрал общий trigger и focus, но нормальный draft сейчас не получился.
                 </div>
               </div>
 
@@ -337,8 +375,8 @@ export function ReplyPanel({
               </div>
 
               <div className="rounded-[22px] border border-white/8 bg-black/16 p-4 text-sm leading-6 text-slate-300">
-                Write-path и generation surface на этом этапе не включены. Этот экран показывает тот же focus context,
-                что и message list, чтобы UI не жил в двух разных мирах.
+                Message list и reply panel всё равно смотрят в один и тот же snapshot. Если draft не собрался,
+                здесь остаётся честный focus context без декоративного фейка.
               </div>
             </div>
           </ScrollArea>
@@ -370,7 +408,7 @@ export function ReplyPanel({
             <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Ответы</div>
             <div className="text-base font-semibold text-white">Astra Reply</div>
             <div className="mt-1 text-sm leading-6 text-slate-400">
-              Фокус строится по незакрытому триггеру из свежего окна сообщений.
+              Фокус и варианты строятся из того же workspace snapshot, что и message list.
             </div>
           </div>
 
@@ -389,17 +427,25 @@ export function ReplyPanel({
           <Badge variant="outline" className="border-0 bg-cyan-400/10 text-cyan-100 ring-1 ring-cyan-300/10">
             уверенность {formatConfidence(suggestion.confidence)}
           </Badge>
-          <Badge variant="outline" className="border-0 bg-amber-300/10 text-amber-100 ring-1 ring-amber-300/10">
-            риск {suggestion.riskLabel || "под контролем"}
+          <Badge
+            variant="outline"
+            className={cn(
+              "border-0 ring-1",
+              isNoReply
+                ? "bg-amber-300/12 text-amber-50 ring-amber-300/15"
+                : "bg-amber-300/10 text-amber-100 ring-amber-300/10",
+            )}
+          >
+            {isNoReply ? "лучше не отвечать" : `риск ${suggestion.riskLabel || "под контролем"}`}
           </Badge>
           <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-            стиль {suggestion.styleSource || "по умолчанию"}
+            стиль {styleDetails?.source || suggestion.styleSource || "по умолчанию"}
           </Badge>
           <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-            персона {suggestion.personaApplied ? "включена" : "выключена"}
+            retrieval {retrievalDetails?.used ? retrievalDetails.matchCount : 0}
           </Badge>
           <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-            похожих ответов {suggestion.fewShotFound ? suggestion.fewShotMatchCount : 0}
+            {triggerBackendLabel || "backend не указан"}
           </Badge>
           <Badge
             variant="outline"
@@ -509,7 +555,55 @@ export function ReplyPanel({
             ) : null}
           </div>
 
-          <div className="rounded-[22px] border border-white/8 bg-black/16 p-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-[20px] border border-white/8 bg-black/16 p-4">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Trigger</div>
+              <div className="mt-2 text-sm font-medium text-white">
+                {contextReplyOpportunityMode === "follow_up_after_self" ? "follow-up после твоего сообщения" : "прямой повод"}
+              </div>
+              <div className="mt-2 text-sm leading-6 text-slate-300">
+                {contextReplyOpportunityReason || "Свежий смысловой хвост без ответа."}
+              </div>
+            </div>
+
+            <div className="rounded-[20px] border border-white/8 bg-black/16 p-4">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Retrieval</div>
+              <div className="mt-2 text-sm font-medium text-white">
+                {retrievalDetails?.used ? `${retrievalDetails.matchCount} похожих ответа` : "Без похожих ответов"}
+              </div>
+              <div className="mt-2 text-sm leading-6 text-slate-300">
+                {retrievalSummary}
+              </div>
+            </div>
+
+            <div className="rounded-[20px] border border-white/8 bg-black/16 p-4">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Style</div>
+              <div className="mt-2 text-sm font-medium text-white">
+                {styleDetails?.profileKey || suggestion.styleProfileKey || "Без профиля"}
+              </div>
+              <div className="mt-2 text-sm leading-6 text-slate-300">
+                {styleSummary}
+              </div>
+            </div>
+          </div>
+
+          {isNoReply ? (
+            <div className="rounded-[22px] border border-amber-300/16 bg-amber-300/8 p-4">
+              <div className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-50">
+                <ShieldAlert />
+                Сейчас лучше не отвечать
+              </div>
+              <div className="text-sm leading-6 text-slate-100">
+                {contextReplyOpportunityReason || suggestion.reasonShort || "Явного повода писать сейчас нет."}
+              </div>
+              {suggestion.alternativeAction ? (
+                <div className="mt-3 rounded-[18px] border border-white/8 bg-black/18 px-4 py-3 text-sm leading-6 text-slate-200">
+                  {suggestion.alternativeAction}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="rounded-[22px] border border-white/8 bg-black/16 p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div className="text-sm font-medium text-white">Варианты ответа</div>
               <div className="text-xs text-slate-500">
@@ -563,11 +657,18 @@ export function ReplyPanel({
                 >
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <div className="text-sm font-medium text-white">{item.label}</div>
-                    {selectedIndex === index ? (
-                      <Badge variant="outline" className="border-0 bg-cyan-400/12 text-cyan-100 ring-1 ring-cyan-300/15">
-                        выбран
-                      </Badge>
-                    ) : null}
+                    <div className="flex items-center gap-2">
+                      {item.id === "primary" ? (
+                        <Badge variant="outline" className="border-0 bg-white/8 text-white ring-1 ring-white/10">
+                          основной
+                        </Badge>
+                      ) : null}
+                      {selectedIndex === index ? (
+                        <Badge variant="outline" className="border-0 bg-cyan-400/12 text-cyan-100 ring-1 ring-cyan-300/15">
+                          выбран
+                        </Badge>
+                      ) : null}
+                    </div>
                   </div>
                   {item.description ? (
                     <div className="mb-2 text-xs leading-5 text-slate-400">{item.description}</div>
@@ -576,9 +677,11 @@ export function ReplyPanel({
                 </button>
               ))}
             </div>
-          </div>
+            </div>
+          )}
 
-          <div className="grid grid-cols-2 gap-2">
+          {!isNoReply ? (
+            <div className="grid grid-cols-2 gap-2">
             <Button
               variant="outline"
               className="border-white/8 bg-black/16 text-slate-100"
@@ -624,9 +727,11 @@ export function ReplyPanel({
               <CheckCheck data-icon="inline-start" />
               Отметить отправленным
             </Button>
-          </div>
+            </div>
+          ) : null}
 
-          <div className="rounded-[22px] border border-white/8 bg-black/16 p-4">
+          {!isNoReply ? (
+            <div className="rounded-[22px] border border-white/8 bg-black/16 p-4">
             <div className="mb-3 flex items-center gap-2 text-sm font-medium text-white">
               <ShieldAlert />
               Черновик перед отправкой
@@ -728,12 +833,13 @@ export function ReplyPanel({
                 Последняя локальная отметка «отправлено»: {formatDateTime(workflowState.sentAt)}.
               </div>
             ) : null}
-          </div>
+            </div>
+          ) : null}
 
           <div className="rounded-[22px] border border-white/8 bg-black/16 p-4">
             <div className="mb-3 text-sm font-medium text-white">Почему именно такой фокус</div>
             <div className="text-sm leading-6 text-slate-300">
-              {suggestion.reasonShort || suggestion.focusReason}
+              {suggestion.reasonShort || focusDetails?.reason || suggestion.focusReason}
             </div>
 
             <Separator className="my-4 bg-white/8" />
@@ -741,29 +847,32 @@ export function ReplyPanel({
             <div className="flex flex-col gap-3 text-sm leading-6 text-slate-300">
               <div>Стратегия: {suggestion.strategy || "детерминированная база"}</div>
               {selectedVariant ? <div>Выбранный вариант: {selectedVariant.label}</div> : null}
-              <div>Контекст: {suggestion.replyOpportunityReason || "стандартный ответ"}</div>
-              <div>Профиль стиля: {suggestion.styleProfileKey || "без профиля"}</div>
-              <div>Персона: {suggestion.personaApplied ? "применена" : "не применялась"}</div>
-              <div>
-                Похожие ответы: {suggestion.fewShotFound ? `найдено ${suggestion.fewShotMatchCount}` : "не использовались"}
-              </div>
+              <div>Триггер: {triggerPreview || "нет явного trigger preview"}</div>
+              <div>Контекст: {contextReplyOpportunityReason || "стандартный ответ"}</div>
+              <div>Фокус score: {formatConfidence(focusDetails?.score ?? suggestion.focusScore)}</div>
+              <div>Окно выбора: {focusDetails?.selectionMessageCount || suggestion.selectionMessageCount || 0} сообщений</div>
+              <div>Профиль стиля: {styleDetails?.profileKey || suggestion.styleProfileKey || "без профиля"}</div>
+              <div>Персона: {styleDetails?.personaApplied ?? suggestion.personaApplied ? "применена" : "не применялась"}</div>
+              <div>Похожие ответы: {retrievalDetails?.used ? `найдено ${retrievalDetails.matchCount}` : "не использовались"}</div>
               <div>
                 LLM: {llmStatusLabel}
                 {suggestion.llmStatus?.provider ? ` • ${suggestion.llmStatus.provider}` : ""}
               </div>
               {suggestion.llmStatus?.detail ? <div>Деталь LLM: {suggestion.llmStatus.detail}</div> : null}
-              {suggestion.styleNotes.length > 0 ? (
-                <div>Заметки стиля: {suggestion.styleNotes.join(" • ")}</div>
+              {styleDetails?.sourceReason ? <div>Источник стиля: {styleDetails.sourceReason}</div> : null}
+              {styleDetails?.notes.length ? (
+                <div>Заметки стиля: {styleDetails.notes.join(" • ")}</div>
               ) : null}
-              {suggestion.personaNotes.length > 0 ? (
-                <div>Заметки персоны: {suggestion.personaNotes.join(" • ")}</div>
+              {styleDetails?.personaNotes.length ? (
+                <div>Заметки персоны: {styleDetails.personaNotes.join(" • ")}</div>
               ) : null}
-              {suggestion.fewShotNotes.length > 0 ? (
-                <div>Заметки похожих ответов: {suggestion.fewShotNotes.join(" • ")}</div>
+              {retrievalDetails?.notes.length ? (
+                <div>Заметки похожих ответов: {retrievalDetails.notes.join(" • ")}</div>
               ) : null}
               {suggestion.guardrailFlags.length > 0 ? (
                 <div>Ограничители: {suggestion.guardrailFlags.join(" • ")}</div>
               ) : null}
+              {fallbackDetails?.reason ? <div>Fallback: {fallbackDetails.reason}</div> : null}
               {suggestion.llmRefineNotes.length > 0 ? (
                 <div>Заметки LLM: {suggestion.llmRefineNotes.map(stringifyUnknown).join(" • ")}</div>
               ) : null}
@@ -788,16 +897,53 @@ export function ReplyPanel({
               {showDebug ? (
                 <div className="border-t border-white/6 px-4 py-4 text-sm leading-6 text-slate-300">
                   <div>Режим: {suggestion.llmStatus?.mode || "детерминированный"}</div>
+                  <div className="mt-2">Trigger backend: {triggerBackendLabel || "не указан"}</div>
+                  <div className="mt-2">Trigger key: {triggerDetails?.messageKey || "нет"}</div>
+                  <div className="mt-2">Focus: {contextFocusLabel || "нет"}</div>
+                  <div className="mt-2">Opportunity: {contextReplyOpportunityMode || "hold"}</div>
                   <div className="mt-2">
                     Причина:{" "}
                     {llmDecisionReason?.detail
                       || suggestion.llmStatus?.detail
                       || "LLM-улучшение не запрашивалось, используется детерминированная база."}
                   </div>
+                  {contextReplyOpportunityReason ? (
+                    <div className="mt-2">Почему reply уместен: {contextReplyOpportunityReason}</div>
+                  ) : null}
+                  {retrievalDetails ? (
+                    <div className="mt-2">
+                      Retrieval: {retrievalSummary}
+                    </div>
+                  ) : null}
+                  {styleSummary ? <div className="mt-2">Style: {styleSummary}</div> : null}
+                  {fallbackDetails?.reason ? <div className="mt-2">Fallback: {fallbackDetails.reason}</div> : null}
                   {llmDecisionReason?.flags.length ? (
                     <div className="mt-2">
                       Ограничители: {llmDecisionReason.flags.join(" • ")}
                     </div>
+                  ) : null}
+                  {retrievalDetails?.hits.length ? (
+                    <>
+                      <div className="mt-4 text-[11px] uppercase tracking-[0.24em] text-slate-500">Похожие реальные ответы</div>
+                      <div className="mt-2 flex flex-col gap-2">
+                        {retrievalDetails.hits.slice(0, 3).map((item) => (
+                          <div
+                            key={`${item.id}-${item.score ?? "score"}`}
+                            className="rounded-[14px] border border-white/6 bg-black/18 px-3 py-3"
+                          >
+                            <div className="text-xs text-slate-400">
+                              {item.chatTitle}
+                              {item.score !== null ? ` • score ${item.score.toFixed(2)}` : ""}
+                            </div>
+                            <div className="mt-1 text-slate-200">Входящее: {item.inboundText}</div>
+                            <div className="mt-1 text-slate-100">Исходящее: {item.outboundText}</div>
+                            {item.reasons.length ? (
+                              <div className="mt-1 text-xs text-slate-400">{item.reasons.join(" • ")}</div>
+                            ) : null}
+                          </div>
+                        ))}
+                      </div>
+                    </>
                   ) : null}
                   <div className="mt-4 text-[11px] uppercase tracking-[0.24em] text-slate-500">Базовый вариант</div>
                   <div className="mt-2 whitespace-pre-wrap rounded-[14px] border border-white/6 bg-black/18 px-3 py-3 text-slate-100">
@@ -1014,6 +1160,41 @@ function compactWhitespace(value: string | null | undefined): string | null {
   }
   const cleaned = value.replace(/\s+/g, " ").trim();
   return cleaned || null;
+}
+
+function buildRetrievalSummary(
+  retrieval: ReplyRetrievalPayload | null | undefined,
+): string {
+  if (!retrieval || !retrieval.used) {
+    return "Few-shot слой не повлиял на generation.";
+  }
+
+  const parts = [
+    retrieval.strategyBias ? `bias ${retrieval.strategyBias}` : null,
+    retrieval.lengthHint ? `длина ${retrieval.lengthHint}` : null,
+    retrieval.rhythmHint ? `ритм ${retrieval.rhythmHint}` : null,
+    retrieval.dominantTopicHint ? `тема ${retrieval.dominantTopicHint}` : null,
+    retrieval.notes[0] || null,
+  ].filter((item): item is string => Boolean(item));
+
+  return parts.join(" • ") || "Похожие реальные ответы повлияли на тон и ритм.";
+}
+
+function buildStyleSummary(
+  style: ReplyStylePayload | null | undefined,
+  suggestion: ReplyPreviewPayload["suggestion"] | null | undefined,
+): string {
+  if (!style && !suggestion) {
+    return "Стиль не определён.";
+  }
+
+  const parts = [
+    style?.sourceReason || suggestion?.styleSourceReason || null,
+    style?.notes[0] || suggestion?.styleNotes[0] || null,
+    (style?.personaApplied ?? suggestion?.personaApplied) ? "persona подмешана аккуратно" : null,
+  ].filter((item): item is string => Boolean(item));
+
+  return parts.join(" • ") || "Стиль держится ближе к твоей реальной переписке.";
 }
 
 function ReplyPanelSkeleton() {

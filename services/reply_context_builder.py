@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from astra_runtime.message_identity import build_message_key
 from models import Chat, Message
 from services.memory_common import (
     build_person_reference,
@@ -54,6 +55,10 @@ class ReplyContextBuilder:
         chat: Chat,
         *,
         recent_messages: Sequence[Message] | None = None,
+        source_backend: str | None = None,
+        history_payload: dict[str, object] | None = None,
+        freshness_payload: dict[str, object] | None = None,
+        status_payload: dict[str, object] | None = None,
     ) -> ReplyContext | ReplyContextIssue:
         if recent_messages is None:
             recent_desc = await self.message_repository.get_recent_messages(
@@ -158,9 +163,13 @@ class ReplyContextBuilder:
             broader_tail_messages=broader_tail_messages,
             latest_message=latest_message,
             target_message=target_message,
+            target_message_key=_message_key(target_message, chat=chat),
+            target_local_message_id=_message_local_id(target_message),
+            target_runtime_message_id=_message_runtime_id(target_message),
             focus_label=focus_candidate.focus_label,
             focus_reason=focus_reason,
             focus_score=focus_candidate.score,
+            selection_message_count=len(working_messages[-self.selection_window :]),
             chat_memory=chat_memory,
             person_memory=person_memory,
             linked_people=linked_people,
@@ -173,6 +182,15 @@ class ReplyContextBuilder:
             local_dynamics=local_dynamics,
             reply_opportunity_mode=reply_opportunity_mode,
             reply_opportunity_reason=reply_opportunity_reason,
+            workspace_source=_resolve_workspace_source(source_backend, status_payload),
+            history_limit=_read_int(history_payload, "limit"),
+            history_returned_count=_read_int(history_payload, "returnedCount"),
+            freshness_mode=_read_str(freshness_payload, "mode"),
+            freshness_label=_read_str(freshness_payload, "label"),
+            freshness_detail=_read_str(freshness_payload, "detail"),
+            availability_flags=_collect_availability_flags(status_payload),
+            workspace_degraded=_read_bool(status_payload, "degraded"),
+            workspace_degraded_reason=_read_str(status_payload, "degradedReason"),
         )
 
     def _select_focus_candidate(
@@ -194,7 +212,7 @@ class ReplyContextBuilder:
 
         return max(
             inbound_candidates,
-            key=lambda candidate: (candidate.score, -candidate.age_from_end, candidate.message.id),
+            key=lambda candidate: (candidate.score, -candidate.age_from_end, _message_order_key(candidate.message)),
         )
 
     def _score_focus_candidate(
@@ -236,6 +254,15 @@ class ReplyContextBuilder:
             has_follow_up_commitment_signal(_pick_message_text(later_message))
             for later_message in later_outbound_messages
         )
+        latest_meaningful_inbound = next(
+            (
+                later_message
+                for later_message in reversed(later_messages)
+                if later_message.direction == "inbound"
+                and not is_weak_reply_signal(_pick_message_text(later_message))
+            ),
+            None,
+        )
 
         score = 0.18
         if question_signal:
@@ -262,6 +289,8 @@ class ReplyContextBuilder:
             score += 0.46
         elif later_outbound_messages and later_meaningful_inbound_count == 0:
             score -= 0.18
+        if latest_meaningful_inbound is not None:
+            score -= _topic_shift_penalty(text, _pick_message_text(latest_meaningful_inbound))
         if low_signal:
             score -= 1.6
 
@@ -289,7 +318,10 @@ class ReplyContextBuilder:
         later_inbound_messages = [
             message
             for message in recent_messages
-            if message.direction == "inbound" and message.id > focus_candidate.message.id
+            if (
+                message.direction == "inbound"
+                and _message_order_key(message) > _message_order_key(focus_candidate.message)
+            )
         ]
         later_low_signal = [
             message
@@ -569,3 +601,104 @@ def _pick_message_text(message: Message) -> str:
 def _quote_focus_preview(message: Message) -> str:
     preview = truncate_text(_pick_message_text(message), limit=24)
     return f"«{preview}»"
+
+
+def _message_order_key(message: Message) -> int:
+    runtime_message_id = _message_runtime_id(message)
+    if runtime_message_id is not None:
+        return runtime_message_id
+    message_id = getattr(message, "id", None)
+    return int(message_id) if isinstance(message_id, int) else 0
+
+
+def _message_runtime_id(message: Message) -> int | None:
+    for attribute in ("runtime_message_id", "telegram_message_id"):
+        value = getattr(message, attribute, None)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _message_local_id(message: Message) -> int | None:
+    if hasattr(message, "local_message_id"):
+        local_message_id = getattr(message, "local_message_id", None)
+        if isinstance(local_message_id, int):
+            return local_message_id
+        return None
+    if isinstance(message, Message):
+        message_id = getattr(message, "id", None)
+        return message_id if isinstance(message_id, int) else None
+    message_id = getattr(message, "id", None)
+    if isinstance(message_id, int) and _message_runtime_id(message) != message_id:
+        return message_id
+    return None
+
+
+def _message_key(message: Message, *, chat: Chat) -> str | None:
+    runtime_message_id = _message_runtime_id(message)
+    if runtime_message_id is None:
+        return None
+    return build_message_key(int(chat.telegram_chat_id), runtime_message_id)
+
+
+def _topic_shift_penalty(candidate_text: str, later_text: str) -> float:
+    candidate_tokens = set(tokenize_text(candidate_text))
+    later_tokens = set(tokenize_text(later_text))
+    if not candidate_tokens or not later_tokens:
+        return 0.0
+    overlap_ratio = len(candidate_tokens & later_tokens) / max(1, len(candidate_tokens | later_tokens))
+    if overlap_ratio < 0.08:
+        return 0.52
+    if overlap_ratio < 0.18:
+        return 0.26
+    return 0.0
+
+
+def _resolve_workspace_source(
+    source_backend: str | None,
+    status_payload: dict[str, object] | None,
+) -> str:
+    if source_backend:
+        return source_backend
+    if isinstance(status_payload, dict):
+        message_source = status_payload.get("messageSource")
+        if isinstance(message_source, dict):
+            backend = _read_str(message_source, "backend")
+            if backend:
+                return backend
+    return _read_str(status_payload, "source") or "legacy"
+
+
+def _collect_availability_flags(status_payload: dict[str, object] | None) -> tuple[str, ...]:
+    if not isinstance(status_payload, dict):
+        return ()
+    availability = status_payload.get("availability")
+    if not isinstance(availability, dict):
+        return ()
+    return tuple(
+        str(key)
+        for key, value in availability.items()
+        if isinstance(key, str) and bool(value)
+    )
+
+
+def _read_int(payload: dict[str, object] | None, key: str) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(key)
+    return value if isinstance(value, int) else None
+
+
+def _read_str(payload: dict[str, object] | None, key: str) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(key)
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
+def _read_bool(payload: dict[str, object] | None, key: str) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    return bool(payload.get(key))

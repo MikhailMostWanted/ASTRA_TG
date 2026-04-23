@@ -311,6 +311,129 @@ describe("ReplyPanel", () => {
     expect(screen.getByRole("button", { name: "Скопировать старый черновик" })).toBeInTheDocument();
   });
 
+  it("shows an explicit no-reply state instead of fake variants", () => {
+    render(
+      <TooltipProvider>
+        <ReplyPanel
+          reply={{
+            kind: "suggestion",
+            chatId: 77,
+            chatTitle: "Спокойный чат",
+            chatReference: "@quiet_chat",
+            errorMessage: null,
+            sourceSenderName: "Анна",
+            sourceMessagePreview: "ок",
+            actions: {
+              copy: true,
+              refresh: true,
+              pasteToTelegram: false,
+              send: false,
+              markSent: true,
+              variants: {},
+              disabledReason: "Send-path на этом этапе остаётся выключенным.",
+            },
+            suggestion: {
+              baseReplyText: "Сейчас лучше не писать.",
+              replyMessages: [],
+              finalReplyMessages: [],
+              replyText: "Сейчас лучше не писать.",
+              styleProfileKey: "friend_explain",
+              styleSource: "auto",
+              styleNotes: [],
+              personaApplied: false,
+              personaNotes: [],
+              guardrailFlags: [],
+              reasonShort: "Явного повода писать сейчас нет.",
+              riskLabel: "лучше не отвечать",
+              confidence: 0.83,
+              strategy: "не отвечать",
+              sourceMessageId: 701,
+              chatId: 77,
+              situation: "no_reply",
+              sourceMessagePreview: "Анна: ок",
+              focusLabel: "слабый триггер",
+              focusReason: "В окне нет явного вопроса или просьбы.",
+              focusScore: 0.22,
+              selectionMessageCount: 10,
+              sourceMessageKey: "telegram:-10077:701",
+              sourceLocalMessageId: 701,
+              sourceRuntimeMessageId: 701,
+              sourceBackend: "legacy_local_store",
+              replyOpportunityMode: "hold",
+              replyOpportunityReason: "Явного повода писать сейчас нет.",
+              replyRecommended: false,
+              fewShotFound: false,
+              fewShotMatchCount: 0,
+              fewShotNotes: [],
+              alternativeAction: "Подожди нового сигнала или вернись позже с фактом.",
+              trigger: {
+                messageKey: "telegram:-10077:701",
+                localMessageId: 701,
+                runtimeMessageId: 701,
+                senderName: "Анна",
+                preview: "ок",
+                sentAt: null,
+                backend: "legacy_local_store",
+              },
+              focus: {
+                label: "слабый триггер",
+                reason: "В окне нет явного вопроса или просьбы.",
+                score: 0.22,
+                selectionMessageCount: 10,
+              },
+              opportunity: {
+                mode: "hold",
+                reason: "Явного повода писать сейчас нет.",
+                replyRecommended: false,
+              },
+              retrieval: {
+                used: false,
+                matchCount: 0,
+                strategyBias: null,
+                lengthHint: null,
+                rhythmHint: null,
+                dominantTopicHint: null,
+                notes: [],
+                hits: [],
+              },
+              style: {
+                profileKey: "friend_explain",
+                source: "auto",
+                sourceReason: "Спокойный дефолтный профиль.",
+                notes: [],
+                personaApplied: false,
+                personaNotes: [],
+              },
+              fallback: {
+                code: null,
+                reason: null,
+              },
+              llmRefineRequested: false,
+              llmRefineApplied: false,
+              llmRefineProvider: null,
+              llmRefineNotes: [],
+              llmRefineGuardrailFlags: [],
+              llmStatus: null,
+              llmDebug: null,
+              variants: [],
+            },
+          }}
+          workflowState={null}
+          onRefresh={vi.fn()}
+          onCopy={vi.fn()}
+          onUseDraft={vi.fn()}
+          onMarkSent={vi.fn()}
+          onClearDraft={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Сейчас лучше не отвечать")).toBeInTheDocument();
+    expect(screen.getByText("Подожди нового сигнала или вернись позже с фактом.")).toBeInTheDocument();
+    expect(screen.queryByText("Варианты ответа")).not.toBeInTheDocument();
+    expect(screen.queryByText("Черновик перед отправкой")).not.toBeInTheDocument();
+  });
+
   it("renders workspace context without reply generation when new runtime is read-only", () => {
     render(
       <TooltipProvider>
@@ -404,8 +527,8 @@ describe("ReplyPanel", () => {
     );
 
     expect(screen.getByText("Контекст")).toBeInTheDocument();
-    expect(screen.getByText("Reply generation ещё не переведён на new runtime, но единый workspace уже отдал фокус и trigger.")).toBeInTheDocument();
+    expect(screen.getByText("Workspace уже собрал общий trigger и focus, но нормальный draft сейчас не получился.")).toBeInTheDocument();
     expect(screen.getByText("вопрос")).toBeInTheDocument();
-    expect(screen.getByText("Write-path и generation surface на этом этапе не включены. Этот экран показывает тот же focus context, что и message list, чтобы UI не жил в двух разных мирах.")).toBeInTheDocument();
+    expect(screen.getByText("Message list и reply panel всё равно смотрят в один и тот же snapshot. Если draft не собрался, здесь остаётся честный focus context без декоративного фейка.")).toBeInTheDocument();
   });
 });
