@@ -76,9 +76,17 @@ export interface DashboardPayload {
 }
 
 export interface RuntimeAuthPayload {
+  state: string;
   authState: string;
   sessionState: string;
   authorized: boolean;
+  awaitingCode: boolean;
+  awaitingPassword: boolean;
+  canRequestCode: boolean;
+  canSubmitCode: boolean;
+  canSubmitPassword: boolean;
+  canLogout: boolean;
+  canReset: boolean;
   user: {
     id: number | null;
     username: string | null;
@@ -93,7 +101,37 @@ export interface RuntimeAuthPayload {
     stored: boolean;
   };
   updatedAt: string | null;
+  stateChangedAt: string | null;
+  codeRequestedAt: string | null;
+  authorizedAt: string | null;
+  logoutStartedAt: string | null;
+  lastCheckedAt: string | null;
+  timestamps: {
+    updatedAt: string | null;
+    stateChangedAt: string | null;
+    codeRequestedAt: string | null;
+    authorizedAt: string | null;
+    logoutStartedAt: string | null;
+    lastCheckedAt: string | null;
+    errorAt: string | null;
+  };
+  reasonCode: string | null;
   reason: string | null;
+  error: {
+    code: string | null;
+    message: string | null;
+    at: string | null;
+  } | null;
+}
+
+export interface RuntimeAuthStatusPayload {
+  status: RuntimeAuthPayload;
+}
+
+export interface RuntimeAuthActionPayload {
+  kind: string;
+  message: string;
+  status: RuntimeAuthPayload;
 }
 
 export interface RuntimeBackendPayload {

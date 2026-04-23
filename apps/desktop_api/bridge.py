@@ -4,7 +4,7 @@ import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, cast
 
 from aiogram import Bot
 
@@ -166,6 +166,31 @@ class DesktopBridge:
 
     async def get_new_runtime_health(self) -> dict[str, Any]:
         return await self._runtime_manager.health("new")
+
+    async def get_new_runtime_auth_status(self) -> dict[str, Any]:
+        service = self._require_new_runtime_service()
+        status = await service.auth_status()
+        return {"status": status.to_payload()}
+
+    async def request_new_runtime_code(self) -> dict[str, Any]:
+        service = self._require_new_runtime_service()
+        return (await service.request_code()).to_payload()
+
+    async def submit_new_runtime_code(self, *, code: str) -> dict[str, Any]:
+        service = self._require_new_runtime_service()
+        return (await service.submit_code(code)).to_payload()
+
+    async def submit_new_runtime_password(self, *, password: str) -> dict[str, Any]:
+        service = self._require_new_runtime_service()
+        return (await service.submit_password(password)).to_payload()
+
+    async def logout_new_runtime(self) -> dict[str, Any]:
+        service = self._require_new_runtime_service()
+        return (await service.logout()).to_payload()
+
+    async def reset_new_runtime(self) -> dict[str, Any]:
+        service = self._require_new_runtime_service()
+        return (await service.reset()).to_payload()
 
     async def get_dashboard(self) -> dict[str, Any]:
         async with self.runtime.session_factory() as session:
@@ -1482,8 +1507,18 @@ class DesktopBridge:
         fullaccess_status = facts.fullaccess_status
         new_runtime = runtime_status.get("newRuntime")
         new_runtime_payload = new_runtime if isinstance(new_runtime, dict) else {}
-        runtime_ready = bool(new_runtime_payload.get("ready"))
+        new_runtime_auth = (
+            new_runtime_payload.get("auth")
+            if isinstance(new_runtime_payload.get("auth"), dict)
+            else {}
+        )
         runtime_active = bool(new_runtime_payload.get("active"))
+        runtime_auth_state = str(new_runtime_auth.get("state") or "idle")
+        runtime_account = (
+            cast(dict[str, Any], new_runtime_auth.get("user")).get("username")
+            if isinstance(new_runtime_auth.get("user"), dict)
+            else None
+        )
         runtime_detail = (
             str(new_runtime_payload.get("degradedReason") or new_runtime_payload.get("unavailableReason") or "OK")
             if new_runtime_payload
@@ -1539,9 +1574,25 @@ class DesktopBridge:
             {
                 "key": "newRuntime",
                 "label": "New runtime",
-                "status": "online" if runtime_ready else "warning" if runtime_active else "muted",
-                "value": "готов" if runtime_ready else "активен" if runtime_active else "inactive",
-                "detail": runtime_detail,
+                "status": (
+                    "online"
+                    if runtime_auth_state == "authorized"
+                    else "warning"
+                    if runtime_active or runtime_auth_state in {"awaiting_code", "awaiting_password", "error"}
+                    else "muted"
+                ),
+                "value": (
+                    "авторизован"
+                    if runtime_auth_state == "authorized"
+                    else "ждёт пароль"
+                    if runtime_auth_state == "awaiting_password"
+                    else "ждёт код"
+                    if runtime_auth_state in {"code_requested", "awaiting_code"}
+                    else "ошибка"
+                    if runtime_auth_state == "error"
+                    else "inactive"
+                ),
+                "detail": runtime_account or runtime_detail,
             },
             {
                 "key": "db",
@@ -1654,6 +1705,11 @@ class DesktopBridge:
         if facts.fullaccess_status and facts.fullaccess_status.ready_for_manual_sync:
             items.append("Full-access готов к ручной синхронизации нужных чатов.")
         return items[:4]
+
+    def _require_new_runtime_service(self) -> NewTelegramRuntimeService:
+        if self._new_runtime_service is None:
+            raise ValueError("Управление auth доступно только для встроенного managed new runtime.")
+        return self._new_runtime_service
 
 
 async def _load_last_message(message_repository: MessageRepository, chat_id: int) -> Message | None:

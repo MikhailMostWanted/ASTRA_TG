@@ -61,6 +61,20 @@ def test_cli_parser_supports_expected_commands() -> None:
     assert args.fullaccess_command == "login"
     assert args.code == "12345"
 
+    args = parser.parse_args(["runtime", "login"])
+    assert args.command == "runtime"
+    assert args.runtime_command == "login"
+
+    args = parser.parse_args(["runtime", "code", "24680"])
+    assert args.command == "runtime"
+    assert args.runtime_command == "code"
+    assert args.code == "24680"
+
+    args = parser.parse_args(["runtime", "password"])
+    assert args.command == "runtime"
+    assert args.runtime_command == "password"
+    assert args.password is None
+
 
 def test_status_command_handles_missing_processes(monkeypatch, capsys, tmp_path: Path) -> None:
     monkeypatch.setattr(app_module, "chdir_to_repository_root", lambda: tmp_path)
@@ -132,6 +146,91 @@ def test_backup_and_export_delegate_to_ops(monkeypatch, tmp_path: Path) -> None:
     assert backup_code == 0
     assert export_code == 0
     assert calls == [("backup", False), ("export", True)]
+
+
+def test_runtime_auth_commands_delegate_to_new_runtime_service(
+    monkeypatch,
+    capsys,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(app_module, "chdir_to_repository_root", lambda: tmp_path)
+
+    calls: list[tuple[str, str | None]] = []
+
+    class FakeResult:
+        def __init__(self, kind: str, message: str) -> None:
+            self.kind = kind
+            self.message = message
+
+        def to_payload(self) -> dict[str, object]:
+            return {
+                "kind": self.kind,
+                "message": self.message,
+                "status": {
+                    "state": "awaiting_code" if self.kind == "code_requested" else "authorized",
+                    "authState": "authorizing" if self.kind == "code_requested" else "authorized",
+                    "sessionState": "available",
+                    "session": {"path": str(tmp_path / "runtime.session")},
+                    "user": {"id": 42, "username": "astra_runtime", "phoneHint": "+***1122"},
+                    "reasonCode": self.kind,
+                    "reason": self.message,
+                    "error": None,
+                    "awaitingCode": self.kind == "code_requested",
+                    "awaitingPassword": False,
+                    "updatedAt": "2026-04-23T10:00:00+00:00",
+                },
+            }
+
+    class FakeRuntimeService:
+        async def request_code(self):
+            calls.append(("request_code", None))
+            return FakeResult("code_requested", "Код отправлен.")
+
+        async def submit_code(self, code: str):
+            calls.append(("submit_code", code))
+            return FakeResult("authorized", "Код подтверждён.")
+
+        async def submit_password(self, password: str):
+            calls.append(("submit_password", password))
+            return FakeResult("authorized", "Пароль подтверждён.")
+
+        async def logout(self):
+            calls.append(("logout", None))
+            return FakeResult("logged_out", "Logout завершён.")
+
+        async def reset(self):
+            calls.append(("reset", None))
+            return FakeResult("session_reset", "Состояние сброшено.")
+
+    class FakeDatabase:
+        async def dispose(self) -> None:
+            calls.append(("dispose", None))
+
+    async def fake_build_new_runtime_manager(_settings):
+        return SimpleNamespace(
+            new_runtime=FakeRuntimeService(),
+            database=FakeDatabase(),
+        )
+
+    monkeypatch.setattr(app_module, "build_new_runtime_manager", fake_build_new_runtime_manager)
+    monkeypatch.setattr(app_module.getpass, "getpass", lambda prompt: "secret-2fa")
+
+    parser = app_module.build_parser()
+    assert asyncio.run(app_module.run_cli(parser.parse_args(["runtime", "login"]))) == 0
+    assert asyncio.run(app_module.run_cli(parser.parse_args(["runtime", "code", "24680"]))) == 0
+    assert asyncio.run(app_module.run_cli(parser.parse_args(["runtime", "password"]))) == 0
+    assert asyncio.run(app_module.run_cli(parser.parse_args(["runtime", "logout"]))) == 0
+    assert asyncio.run(app_module.run_cli(parser.parse_args(["runtime", "reset"]))) == 0
+
+    output = capsys.readouterr().out
+    assert "Astra CLI / Runtime auth" in output
+    assert "action: code_requested" in output
+    assert "action: authorized" in output
+    assert ("request_code", None) in calls
+    assert ("submit_code", "24680") in calls
+    assert ("submit_password", "secret-2fa") in calls
+    assert ("logout", None) in calls
+    assert ("reset", None) in calls
 
 
 def test_doctor_command_handles_snapshot(monkeypatch, capsys, tmp_path: Path) -> None:

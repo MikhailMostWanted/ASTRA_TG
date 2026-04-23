@@ -96,6 +96,7 @@ class RuntimeDiagnosticSnapshot:
 class RuntimeManagerBundle:
     manager: RuntimeManager
     database: Any
+    new_runtime: NewTelegramRuntimeService
 
 
 def get_repository_root() -> Path:
@@ -258,14 +259,13 @@ async def build_new_runtime_manager(settings: Settings | None = None) -> Runtime
 
     manager = RuntimeManager(RuntimeSwitches.from_settings(effective_settings))
     manager.register_backend(LegacyRuntimeBackend(_UnavailableLegacy()))
-    manager.register_backend(
-        NewTelegramRuntimeService(
-            config=NewTelegramRuntimeConfig.from_settings(effective_settings),
-            auth_store=DatabaseNewTelegramAuthSessionStore(runtime.session_factory),
-            session_factory=runtime.session_factory,
-        )
+    new_runtime = NewTelegramRuntimeService(
+        config=NewTelegramRuntimeConfig.from_settings(effective_settings),
+        auth_store=DatabaseNewTelegramAuthSessionStore(runtime.session_factory),
+        session_factory=runtime.session_factory,
     )
-    return RuntimeManagerBundle(manager=manager, database=runtime)
+    manager.register_backend(new_runtime)
+    return RuntimeManagerBundle(manager=manager, database=runtime, new_runtime=new_runtime)
 
 
 async def build_new_runtime_status(settings: Settings | None = None) -> dict[str, Any]:

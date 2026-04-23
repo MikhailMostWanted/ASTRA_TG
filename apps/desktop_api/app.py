@@ -36,6 +36,14 @@ class FullAccessLoginRequest(BaseModel):
     password: str | None = None
 
 
+class NewRuntimeCodeRequest(BaseModel):
+    code: str = Field(min_length=1)
+
+
+class NewRuntimePasswordRequest(BaseModel):
+    password: str = Field(min_length=1)
+
+
 class FullAccessSyncRequest(BaseModel):
     reference: str = Field(min_length=1)
 
@@ -137,6 +145,36 @@ def create_app(
     @app.get("/api/runtime/new/health")
     async def new_runtime_health() -> dict[str, Any]:
         return await _bridge(app).get_new_runtime_health()
+
+    @app.get("/api/runtime/new/auth")
+    async def new_runtime_auth_status() -> dict[str, Any]:
+        return await _bridge(app).get_new_runtime_auth_status()
+
+    @app.post("/api/runtime/new/auth/request-code")
+    async def new_runtime_request_code() -> dict[str, Any]:
+        return await _call_with_value_error(app, _bridge(app).request_new_runtime_code)
+
+    @app.post("/api/runtime/new/auth/submit-code")
+    async def new_runtime_submit_code(payload: NewRuntimeCodeRequest) -> dict[str, Any]:
+        return await _call_with_value_error(
+            app,
+            lambda: _bridge(app).submit_new_runtime_code(code=payload.code),
+        )
+
+    @app.post("/api/runtime/new/auth/submit-password")
+    async def new_runtime_submit_password(payload: NewRuntimePasswordRequest) -> dict[str, Any]:
+        return await _call_with_value_error(
+            app,
+            lambda: _bridge(app).submit_new_runtime_password(password=payload.password),
+        )
+
+    @app.post("/api/runtime/new/auth/logout")
+    async def new_runtime_logout() -> dict[str, Any]:
+        return await _call_with_value_error(app, _bridge(app).logout_new_runtime)
+
+    @app.post("/api/runtime/new/auth/reset")
+    async def new_runtime_reset() -> dict[str, Any]:
+        return await _call_with_value_error(app, _bridge(app).reset_new_runtime)
 
     @app.get("/api/media/avatars/{telegram_chat_id}")
     async def media_avatar(telegram_chat_id: int):

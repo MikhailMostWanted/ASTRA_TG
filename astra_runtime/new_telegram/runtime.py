@@ -7,8 +7,17 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from astra_runtime.new_telegram.auth import NewTelegramAuthSessionStore
+from astra_runtime.new_telegram.auth import (
+    NewTelegramAuthActionResult,
+    NewTelegramAuthActionError,
+    NewTelegramAuthController,
+    NewTelegramAuthSessionStore,
+)
 from astra_runtime.new_telegram.config import NewTelegramRuntimeConfig
+from astra_runtime.new_telegram.transport import (
+    NewTelegramAuthClientFactory,
+    build_new_telegram_auth_client,
+)
 from astra_runtime.status import (
     RuntimeAuthSessionState,
     RuntimeBackendStatus,
@@ -35,14 +44,21 @@ class NewTelegramRuntimeService:
     config: NewTelegramRuntimeConfig
     auth_store: NewTelegramAuthSessionStore
     session_factory: async_sessionmaker[AsyncSession] | None = None
+    client_factory: NewTelegramAuthClientFactory = build_new_telegram_auth_client
     _lifecycle: RuntimeLifecycle = "stopped"
     _started_at: datetime | None = None
     _stopped_at: datetime | None = None
     _last_error: str | None = None
     _auth_session: RuntimeAuthSessionState | None = None
+    _auth_controller: NewTelegramAuthController = field(init=False, repr=False)
     _surface: "_NewTelegramRuntimeSurface" = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        self._auth_controller = NewTelegramAuthController(
+            config=self.config,
+            store=self.auth_store,
+            client_factory=self.client_factory,
+        )
         self._surface = _NewTelegramRuntimeSurface(self)
 
     @property
@@ -82,7 +98,7 @@ class NewTelegramRuntimeService:
 
         try:
             self.config.session_path.parent.mkdir(parents=True, exist_ok=True)
-            self._auth_session = await self.auth_store.load(self.config)
+            self._auth_session = await self._auth_controller.status(force_refresh=True)
             self._lifecycle = "running"
             status = self._build_status(self._auth_session)
             await self._record_status(status)
@@ -139,7 +155,9 @@ class NewTelegramRuntimeService:
 
     async def status(self) -> RuntimeBackendStatus:
         try:
-            self._auth_session = await self.auth_store.load(self.config)
+            self._auth_session = await self._auth_controller.status(
+                force_refresh=self._lifecycle == "running",
+            )
         except Exception as error:
             self._last_error = str(error)
             self._lifecycle = "failed"
@@ -149,6 +167,71 @@ class NewTelegramRuntimeService:
     async def readiness(self) -> RuntimeBackendStatus:
         return await self.status()
 
+    async def auth_status(self) -> RuntimeAuthSessionState:
+        self._auth_session = await self._auth_controller.status(force_refresh=True)
+        await self._record_status(self._build_status(self._auth_session))
+        return self._auth_session
+
+    async def request_code(self) -> NewTelegramAuthActionResult:
+        try:
+            result = await self._auth_controller.request_code()
+        except NewTelegramAuthActionError as error:
+            if error.status is not None:
+                self._auth_session = error.status
+                await self._record_status(self._build_status(self._auth_session))
+            raise
+        self._auth_session = result.status
+        await self._record_status(self._build_status(self._auth_session))
+        return result
+
+    async def submit_code(self, code: str) -> NewTelegramAuthActionResult:
+        try:
+            result = await self._auth_controller.submit_code(code)
+        except NewTelegramAuthActionError as error:
+            if error.status is not None:
+                self._auth_session = error.status
+                await self._record_status(self._build_status(self._auth_session))
+            raise
+        self._auth_session = result.status
+        await self._record_status(self._build_status(self._auth_session))
+        return result
+
+    async def submit_password(self, password: str) -> NewTelegramAuthActionResult:
+        try:
+            result = await self._auth_controller.submit_password(password)
+        except NewTelegramAuthActionError as error:
+            if error.status is not None:
+                self._auth_session = error.status
+                await self._record_status(self._build_status(self._auth_session))
+            raise
+        self._auth_session = result.status
+        await self._record_status(self._build_status(self._auth_session))
+        return result
+
+    async def logout(self) -> NewTelegramAuthActionResult:
+        try:
+            result = await self._auth_controller.logout()
+        except NewTelegramAuthActionError as error:
+            if error.status is not None:
+                self._auth_session = error.status
+                await self._record_status(self._build_status(self._auth_session))
+            raise
+        self._auth_session = result.status
+        await self._record_status(self._build_status(self._auth_session))
+        return result
+
+    async def reset(self) -> NewTelegramAuthActionResult:
+        try:
+            result = await self._auth_controller.reset()
+        except NewTelegramAuthActionError as error:
+            if error.status is not None:
+                self._auth_session = error.status
+                await self._record_status(self._build_status(self._auth_session))
+            raise
+        self._auth_session = result.status
+        await self._record_status(self._build_status(self._auth_session))
+        return result
+
     def _build_status(
         self,
         auth_session: RuntimeAuthSessionState | None,
@@ -156,8 +239,8 @@ class NewTelegramRuntimeService:
         active = self.config.enabled and self._lifecycle == "running"
         healthy = self._lifecycle in {"running", "stopped"} and self._last_error is None
         auth_ready = bool(auth_session and auth_session.authorized)
-        transport_ready = False
-        ready = active and healthy and auth_ready and transport_ready
+        surface_routing_ready = False
+        ready = active and healthy and auth_ready and surface_routing_ready
 
         unavailable_reason: str | None = None
         degraded_reason: str | None = None
@@ -173,8 +256,10 @@ class NewTelegramRuntimeService:
                 if auth_session and auth_session.reason
                 else "New Telegram runtime is not authorized yet."
             )
-        elif not transport_ready:
-            degraded_reason = "Telegram transport adapter is not connected yet."
+        elif not surface_routing_ready:
+            degraded_reason = (
+                "Auth/session слой готов, но product surfaces пока намеренно остаются на legacy."
+            )
 
         return RuntimeBackendStatus(
             backend="new",
@@ -196,6 +281,11 @@ class NewTelegramRuntimeService:
                 "health",
                 "readiness",
                 "auth-session-status",
+                "auth-request-code",
+                "auth-submit-code",
+                "auth-submit-password",
+                "auth-logout",
+                "auth-reset",
             ),
         )
 

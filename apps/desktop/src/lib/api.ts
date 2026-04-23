@@ -24,6 +24,8 @@ import type {
   RemindersOverviewPayload,
   ReminderScanPayload,
   ReplyPreviewPayload,
+  RuntimeAuthActionPayload,
+  RuntimeAuthStatusPayload,
   RuntimeStatusPayload,
   SourceMutationPayload,
   SourcesPayload,
@@ -96,6 +98,24 @@ export const api = {
   health: () => request<HealthPayload>("/health"),
   runtime: () => request<RuntimeStatusPayload>("/api/runtime"),
   newRuntimeHealth: () => request<RuntimeStatusPayload["newRuntime"]>("/api/runtime/new/health"),
+  newRuntimeAuthStatus: () =>
+    request<RuntimeAuthStatusPayload>("/api/runtime/new/auth"),
+  requestNewRuntimeCode: () =>
+    request<RuntimeAuthActionPayload>("/api/runtime/new/auth/request-code", { method: "POST" }),
+  submitNewRuntimeCode: (payload: { code: string }) =>
+    request<RuntimeAuthActionPayload>("/api/runtime/new/auth/submit-code", {
+      method: "POST",
+      body: payload,
+    }),
+  submitNewRuntimePassword: (payload: { password: string }) =>
+    request<RuntimeAuthActionPayload>("/api/runtime/new/auth/submit-password", {
+      method: "POST",
+      body: payload,
+    }),
+  logoutNewRuntime: () =>
+    request<RuntimeAuthActionPayload>("/api/runtime/new/auth/logout", { method: "POST" }),
+  resetNewRuntime: () =>
+    request<RuntimeAuthActionPayload>("/api/runtime/new/auth/reset", { method: "POST" }),
   dashboard: () => request<DashboardPayload>("/api/dashboard"),
   ops: (tail = 80) => request<OpsOverviewPayload>(withQuery("/api/ops", { tail })),
   logs: (component?: string, tail = 80) =>

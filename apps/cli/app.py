@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import os
 import signal
 import subprocess
 import sys
 
+from astra_runtime.new_telegram import NewTelegramAuthActionError
 from apps.bot.app import run_bot
 from apps.cli.desktop import (
     DEFAULT_API_URL as DEFAULT_DESKTOP_API_URL,
@@ -20,6 +22,7 @@ from apps.cli.formatting import (
     format_action_results,
     format_doctor,
     format_logs,
+    format_runtime_auth_action,
     format_runtime_diagnostics,
     format_runtime_health,
     format_runtime_status,
@@ -223,6 +226,35 @@ def build_parser() -> argparse.ArgumentParser:
         "diagnose",
         help="Краткая диагностика процесса, БД и readiness нового runtime.",
     )
+    runtime_subparsers.add_parser(
+        "login",
+        help="Запросить код Telegram для нового runtime.",
+    )
+    runtime_code_parser = runtime_subparsers.add_parser(
+        "code",
+        help="Подтвердить код Telegram для нового runtime.",
+    )
+    runtime_code_parser.add_argument(
+        "code",
+        help="Код Telegram для нового runtime.",
+    )
+    runtime_password_parser = runtime_subparsers.add_parser(
+        "password",
+        help="Подтвердить пароль 2FA для нового runtime.",
+    )
+    runtime_password_parser.add_argument(
+        "password",
+        nargs="?",
+        help="Пароль 2FA. Если не указан, CLI спросит его интерактивно.",
+    )
+    runtime_subparsers.add_parser(
+        "logout",
+        help="Выполнить logout нового runtime и очистить локальную session.",
+    )
+    runtime_subparsers.add_parser(
+        "reset",
+        help="Принудительно сбросить auth/session состояние нового runtime.",
+    )
     return parser
 
 
@@ -263,7 +295,7 @@ async def run_cli(args: argparse.Namespace) -> int:
             code=getattr(args, "code", None),
         )
     if args.command == "runtime":
-        return await _handle_runtime(args.runtime_command)
+        return await _handle_runtime(args)
     if args.command == "_run-bot":
         await _run_managed_bot()
         return 0
@@ -445,7 +477,8 @@ async def _handle_desktop_stop() -> int:
     return 0
 
 
-async def _handle_runtime(command: str) -> int:
+async def _handle_runtime(args: argparse.Namespace) -> int:
+    command = args.runtime_command
     if command == "status":
         print(format_runtime_status(await build_new_runtime_status(Settings())))
         return 0
@@ -467,7 +500,60 @@ async def _handle_runtime(command: str) -> int:
         result = stop_component("new-runtime")
         print(format_action_results("runtime stop", [result]))
         return 0 if result.ok else 1
+    if command in {"login", "code", "password", "logout", "reset"}:
+        return await _handle_runtime_auth_command(
+            command,
+            code=getattr(args, "code", None),
+            password=getattr(args, "password", None),
+        )
     raise ValueError(f"Неизвестная runtime-команда: {command}")
+
+
+async def _handle_runtime_auth_command(
+    command: str,
+    *,
+    code: str | None = None,
+    password: str | None = None,
+) -> int:
+    bundle = await build_new_runtime_manager(Settings())
+    try:
+        service = bundle.new_runtime
+        if command == "login":
+            result = await service.request_code()
+        elif command == "code":
+            if not code:
+                raise ValueError("Укажи код Telegram: astratg runtime code <код>.")
+            result = await service.submit_code(code)
+        elif command == "password":
+            secret = password
+            if not secret:
+                secret = await asyncio.to_thread(
+                    getpass.getpass,
+                    "Пароль 2FA для нового runtime: ",
+                )
+            result = await service.submit_password(secret or "")
+        elif command == "logout":
+            result = await service.logout()
+        elif command == "reset":
+            result = await service.reset()
+        else:
+            raise ValueError(f"Неизвестная runtime auth-команда: {command}")
+
+        print(format_runtime_auth_action(result.to_payload()))
+        return 0
+    except NewTelegramAuthActionError as error:
+        payload = {
+            "kind": error.code,
+            "message": error.message,
+            "status": error.status.to_payload() if error.status is not None else {},
+        }
+        print(format_runtime_auth_action(payload))
+        return 1
+    except ValueError as error:
+        print(f"Astra CLI / Runtime auth\nmessage: {error}")
+        return 1
+    finally:
+        await bundle.database.dispose()
 
 
 async def _run_managed_bot() -> None:

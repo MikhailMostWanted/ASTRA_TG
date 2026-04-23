@@ -160,6 +160,17 @@ def format_runtime_health(health: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
+def format_runtime_auth_action(payload: dict[str, object]) -> str:
+    status = _dict(payload.get("status"))
+    lines = ["Astra CLI / Runtime auth"]
+    lines.append(f"action: {payload.get('kind') or 'unknown'}")
+    lines.append(f"message: {payload.get('message') or 'нет'}")
+    if status:
+        lines.append("")
+        lines.extend(_format_runtime_auth(status))
+    return "\n".join(lines)
+
+
 def format_runtime_diagnostics(snapshot: RuntimeDiagnosticSnapshot) -> str:
     lines = ["Astra CLI / Runtime diagnostics"]
     lines.append(f"checked_at: {snapshot.checked_at.isoformat()}")
@@ -200,11 +211,38 @@ def _format_runtime_backend(label: str, backend: dict[str, object]) -> list[str]
         f"last_error: {backend.get('lastError') or 'нет'}",
     ]
     if auth:
-        lines.append(f"auth_state: {auth.get('authState')}")
-        lines.append(f"session_state: {auth.get('sessionState')}")
-        session = _dict(auth.get("session"))
-        lines.append(f"session_path: {session.get('path')}")
-        lines.append(f"auth_reason: {auth.get('reason') or 'нет'}")
+        lines.extend(_format_runtime_auth(auth))
+    return lines
+
+
+def _format_runtime_auth(auth: dict[str, object]) -> list[str]:
+    session = _dict(auth.get("session"))
+    user = _dict(auth.get("user"))
+    error = _dict(auth.get("error"))
+    username = user.get("username")
+    user_id = user.get("id")
+    phone_hint = user.get("phoneHint")
+    account_parts = [
+        str(item)
+        for item in (f"@{username}" if username else None, f"id={user_id}" if user_id else None, phone_hint)
+        if item
+    ]
+    lines = [
+        f"auth_state: {auth.get('authState')}",
+        f"state: {auth.get('state') or 'нет'}",
+        f"session_state: {auth.get('sessionState')}",
+        f"session_path: {session.get('path')}",
+        f"reason_code: {auth.get('reasonCode') or 'нет'}",
+        f"auth_reason: {auth.get('reason') or 'нет'}",
+        f"account: {', '.join(account_parts) if account_parts else 'нет'}",
+        f"awaiting_code: {auth.get('awaitingCode')}",
+        f"awaiting_password: {auth.get('awaitingPassword')}",
+        f"updated_at: {auth.get('updatedAt') or 'нет'}",
+    ]
+    if error:
+        lines.append(f"auth_error: {error.get('code') or 'нет'} {error.get('message') or ''}".rstrip())
+    else:
+        lines.append("auth_error: нет")
     return lines
 
 

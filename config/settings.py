@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     runtime_send_path_backend: str = "legacy"
     runtime_autopilot_control_backend: str = "legacy"
     runtime_new_enabled: bool = False
+    runtime_new_api_id: int | None = None
+    runtime_new_api_hash: str | None = None
+    runtime_new_phone: str | None = None
     runtime_new_session_path: str = "./var/new_telegram_runtime.session"
     runtime_new_device_name: str = "Astra Desktop new runtime"
     runtime_new_product_surfaces_enabled: bool = False
@@ -56,6 +59,13 @@ class Settings(BaseSettings):
     @property
     def fullaccess_session_file(self) -> Path:
         path = Path(self.fullaccess_session_path).expanduser()
+        if path.suffix != ".session":
+            path = path.with_suffix(f"{path.suffix}.session" if path.suffix else ".session")
+        return path
+
+    @property
+    def runtime_new_session_file(self) -> Path:
+        path = Path(self.runtime_new_session_path).expanduser()
         if path.suffix != ".session":
             path = path.with_suffix(f"{path.suffix}.session" if path.suffix else ".session")
         return path

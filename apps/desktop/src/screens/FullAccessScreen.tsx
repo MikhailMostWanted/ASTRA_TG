@@ -5,6 +5,7 @@ import {
   LoaderCircle,
   LogOut,
   MessageSquareText,
+  RotateCcw,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
@@ -18,8 +19,9 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import { formatCompactNumber, initials } from "@/lib/format";
+import { formatCompactNumber, formatDateTime, initials } from "@/lib/format";
 import { extractErrorMessage, safeArray } from "@/lib/runtime-guards";
+import type { RuntimeAuthPayload } from "@/lib/types";
 
 import { EmptyState } from "@/components/system/EmptyState";
 import { LoadingState } from "@/components/system/LoadingState";
@@ -28,16 +30,44 @@ import { WarningState } from "@/components/system/WarningState";
 export function FullAccessScreen() {
   const queryClient = useQueryClient();
   const [manualReference, setManualReference] = useState("");
+  const [runtimeCode, setRuntimeCode] = useState("");
+  const [runtimePassword, setRuntimePassword] = useState("");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [chatSearch, setChatSearch] = useState("");
   const deferredChatSearch = useDeferredValue(chatSearch);
+
+  const invalidateRuntimeQueries = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["new-runtime-auth"] }),
+      queryClient.invalidateQueries({ queryKey: ["runtime"] }),
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+      queryClient.invalidateQueries({ queryKey: ["health"] }),
+    ]);
+  };
+
+  const runtimeAuthQuery = useQuery({
+    queryKey: ["new-runtime-auth"],
+    queryFn: api.newRuntimeAuthStatus,
+    refetchInterval: 10_000,
+  });
 
   const overviewQuery = useQuery({
     queryKey: ["fullaccess"],
     queryFn: api.fullaccess,
     refetchInterval: 10_000,
   });
+
+  const runtimeStatus =
+    runtimeAuthQuery.data?.status ??
+    createFallbackRuntimeAuthStatus(
+      runtimeAuthQuery.isError
+        ? extractErrorMessage(
+            runtimeAuthQuery.error,
+            "Не удалось получить auth/session состояние нового runtime.",
+          )
+        : "Auth/session состояние нового runtime пока недоступно.",
+    );
 
   const status = overviewQuery.data?.status ?? {
     enabled: false,
@@ -53,11 +83,81 @@ export function FullAccessScreen() {
     reason: "Статус full-access пока недоступен.",
     sessionPath: "—",
   };
+
   const chatsQuery = useQuery({
     queryKey: ["fullaccess-chats"],
     queryFn: () => api.fullaccessChats(50),
     enabled: Boolean(status?.readyForManualSync),
     refetchInterval: 20_000,
+  });
+
+  const runtimeRequestCodeMutation = useMutation({
+    mutationFn: api.requestNewRuntimeCode,
+    onSuccess: async (payload) => {
+      toast.success(payload.message || "Код для нового runtime запрошен.");
+      await invalidateRuntimeQueries();
+    },
+    onError: async (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось запросить код для нового runtime.");
+      await invalidateRuntimeQueries();
+    },
+  });
+
+  const runtimeSubmitCodeMutation = useMutation({
+    mutationFn: () => api.submitNewRuntimeCode({ code: runtimeCode }),
+    onSuccess: async (payload) => {
+      toast.success(payload.message || "Код для нового runtime подтверждён.");
+      if (payload.kind !== "password_required") {
+        setRuntimeCode("");
+      }
+      await invalidateRuntimeQueries();
+    },
+    onError: async (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось подтвердить код нового runtime.");
+      await invalidateRuntimeQueries();
+    },
+  });
+
+  const runtimeSubmitPasswordMutation = useMutation({
+    mutationFn: () => api.submitNewRuntimePassword({ password: runtimePassword }),
+    onSuccess: async (payload) => {
+      toast.success(payload.message || "Пароль 2FA подтверждён.");
+      setRuntimePassword("");
+      setRuntimeCode("");
+      await invalidateRuntimeQueries();
+    },
+    onError: async (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось подтвердить пароль 2FA.");
+      await invalidateRuntimeQueries();
+    },
+  });
+
+  const runtimeLogoutMutation = useMutation({
+    mutationFn: api.logoutNewRuntime,
+    onSuccess: async (payload) => {
+      toast.success(payload.message || "Сессия нового runtime очищена.");
+      setRuntimeCode("");
+      setRuntimePassword("");
+      await invalidateRuntimeQueries();
+    },
+    onError: async (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось выполнить logout нового runtime.");
+      await invalidateRuntimeQueries();
+    },
+  });
+
+  const runtimeResetMutation = useMutation({
+    mutationFn: api.resetNewRuntime,
+    onSuccess: async (payload) => {
+      toast.success(payload.message || "Состояние нового runtime сброшено.");
+      setRuntimeCode("");
+      setRuntimePassword("");
+      await invalidateRuntimeQueries();
+    },
+    onError: async (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось сбросить auth/session состояние.");
+      await invalidateRuntimeQueries();
+    },
   });
 
   const requestCodeMutation = useMutation({
@@ -142,7 +242,7 @@ export function FullAccessScreen() {
     });
   }, [chatsQuery.data?.items, deferredChatSearch]);
 
-  if (overviewQuery.isLoading) {
+  if (overviewQuery.isLoading || runtimeAuthQuery.isLoading) {
     return <LoadingState />;
   }
 
@@ -161,6 +261,9 @@ export function FullAccessScreen() {
   const instructions = safeArray(overview.instructions).filter(
     (item): item is string => typeof item === "string" && item.trim().length > 0,
   );
+  const runtimeReadyLabel = getRuntimeStateLabel(runtimeStatus);
+  const runtimeAccountLabel = getRuntimeAccountLabel(runtimeStatus);
+  const runtimeStateDescription = getRuntimeStateDescription(runtimeStatus);
   const readyLabel = status?.authorized
     ? "Сессия готова"
     : status?.pendingLogin
@@ -171,37 +274,179 @@ export function FullAccessScreen() {
     <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
       <section className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/7 bg-white/[0.035]">
         <div className="border-b border-white/7 px-4 py-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Локальный вход</div>
-              <div className="text-base font-semibold text-white">Full-access без терминала</div>
-              <div className="mt-1 text-sm leading-6 text-slate-400">
-                {overview.onboarding || "Путь через Desktop для full-access авторизации и синхронизации."}
-              </div>
-            </div>
-
-            <div className="flex gap-2">
-              <Badge variant="outline" className="border-0 bg-cyan-400/10 text-cyan-100 ring-1 ring-cyan-300/10">
-                {readyLabel}
-              </Badge>
-              <Button
-                variant="outline"
-                className="border-white/8 bg-black/18 text-slate-100"
-                onClick={() => logoutMutation.mutate()}
-                disabled={!status?.sessionExists || logoutMutation.isPending}
-              >
-                {logoutMutation.isPending ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <LogOut data-icon="inline-start" />}
-                Выйти
-              </Button>
+          <div>
+            <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Telegram access</div>
+            <div className="mt-1 text-base font-semibold text-white">Новый runtime auth + legacy fallback</div>
+            <div className="mt-1 text-sm leading-6 text-slate-400">
+              Новый runtime получает реальный auth/session контур уже сейчас. Legacy full-access ниже
+              остаётся резервным путём для ручной синхронизации и старого fallback-сценария.
             </div>
           </div>
         </div>
 
         <ScrollArea className="min-h-0 flex-1">
           <div className="flex flex-col gap-4 px-4 py-4">
+            <div className="rounded-[24px] border border-cyan-300/12 bg-cyan-300/[0.07] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-white">Новый Telegram runtime</div>
+                  <div className="mt-1 text-sm leading-6 text-slate-300">
+                    Реальный auth/session слой нового backend. По умолчанию roster, message history и send
+                    по-прежнему остаются на legacy-routing.
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline" className="border-0 bg-cyan-400/10 text-cyan-100 ring-1 ring-cyan-300/10">
+                    {runtimeReadyLabel}
+                  </Badge>
+                  <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
+                    {runtimeStatus.sessionState === "available" ? "session есть" : "session нет"}
+                  </Badge>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <StatusMetric
+                  label="Состояние"
+                  value={runtimeReadyLabel}
+                  note={runtimeStateDescription}
+                  icon={<ShieldCheck className="size-4" />}
+                />
+                <StatusMetric
+                  label="Аккаунт"
+                  value={runtimeAccountLabel}
+                  note={
+                    runtimeStatus.user.phoneHint
+                      ? `Телефон: ${runtimeStatus.user.phoneHint}`
+                      : "Аккаунт будет показан после успешной авторизации."
+                  }
+                  icon={<MessageSquareText className="size-4" />}
+                />
+                <StatusMetric
+                  label="Session"
+                  value={runtimeStatus.sessionState === "available" ? "сохранена" : "не найдена"}
+                  note={runtimeStatus.session.path || "—"}
+                  icon={<KeyRound className="size-4" />}
+                />
+                <StatusMetric
+                  label="Последнее изменение"
+                  value={formatShortDate(runtimeStatus.stateChangedAt || runtimeStatus.updatedAt)}
+                  note={runtimeStatus.reason || "Без дополнительных деталей."}
+                  icon={<Sparkles className="size-4" />}
+                />
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-3">
+                <Button
+                  onClick={() => runtimeRequestCodeMutation.mutate()}
+                  disabled={!runtimeStatus.canRequestCode || runtimeRequestCodeMutation.isPending}
+                >
+                  {runtimeRequestCodeMutation.isPending ? (
+                    <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                  ) : (
+                    <ShieldCheck data-icon="inline-start" />
+                  )}
+                  Запросить код
+                </Button>
+                <Button
+                  variant="outline"
+                  className="border-white/8 bg-black/18 text-slate-100"
+                  onClick={() => runtimeLogoutMutation.mutate()}
+                  disabled={!runtimeStatus.canLogout || runtimeLogoutMutation.isPending}
+                >
+                  {runtimeLogoutMutation.isPending ? (
+                    <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                  ) : (
+                    <LogOut data-icon="inline-start" />
+                  )}
+                  Logout
+                </Button>
+                <Button
+                  variant="outline"
+                  className="border-white/8 bg-black/18 text-slate-100"
+                  onClick={() => runtimeResetMutation.mutate()}
+                  disabled={!runtimeStatus.canReset || runtimeResetMutation.isPending}
+                >
+                  {runtimeResetMutation.isPending ? (
+                    <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                  ) : (
+                    <RotateCcw data-icon="inline-start" />
+                  )}
+                  Сбросить
+                </Button>
+              </div>
+
+              {runtimeStatus.awaitingCode ? (
+                <div className="mt-4 grid gap-3">
+                  <div className="text-sm leading-6 text-slate-300">
+                    Код уже запрошен. Введи его здесь, чтобы завершить вход нового runtime.
+                  </div>
+                  <Input
+                    className="border-white/8 bg-black/18 text-slate-100 placeholder:text-slate-500"
+                    placeholder="Код Telegram для нового runtime"
+                    value={runtimeCode}
+                    onChange={(event) => setRuntimeCode(event.currentTarget.value)}
+                  />
+                  <Button
+                    className="justify-start"
+                    disabled={!runtimeStatus.canSubmitCode || !runtimeCode.trim() || runtimeSubmitCodeMutation.isPending}
+                    onClick={() => runtimeSubmitCodeMutation.mutate()}
+                  >
+                    {runtimeSubmitCodeMutation.isPending ? (
+                      <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                    ) : (
+                      <CheckCheck data-icon="inline-start" />
+                    )}
+                    Подтвердить код
+                  </Button>
+                </div>
+              ) : null}
+
+              {runtimeStatus.awaitingPassword ? (
+                <div className="mt-4 grid gap-3">
+                  <div className="text-sm leading-6 text-slate-300">
+                    Telegram запросил пароль 2FA. Код повторно не нужен, нужен только пароль.
+                  </div>
+                  <Input
+                    className="border-white/8 bg-black/18 text-slate-100 placeholder:text-slate-500"
+                    placeholder="Пароль 2FA для нового runtime"
+                    value={runtimePassword}
+                    onChange={(event) => setRuntimePassword(event.currentTarget.value)}
+                  />
+                  <Button
+                    className="justify-start"
+                    disabled={!runtimeStatus.canSubmitPassword || !runtimePassword.trim() || runtimeSubmitPasswordMutation.isPending}
+                    onClick={() => runtimeSubmitPasswordMutation.mutate()}
+                  >
+                    {runtimeSubmitPasswordMutation.isPending ? (
+                      <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                    ) : (
+                      <CheckCheck data-icon="inline-start" />
+                    )}
+                    Подтвердить пароль 2FA
+                  </Button>
+                </div>
+              ) : null}
+
+              {runtimeStatus.error?.message ? (
+                <div className="mt-4 rounded-[20px] border border-rose-300/14 bg-rose-300/10 px-4 py-3 text-sm leading-6 text-rose-50">
+                  <div className="font-medium">Последняя auth-ошибка</div>
+                  <div className="mt-1">{runtimeStatus.error.message}</div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="rounded-[24px] border border-amber-300/12 bg-amber-300/8 p-4 text-sm leading-6 text-amber-50">
+              <div className="font-medium">Legacy full-access остаётся fallback</div>
+              <div className="mt-1">
+                Этот путь не удалён и остаётся резервным контуром для старого sync/send сценария. Следующий
+                блок управляет именно legacy full-access, а не новым runtime.
+              </div>
+            </div>
+
             <div className="grid gap-3 sm:grid-cols-2">
               <StatusMetric
-                label="Авторизация"
+                label="Legacy auth"
                 value={status?.authorized ? "готова" : status?.pendingLogin ? "код запрошен" : "не завершена"}
                 note={status?.reason || "Статус недоступен"}
                 icon={<ShieldCheck className="size-4" />}
@@ -227,7 +472,33 @@ export function FullAccessScreen() {
             </div>
 
             <div className="rounded-[24px] border border-white/7 bg-black/16 p-4">
-              <div className="text-sm font-medium text-white">Шаг 1. Запросить код</div>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium text-white">Legacy full-access вход</div>
+                  <div className="mt-1 text-sm leading-6 text-slate-400">
+                    {overview.onboarding || "Путь через Desktop для full-access авторизации и синхронизации."}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline" className="border-0 bg-cyan-400/10 text-cyan-100 ring-1 ring-cyan-300/10">
+                    {readyLabel}
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    className="border-white/8 bg-black/18 text-slate-100"
+                    onClick={() => logoutMutation.mutate()}
+                    disabled={!status?.sessionExists || logoutMutation.isPending}
+                  >
+                    {logoutMutation.isPending ? (
+                      <LoaderCircle data-icon="inline-start" className="animate-spin" />
+                    ) : (
+                      <LogOut data-icon="inline-start" />
+                    )}
+                    Выйти
+                  </Button>
+                </div>
+              </div>
+              <div className="mt-4 text-sm font-medium text-white">Шаг 1. Запросить код</div>
               <div className="mt-1 text-sm leading-6 text-slate-400">
                 Если `FULLACCESS_PHONE` и ключи API настроены, код придёт в Telegram и останется внутри desktop-потока.
               </div>
@@ -387,6 +658,97 @@ export function FullAccessScreen() {
       </section>
     </div>
   );
+}
+
+function createFallbackRuntimeAuthStatus(reason: string): RuntimeAuthPayload {
+  return {
+    state: "idle",
+    authState: "unauthorized",
+    sessionState: "missing",
+    authorized: false,
+    awaitingCode: false,
+    awaitingPassword: false,
+    canRequestCode: true,
+    canSubmitCode: false,
+    canSubmitPassword: false,
+    canLogout: false,
+    canReset: false,
+    user: {
+      id: null,
+      username: null,
+      phoneHint: null,
+    },
+    device: {
+      id: null,
+      name: null,
+    },
+    session: {
+      path: null,
+      stored: false,
+    },
+    updatedAt: null,
+    stateChangedAt: null,
+    codeRequestedAt: null,
+    authorizedAt: null,
+    logoutStartedAt: null,
+    lastCheckedAt: null,
+    timestamps: {
+      updatedAt: null,
+      stateChangedAt: null,
+      codeRequestedAt: null,
+      authorizedAt: null,
+      logoutStartedAt: null,
+      lastCheckedAt: null,
+      errorAt: null,
+    },
+    reasonCode: "status_unavailable",
+    reason,
+    error: null,
+  };
+}
+
+function getRuntimeStateLabel(status: RuntimeAuthPayload): string {
+  switch (status.state) {
+    case "authorized":
+      return "авторизован";
+    case "awaiting_password":
+      return "ждёт пароль";
+    case "code_requested":
+    case "awaiting_code":
+      return "ждёт код";
+    case "logout_in_progress":
+      return "выходит";
+    case "error":
+      return "ошибка";
+    case "disabled":
+      return "выключен";
+    default:
+      return "ожидает вход";
+  }
+}
+
+function getRuntimeStateDescription(status: RuntimeAuthPayload): string {
+  if (status.authorized) {
+    return "Auth/session слой готов. Поверхностный routing по умолчанию всё ещё остаётся на legacy."
+  }
+  return status.reason || "Статус нового runtime пока без дополнительных деталей.";
+}
+
+function getRuntimeAccountLabel(status: RuntimeAuthPayload): string {
+  if (status.user.username) {
+    return `@${status.user.username}`;
+  }
+  if (status.user.id) {
+    return `id ${status.user.id}`;
+  }
+  return "ещё не известен";
+}
+
+function formatShortDate(value: string | null): string {
+  if (!value) {
+    return "—";
+  }
+  return formatDateTime(value);
 }
 
 function StatusMetric({

@@ -40,8 +40,8 @@ export const navigationItems: NavigationItem[] = [
   },
   {
     id: "fullaccess",
-    label: "Full-access",
-    description: "Локальный вход, синхронизация истории и явная отправка.",
+    label: "Telegram access",
+    description: "Новый runtime auth, legacy full-access fallback и ручная синхронизация.",
     icon: ShieldEllipsis,
   },
   {

@@ -5,6 +5,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from astra_runtime.new_telegram import NewTelegramAuthActionResult
+from astra_runtime.status import RuntimeAuthSessionState
 from apps.desktop_api.app import create_app
 from apps.desktop_api.bridge import DesktopBridge
 from config.settings import Settings
@@ -377,6 +379,152 @@ def test_desktop_api_lifecycle_writes_and_removes_pid_file(monkeypatch, tmp_path
             )
 
         assert pid_path.exists() is False
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_desktop_api_new_runtime_auth_flow_endpoints(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, _ = await _seed_runtime(monkeypatch, tmp_path)
+        app = create_app(settings, runtime=runtime)
+
+        class FakeNewRuntimeService:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, str | None]] = []
+
+            async def auth_status(self) -> RuntimeAuthSessionState:
+                self.calls.append(("status", None))
+                return _build_runtime_auth_state(
+                    state="idle",
+                    auth_state="unauthorized",
+                    session_state="missing",
+                    reason_code="login_required",
+                    reason="Новый runtime ждёт авторизацию в Telegram.",
+                )
+
+            async def request_code(self) -> NewTelegramAuthActionResult:
+                self.calls.append(("request_code", None))
+                return NewTelegramAuthActionResult(
+                    kind="code_requested",
+                    message="Код Telegram отправлен.",
+                    status=_build_runtime_auth_state(
+                        state="awaiting_code",
+                        auth_state="authorizing",
+                        session_state="available",
+                        reason_code="awaiting_code",
+                        reason="Код отправлен. Введи его в Desktop или CLI.",
+                    ),
+                )
+
+            async def submit_code(self, code: str) -> NewTelegramAuthActionResult:
+                self.calls.append(("submit_code", code))
+                return NewTelegramAuthActionResult(
+                    kind="password_required",
+                    message="Telegram запросил пароль 2FA.",
+                    status=_build_runtime_auth_state(
+                        state="awaiting_password",
+                        auth_state="authorizing",
+                        session_state="available",
+                        reason_code="awaiting_password",
+                        reason="Telegram требует пароль 2FA.",
+                    ),
+                )
+
+            async def submit_password(self, password: str) -> NewTelegramAuthActionResult:
+                self.calls.append(("submit_password", password))
+                return NewTelegramAuthActionResult(
+                    kind="authorized",
+                    message="Новый runtime авторизован.",
+                    status=_build_runtime_auth_state(
+                        state="authorized",
+                        auth_state="authorized",
+                        session_state="available",
+                        reason_code="authorized",
+                        reason="Новый runtime авторизован в Telegram.",
+                        user_id=42,
+                        username="astra_runtime",
+                        phone_hint="+***1122",
+                    ),
+                )
+
+            async def logout(self) -> NewTelegramAuthActionResult:
+                self.calls.append(("logout", None))
+                return NewTelegramAuthActionResult(
+                    kind="logged_out",
+                    message="Logout завершён.",
+                    status=_build_runtime_auth_state(
+                        state="idle",
+                        auth_state="unauthorized",
+                        session_state="missing",
+                        reason_code="logged_out",
+                        reason="Сессия нового runtime очищена.",
+                    ),
+                )
+
+            async def reset(self) -> NewTelegramAuthActionResult:
+                self.calls.append(("reset", None))
+                return NewTelegramAuthActionResult(
+                    kind="session_reset",
+                    message="Состояние нового runtime сброшено.",
+                    status=_build_runtime_auth_state(
+                        state="idle",
+                        auth_state="unauthorized",
+                        session_state="missing",
+                        reason_code="session_reset",
+                        reason="Состояние auth/session нового runtime сброшено.",
+                    ),
+                )
+
+        fake_service = FakeNewRuntimeService()
+
+        with TestClient(app) as client:
+            app.state.bridge._new_runtime_service = fake_service
+
+            overview = client.get("/api/runtime/new/auth")
+            assert overview.status_code == 200
+            assert overview.json()["status"]["state"] == "idle"
+
+            request_code = client.post("/api/runtime/new/auth/request-code")
+            assert request_code.status_code == 200
+            assert request_code.json()["kind"] == "code_requested"
+            assert request_code.json()["status"]["awaitingCode"] is True
+
+            submit_code = client.post(
+                "/api/runtime/new/auth/submit-code",
+                json={"code": "24680"},
+            )
+            assert submit_code.status_code == 200
+            assert submit_code.json()["kind"] == "password_required"
+            assert submit_code.json()["status"]["state"] == "awaiting_password"
+
+            submit_password = client.post(
+                "/api/runtime/new/auth/submit-password",
+                json={"password": "secret-2fa"},
+            )
+            assert submit_password.status_code == 200
+            assert submit_password.json()["kind"] == "authorized"
+            assert submit_password.json()["status"]["user"]["username"] == "astra_runtime"
+
+            logout = client.post("/api/runtime/new/auth/logout")
+            assert logout.status_code == 200
+            assert logout.json()["kind"] == "logged_out"
+
+            reset = client.post("/api/runtime/new/auth/reset")
+            assert reset.status_code == 200
+            assert reset.json()["kind"] == "session_reset"
+
+        assert fake_service.calls == [
+            ("status", None),
+            ("request_code", None),
+            ("submit_code", "24680"),
+            ("submit_password", "secret-2fa"),
+            ("logout", None),
+            ("reset", None),
+        ]
         await runtime.dispose()
 
     asyncio.run(run_assertions())
@@ -861,3 +1009,30 @@ async def _seed_runtime(monkeypatch, tmp_path: Path):
         "digest_id": digest.id,
         "last_message_id": inbound_two.id,
     }
+
+
+def _build_runtime_auth_state(
+    *,
+    state: str,
+    auth_state: str,
+    session_state: str,
+    reason_code: str,
+    reason: str,
+    user_id: int | None = None,
+    username: str | None = None,
+    phone_hint: str | None = None,
+) -> RuntimeAuthSessionState:
+    return RuntimeAuthSessionState(
+        state=state,  # type: ignore[arg-type]
+        auth_state=auth_state,  # type: ignore[arg-type]
+        session_state=session_state,  # type: ignore[arg-type]
+        user_id=user_id,
+        username=username,
+        phone_hint=phone_hint,
+        session_path="/tmp/new-runtime.session",
+        device_name="desktop",
+        reason_code=reason_code,
+        reason=reason,
+        updated_at=datetime(2026, 4, 23, 10, 0, tzinfo=timezone.utc),
+        state_changed_at=datetime(2026, 4, 23, 10, 0, tzinfo=timezone.utc),
+    )
