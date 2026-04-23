@@ -25,12 +25,12 @@ import { EmptyState } from "./EmptyState";
 
 interface ChatListProps {
   chats: ChatItem[];
-  selectedChatId: number | null;
+  selectedChatKey: string | null;
   search: string;
   filter: string;
   sort: string;
   favorites: number[];
-  workspaceStateByChat: Record<number, ChatWorkspaceState>;
+  workspaceStateByChat: Record<string, ChatWorkspaceState>;
   loading?: boolean;
   refreshing?: boolean;
   refreshedAt?: string | null;
@@ -39,7 +39,7 @@ interface ChatListProps {
   onSearchChange: (value: string) => void;
   onFilterChange: (value: string) => void;
   onSortChange: (value: string) => void;
-  onSelectChat: (chatId: number) => void;
+  onSelectChat: (chatKey: string) => void;
   onToggleFavorite: (chatId: number) => void;
   onRefresh: () => void;
 }
@@ -47,12 +47,13 @@ interface ChatListProps {
 const syncLabelMap: Record<string, string> = {
   fullaccess: "full-access",
   local: "локально",
+  runtime: "runtime",
   empty: "без sync",
 };
 
 export function ChatList({
   chats,
-  selectedChatId,
+  selectedChatKey,
   search,
   filter,
   sort,
@@ -184,26 +185,40 @@ export function ChatList({
           ) : null}
 
           {safeChats.map((chat) => {
-            const isSelected = chat.id === selectedChatId;
+            const isSelected = chat.chatKey === selectedChatKey;
             const isFavorite = safeFavorites.includes(chat.id);
-            const workspaceState = safeWorkspaceState[chat.id];
+            const workspaceState = safeWorkspaceState[chat.chatKey];
+            const latestMessageKey = chat.rosterLastMessageKey || chat.lastMessageKey;
+            const latestMessageId = chat.lastMessageId;
             const seenMessageId = workspaceState?.seenMessageId ?? null;
+            const seenMessageKey = workspaceState?.seenMessageKey ?? null;
             const draftSourceMessageId = workspaceState?.draftSourceMessageId ?? null;
+            const draftSourceMessageKey = workspaceState?.draftSourceMessageKey ?? null;
             const sentSourceMessageId = workspaceState?.sentSourceMessageId ?? null;
+            const sentSourceMessageKey = workspaceState?.sentSourceMessageKey ?? null;
             const hasNewMessages = Boolean(
-              seenMessageId !== null
-              && chat.lastMessageId !== null
-              && Number(chat.lastMessageId) > Number(seenMessageId),
+              latestMessageKey
+                ? seenMessageKey !== latestMessageKey
+                : seenMessageId !== null
+                  && latestMessageId !== null
+                  && Number(latestMessageId) > Number(seenMessageId),
             );
             const hasDraft = Boolean(
               workspaceState?.draftText
-              && draftSourceMessageId !== null
-              && draftSourceMessageId === chat.lastMessageId,
+              && (
+                latestMessageKey
+                  ? draftSourceMessageKey !== null && draftSourceMessageKey === latestMessageKey
+                  : draftSourceMessageId !== null && draftSourceMessageId === latestMessageId
+              ),
             );
             const needsReply = Boolean(
               chat.type !== "channel"
-              && chat.lastDirection === "inbound"
-              && sentSourceMessageId !== chat.lastMessageId,
+              && (chat.rosterLastDirection || chat.lastDirection) === "inbound"
+              && (
+                latestMessageKey
+                  ? sentSourceMessageKey !== latestMessageKey
+                  : sentSourceMessageId !== latestMessageId
+              ),
             );
             const displayPreview = chat.rosterLastMessagePreview || chat.lastMessagePreview;
             const displayActivityAt = chat.rosterLastActivityAt || chat.lastMessageAt;
@@ -219,11 +234,11 @@ export function ChatList({
                   "cursor-pointer rounded-[24px] border border-transparent bg-transparent px-3 py-3 text-left transition-all active:translate-y-px hover:border-white/10 hover:bg-white/[0.045]",
                   isSelected && "border-cyan-300/18 bg-cyan-400/9 shadow-[0_14px_38px_rgba(8,145,178,0.16)]",
                 )}
-                onClick={() => onSelectChat(chat.id)}
+                onClick={() => onSelectChat(chat.chatKey)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
-                    onSelectChat(chat.id);
+                    onSelectChat(chat.chatKey);
                   }
                 }}
               >

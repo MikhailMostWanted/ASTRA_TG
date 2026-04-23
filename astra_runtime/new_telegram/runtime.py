@@ -14,11 +14,14 @@ from astra_runtime.new_telegram.auth import (
     NewTelegramAuthSessionStore,
 )
 from astra_runtime.new_telegram.config import NewTelegramRuntimeConfig
+from astra_runtime.new_telegram.history import NewTelegramMessageHistory
 from astra_runtime.new_telegram.roster import NewTelegramChatRoster
 from astra_runtime.new_telegram.transport import (
     NewTelegramAuthClientFactory,
+    NewTelegramHistoryClientFactory,
     NewTelegramRosterClientFactory,
     build_new_telegram_auth_client,
+    build_new_telegram_history_client,
     build_new_telegram_roster_client,
     close_managed_new_telegram_clients,
 )
@@ -35,6 +38,7 @@ from storage.repositories import SettingRepository
 
 LOGGER = get_logger(__name__)
 CHAT_ROSTER_SURFACE = "chatRoster"
+MESSAGE_WORKSPACE_SURFACE = "messageWorkspace"
 
 
 @dataclass(slots=True)
@@ -46,6 +50,7 @@ class NewTelegramRuntimeService:
     session_factory: async_sessionmaker[AsyncSession] | None = None
     client_factory: NewTelegramAuthClientFactory = build_new_telegram_auth_client
     roster_client_factory: NewTelegramRosterClientFactory = build_new_telegram_roster_client
+    history_client_factory: NewTelegramHistoryClientFactory = build_new_telegram_history_client
     _lifecycle: RuntimeLifecycle = "stopped"
     _started_at: datetime | None = None
     _stopped_at: datetime | None = None
@@ -54,6 +59,7 @@ class NewTelegramRuntimeService:
     _auth_controller: NewTelegramAuthController = field(init=False, repr=False)
     _surface: "_NewTelegramRuntimeSurface" = field(init=False, repr=False)
     _chat_roster: NewTelegramChatRoster = field(init=False, repr=False)
+    _message_history: NewTelegramMessageHistory = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._auth_controller = NewTelegramAuthController(
@@ -65,6 +71,11 @@ class NewTelegramRuntimeService:
             config=self.config,
             session_factory=self.session_factory,
             client_factory=self.roster_client_factory,
+        )
+        self._message_history = NewTelegramMessageHistory(
+            config=self.config,
+            session_factory=self.session_factory,
+            client_factory=self.history_client_factory,
         )
         self._surface = _NewTelegramRuntimeSurface(self)
 
@@ -81,23 +92,26 @@ class NewTelegramRuntimeService:
         return self.route_available_for(CHAT_ROSTER_SURFACE)
 
     def route_available_for(self, surface: str) -> bool:
-        if surface != CHAT_ROSTER_SURFACE:
-            return False
         if self._surface_prerequisites_reason(self._auth_session) is not None:
             return False
-        return self._chat_roster.route_ready()
+        if surface == CHAT_ROSTER_SURFACE:
+            return self._chat_roster.route_ready()
+        if surface == MESSAGE_WORKSPACE_SURFACE:
+            return self._message_history.route_ready()
+        return False
 
     def route_reason_for(self, surface: str) -> str | None:
-        if surface != CHAT_ROSTER_SURFACE:
-            return (
-                "New Telegram runtime пока не реализует этот surface; "
-                "legacy remains effective."
-            )
-
         prerequisite_reason = self._surface_prerequisites_reason(self._auth_session)
         if prerequisite_reason is not None:
             return prerequisite_reason
-        return self._chat_roster.route_reason()
+        if surface == CHAT_ROSTER_SURFACE:
+            return self._chat_roster.route_reason()
+        if surface == MESSAGE_WORKSPACE_SURFACE:
+            return self._message_history.route_reason()
+        return (
+            "New Telegram runtime пока не реализует этот surface; "
+            "legacy remains effective."
+        )
 
     def chat_roster_status_payload(self) -> dict[str, Any]:
         return self._chat_roster.status_payload()
@@ -310,6 +324,7 @@ class NewTelegramRuntimeService:
                 "auth-logout",
                 "auth-reset",
                 "chat-roster",
+                "message-history",
             ),
         )
 
@@ -384,10 +399,12 @@ class _NewTelegramRuntimeSurface:
         return await self.service._chat_roster.list_chats(**kwargs)
 
     async def get_chat_messages(self, *_args, **_kwargs) -> dict[str, Any]:
-        raise RuntimeUnavailableError(self._surface_unavailable_message("messageWorkspace"))
+        self._ensure_surface_available(MESSAGE_WORKSPACE_SURFACE)
+        return await self.service._message_history.get_chat_messages(*_args, **_kwargs)
 
     async def get_chat_workspace(self, *_args, **_kwargs) -> dict[str, Any]:
-        raise RuntimeUnavailableError(self._surface_unavailable_message("messageWorkspace"))
+        self._ensure_surface_available(MESSAGE_WORKSPACE_SURFACE)
+        return await self.service._message_history.get_chat_workspace(*_args, **_kwargs)
 
     async def build_reply_result(self, *_args, **_kwargs):
         raise RuntimeUnavailableError(self._surface_unavailable_message("replyGeneration"))

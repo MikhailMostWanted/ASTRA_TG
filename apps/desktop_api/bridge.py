@@ -172,6 +172,7 @@ class DesktopBridge:
         status = await self._runtime_manager.status()
         status["managedProcess"] = serialize_process_state(inspect_process("new-runtime"))
         status["chatRoster"] = await self._get_chat_roster_state()
+        status["messageWorkspace"] = await self._get_message_workspace_state()
         return status
 
     async def get_new_runtime_health(self) -> dict[str, Any]:
@@ -315,7 +316,7 @@ class DesktopBridge:
             else:
                 raise
 
-        source = _resolve_chat_roster_source(
+        source = _resolve_runtime_surface_source(
             requested=route.requested,
             effective=effective_backend,
         )
@@ -420,10 +421,37 @@ class DesktopBridge:
         }
 
     async def get_chat_workspace(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
-        return await self._runtime_manager.surface("messageWorkspace").get_chat_workspace(
-            chat_id,
-            limit=limit,
+        route = self._runtime_manager.route_status("messageWorkspace")
+        effective_backend = route.effective
+        payload: dict[str, Any]
+        workspace_error: str | None = None
+
+        try:
+            payload = await self._runtime_manager.surface("messageWorkspace").get_chat_workspace(
+                chat_id,
+                limit=limit,
+            )
+        except Exception as error:
+            if route.requested == "new" and route.effective == "new":
+                workspace_error = str(error)
+                effective_backend = "legacy"
+                payload = await self._legacy_get_chat_workspace(chat_id, limit=limit)
+            else:
+                raise
+
+        source = _resolve_runtime_surface_source(
+            requested=route.requested,
+            effective=effective_backend,
         )
+        status_payload = self._decorate_workspace_status_payload(
+            payload=payload,
+            route=route.to_payload(),
+            source=source,
+            effective_backend=effective_backend,
+            last_error=workspace_error,
+        )
+        await self._record_message_workspace_state(status_payload)
+        return payload
 
     async def _legacy_get_chat_workspace(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
         # LEGACY_RUNTIME: workspace refresh still uses fullaccess tail sync.
@@ -453,13 +481,55 @@ class DesktopBridge:
                 tail_refresh=tail_refresh,
             )
 
-    async def get_chat_messages(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
-        return await self._runtime_manager.surface("messageWorkspace").get_chat_messages(
-            chat_id,
-            limit=limit,
-        )
+    async def get_chat_messages(
+        self,
+        chat_id: int,
+        *,
+        limit: int = 80,
+        before_runtime_message_id: int | None = None,
+    ) -> dict[str, Any]:
+        route = self._runtime_manager.route_status("messageWorkspace")
+        effective_backend = route.effective
+        payload: dict[str, Any]
+        messages_error: str | None = None
 
-    async def _legacy_get_chat_messages(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
+        try:
+            payload = await self._runtime_manager.surface("messageWorkspace").get_chat_messages(
+                chat_id,
+                limit=limit,
+                before_runtime_message_id=before_runtime_message_id,
+            )
+        except Exception as error:
+            if route.requested == "new" and route.effective == "new":
+                messages_error = str(error)
+                effective_backend = "legacy"
+                payload = await self._legacy_get_chat_messages(
+                    chat_id,
+                    limit=limit,
+                    before_runtime_message_id=before_runtime_message_id,
+                )
+            else:
+                raise
+
+        self._decorate_workspace_status_payload(
+            payload=payload,
+            route=route.to_payload(),
+            source=_resolve_runtime_surface_source(
+                requested=route.requested,
+                effective=effective_backend,
+            ),
+            effective_backend=effective_backend,
+            last_error=messages_error,
+        )
+        return payload
+
+    async def _legacy_get_chat_messages(
+        self,
+        chat_id: int,
+        *,
+        limit: int = 80,
+        before_runtime_message_id: int | None = None,
+    ) -> dict[str, Any]:
         # LEGACY_RUNTIME: direct local message-store read.
         async with self.runtime.session_factory() as session:
             message_repository = MessageRepository(session)
@@ -472,8 +542,26 @@ class DesktopBridge:
                 ),
             )
 
-            recent_desc = await message_repository.get_recent_messages(chat_id=chat.id, limit=max(1, limit))
+            if before_runtime_message_id is None:
+                recent_desc = await message_repository.get_recent_messages(
+                    chat_id=chat.id,
+                    limit=max(1, limit),
+                )
+            else:
+                recent_desc = await message_repository.get_recent_messages_before(
+                    chat_id=chat.id,
+                    before_telegram_message_id=before_runtime_message_id,
+                    limit=max(1, limit),
+                )
             messages = list(reversed(recent_desc))
+            serialized_messages = [
+                serialize_message(
+                    message,
+                    session_file=self.settings.fullaccess_session_file,
+                    telegram_chat_id=chat.telegram_chat_id,
+                )
+                for message in messages
+            ]
             return {
                 "chat": serialize_chat(
                     chat,
@@ -482,14 +570,33 @@ class DesktopBridge:
                     session_file=self.settings.fullaccess_session_file,
                     asset_session_files=self._asset_session_files(),
                 ),
-                "messages": [
-                    serialize_message(
-                        message,
-                        session_file=self.settings.fullaccess_session_file,
-                        telegram_chat_id=chat.telegram_chat_id,
-                    )
-                    for message in messages
-                ],
+                "messages": serialized_messages,
+                "history": {
+                    "limit": max(1, limit),
+                    "returnedCount": len(serialized_messages),
+                    "hasMoreBefore": bool(
+                        serialized_messages
+                        and serialized_messages[0].get("runtimeMessageId")
+                        and int(serialized_messages[0]["runtimeMessageId"]) > 1
+                    ),
+                    "beforeRuntimeMessageId": (
+                        int(serialized_messages[0]["runtimeMessageId"])
+                        if serialized_messages and serialized_messages[0].get("runtimeMessageId") is not None
+                        else None
+                    ),
+                    "oldestMessageKey": serialized_messages[0].get("messageKey") if serialized_messages else None,
+                    "newestMessageKey": serialized_messages[-1].get("messageKey") if serialized_messages else None,
+                    "oldestRuntimeMessageId": (
+                        int(serialized_messages[0]["runtimeMessageId"])
+                        if serialized_messages and serialized_messages[0].get("runtimeMessageId") is not None
+                        else None
+                    ),
+                    "newestRuntimeMessageId": (
+                        int(serialized_messages[-1]["runtimeMessageId"])
+                        if serialized_messages and serialized_messages[-1].get("runtimeMessageId") is not None
+                        else None
+                    ),
+                },
                 "refreshedAt": serialize_datetime(datetime.now(timezone.utc)),
             }
 
@@ -1360,6 +1467,22 @@ class DesktopBridge:
             build_chat_reference(chat),
             workspace_messages=tuple(messages),
         )
+        serialized_messages = [
+            serialize_message(
+                message,
+                session_file=self.settings.fullaccess_session_file,
+                telegram_chat_id=chat.telegram_chat_id,
+            )
+            for message in messages
+        ]
+        reply_payload = self._decorate_reply_payload(
+            serialize_reply_result(reply_result),
+            write_ready=fullaccess_status.ready_for_manual_send,
+        )
+        reply_context = self._build_reply_context_payload(
+            reply_payload=reply_payload,
+            message_payloads=serialized_messages,
+        )
         freshness = await self._build_chat_freshness(
             session,
             chat=chat,
@@ -1371,28 +1494,58 @@ class DesktopBridge:
             reply_result=reply_result,
             write_ready=fullaccess_status.ready_for_manual_send,
         )
+        serialized_chat = serialize_chat(
+            chat,
+            message_count=message_count,
+            last_message=last_message,
+            session_file=self.settings.fullaccess_session_file,
+            asset_session_files=self._asset_session_files(),
+        )
         return {
-            "chat": serialize_chat(
-                chat,
-                message_count=message_count,
-                last_message=last_message,
-                session_file=self.settings.fullaccess_session_file,
-                asset_session_files=self._asset_session_files(),
-            ),
-            "messages": [
-                serialize_message(
-                    message,
-                    session_file=self.settings.fullaccess_session_file,
-                    telegram_chat_id=chat.telegram_chat_id,
-                )
-                for message in messages
-            ],
-            "reply": self._decorate_reply_payload(
-                serialize_reply_result(reply_result),
-                write_ready=fullaccess_status.ready_for_manual_send,
-            ),
+            "chat": serialized_chat,
+            "messages": serialized_messages,
+            "history": self._build_history_payload_from_messages(serialized_messages, limit=limit),
+            "replyContext": reply_context,
+            "reply": reply_payload,
             "autopilot": autopilot,
             "freshness": freshness,
+            "status": {
+                "source": "legacy",
+                "effectiveBackend": "legacy",
+                "degraded": False,
+                "degradedReason": None,
+                "syncTrigger": freshness.get("syncTrigger"),
+                "updatedNow": freshness.get("updatedNow"),
+                "syncError": freshness.get("syncError"),
+                "lastUpdatedAt": serialize_datetime(datetime.now(timezone.utc)),
+                "lastSuccessAt": None,
+                "lastError": None,
+                "lastErrorAt": None,
+                "availability": {
+                    "workspaceAvailable": True,
+                    "historyReadable": True,
+                    "runtimeReadable": False,
+                    "legacyWorkspaceAvailable": True,
+                    "replyContextAvailable": bool(reply_context.get("available")),
+                    "sendAvailable": fullaccess_status.ready_for_manual_send,
+                    "autopilotAvailable": autopilot is not None,
+                    "canLoadOlder": bool(serialized_messages and serialized_messages[0].get("runtimeMessageId") and int(serialized_messages[0]["runtimeMessageId"]) > 1),
+                },
+                "messageSource": {
+                    "backend": "legacy_local_store",
+                    "chatKey": serialized_chat.get("chatKey"),
+                    "runtimeChatId": chat.telegram_chat_id,
+                    "localChatId": chat.id,
+                    "oldestMessageKey": serialized_messages[0].get("messageKey") if serialized_messages else None,
+                    "newestMessageKey": serialized_messages[-1].get("messageKey") if serialized_messages else None,
+                    "oldestRuntimeMessageId": (
+                        serialized_messages[0].get("runtimeMessageId") if serialized_messages else None
+                    ),
+                    "newestRuntimeMessageId": (
+                        serialized_messages[-1].get("runtimeMessageId") if serialized_messages else None
+                    ),
+                },
+            },
             "refreshedAt": serialize_datetime(datetime.now(timezone.utc)),
         }
 
@@ -1418,6 +1571,116 @@ class DesktopBridge:
             "disabledReason": None if write_ready else "Write-path через full-access сейчас недоступен.",
         }
         return payload
+
+    def _build_reply_context_payload(
+        self,
+        *,
+        reply_payload: dict[str, Any],
+        message_payloads: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        suggestion = reply_payload.get("suggestion") if isinstance(reply_payload.get("suggestion"), dict) else None
+        if suggestion is None:
+            return {
+                "available": False,
+                "sourceBackend": "legacy",
+                "focusLabel": None,
+                "focusReason": reply_payload.get("errorMessage"),
+                "replyOpportunityMode": None,
+                "replyOpportunityReason": None,
+                "sourceMessageKey": None,
+                "sourceRuntimeMessageId": None,
+                "sourceLocalMessageId": None,
+                "sourceSenderName": reply_payload.get("sourceSenderName"),
+                "sourceMessagePreview": reply_payload.get("sourceMessagePreview"),
+                "sourceSentAt": None,
+                "draftScopeBasis": None,
+                "draftScopeKey": None,
+            }
+
+        source_message_id = suggestion.get("sourceMessageId")
+        source_message = next(
+            (
+                message
+                for message in message_payloads
+                if source_message_id is not None and message.get("localMessageId") == source_message_id
+            ),
+            None,
+        )
+        source_message_preview = (
+            reply_payload.get("sourceMessagePreview")
+            or suggestion.get("sourceMessagePreview")
+            or (source_message.get("preview") if source_message is not None else None)
+        )
+        source_sender_name = (
+            reply_payload.get("sourceSenderName")
+            or (source_message.get("senderName") if source_message is not None else None)
+        )
+        draft_scope_basis = {
+            "sourceMessageKey": source_message.get("messageKey") if source_message is not None else None,
+            "sourceMessageId": source_message_id,
+            "runtimeMessageId": source_message.get("runtimeMessageId") if source_message is not None else None,
+            "focusLabel": suggestion.get("focusLabel"),
+            "sourceMessagePreview": source_message_preview,
+            "replyOpportunityMode": suggestion.get("replyOpportunityMode"),
+        }
+        return {
+            "available": True,
+            "sourceBackend": "legacy",
+            "focusLabel": suggestion.get("focusLabel"),
+            "focusReason": suggestion.get("focusReason"),
+            "replyOpportunityMode": suggestion.get("replyOpportunityMode"),
+            "replyOpportunityReason": suggestion.get("replyOpportunityReason"),
+            "sourceMessageKey": source_message.get("messageKey") if source_message is not None else None,
+            "sourceRuntimeMessageId": source_message.get("runtimeMessageId") if source_message is not None else None,
+            "sourceLocalMessageId": source_message_id,
+            "sourceSenderName": source_sender_name,
+            "sourceMessagePreview": draft_scope_basis["sourceMessagePreview"],
+            "sourceSentAt": source_message.get("sentAt") if source_message is not None else None,
+            "draftScopeBasis": draft_scope_basis,
+            "draftScopeKey": "::".join(
+                [
+                    str(draft_scope_basis["sourceMessageKey"] or draft_scope_basis["sourceMessageId"] or "none"),
+                    str(draft_scope_basis["focusLabel"] or "none"),
+                    str(draft_scope_basis["replyOpportunityMode"] or "none"),
+                    str(draft_scope_basis["sourceMessagePreview"] or "none"),
+                ]
+            ),
+        }
+
+    def _build_history_payload_from_messages(
+        self,
+        message_payloads: list[dict[str, Any]],
+        *,
+        limit: int,
+    ) -> dict[str, Any]:
+        oldest = message_payloads[0] if message_payloads else None
+        newest = message_payloads[-1] if message_payloads else None
+        return {
+            "limit": max(1, limit),
+            "returnedCount": len(message_payloads),
+            "hasMoreBefore": bool(
+                oldest is not None
+                and oldest.get("runtimeMessageId") is not None
+                and int(oldest["runtimeMessageId"]) > 1
+            ),
+            "beforeRuntimeMessageId": (
+                int(oldest["runtimeMessageId"])
+                if oldest is not None and oldest.get("runtimeMessageId") is not None
+                else None
+            ),
+            "oldestMessageKey": oldest.get("messageKey") if oldest is not None else None,
+            "newestMessageKey": newest.get("messageKey") if newest is not None else None,
+            "oldestRuntimeMessageId": (
+                int(oldest["runtimeMessageId"])
+                if oldest is not None and oldest.get("runtimeMessageId") is not None
+                else None
+            ),
+            "newestRuntimeMessageId": (
+                int(newest["runtimeMessageId"])
+                if newest is not None and newest.get("runtimeMessageId") is not None
+                else None
+            ),
+        }
 
     async def _maybe_refresh_chat_tail(self, session, *, chat) -> ChatTailRefreshStatus:
         if chat.category != "fullaccess":
@@ -1794,6 +2057,21 @@ class DesktopBridge:
         payload = event.payload.get("payload")
         return payload if isinstance(payload, dict) else None
 
+    async def _record_message_workspace_state(self, workspace_state: dict[str, Any]) -> None:
+        async with self.runtime.session_factory() as session:
+            await OperationalStateService(SettingRepository(session)).record_message_workspace_status(
+                payload=workspace_state,
+            )
+            await session.commit()
+
+    async def _get_message_workspace_state(self) -> dict[str, Any] | None:
+        async with self.runtime.session_factory() as session:
+            event = await OperationalStateService(SettingRepository(session)).get_message_workspace_status()
+        if event is None:
+            return None
+        payload = event.payload.get("payload")
+        return payload if isinstance(payload, dict) else None
+
     def _build_chat_roster_state(
         self,
         *,
@@ -1826,6 +2104,119 @@ class DesktopBridge:
             "lastErrorAt": runtime_meta.get("lastErrorAt"),
             "route": route,
         }
+
+    def _decorate_workspace_status_payload(
+        self,
+        *,
+        payload: dict[str, Any],
+        route: dict[str, Any],
+        source: str,
+        effective_backend: str,
+        last_error: str | None,
+    ) -> dict[str, Any]:
+        current_status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+        runtime_meta = (
+            current_status.get("runtimeMeta")
+            if isinstance(current_status.get("runtimeMeta"), dict)
+            else {}
+        )
+        availability = (
+            current_status.get("availability")
+            if isinstance(current_status.get("availability"), dict)
+            else {}
+        )
+        message_source = (
+            current_status.get("messageSource")
+            if isinstance(current_status.get("messageSource"), dict)
+            else {}
+        )
+        route_payload = dict(route)
+        if effective_backend != route.get("effective"):
+            route_payload["effective"] = effective_backend
+            route_payload["reason"] = last_error or route.get("reason")
+
+        route_reason = route_payload.get("reason") if isinstance(route_payload.get("reason"), str) else None
+        degraded_reason = (
+            last_error
+            or (current_status.get("degradedReason") if isinstance(current_status.get("degradedReason"), str) else None)
+            or route_reason
+            or (runtime_meta.get("routeReason") if isinstance(runtime_meta.get("routeReason"), str) else None)
+        )
+
+        freshness = payload.get("freshness") if isinstance(payload.get("freshness"), dict) else {}
+        status_payload = {
+            "source": source,
+            "requestedBackend": route_payload.get("requested"),
+            "effectiveBackend": effective_backend,
+            "degraded": (
+                source == "fallback_to_legacy"
+                or bool(degraded_reason)
+                or bool(current_status.get("degraded"))
+            ),
+            "degradedReason": degraded_reason,
+            "syncTrigger": (
+                freshness.get("syncTrigger")
+                if isinstance(freshness.get("syncTrigger"), str)
+                else current_status.get("syncTrigger")
+            ),
+            "updatedNow": bool(
+                freshness.get("updatedNow")
+                if "updatedNow" in freshness
+                else current_status.get("updatedNow")
+            ),
+            "syncError": (
+                freshness.get("syncError")
+                if isinstance(freshness.get("syncError"), str)
+                else last_error or current_status.get("syncError")
+            ),
+            "lastUpdatedAt": (
+                payload.get("refreshedAt")
+                if isinstance(payload.get("refreshedAt"), str) or payload.get("refreshedAt") is None
+                else serialize_datetime(payload.get("refreshedAt"))
+            ),
+            "lastSuccessAt": runtime_meta.get("lastSuccessAt") or current_status.get("lastSuccessAt"),
+            "lastError": last_error or current_status.get("lastError") or runtime_meta.get("lastError"),
+            "lastErrorAt": current_status.get("lastErrorAt") or runtime_meta.get("lastErrorAt"),
+            "availability": {
+                "workspaceAvailable": bool(
+                    availability.get("workspaceAvailable")
+                    if "workspaceAvailable" in availability
+                    else True
+                ),
+                "historyReadable": bool(
+                    availability.get("historyReadable")
+                    if "historyReadable" in availability
+                    else True
+                ),
+                "runtimeReadable": bool(
+                    availability.get("runtimeReadable")
+                    if "runtimeReadable" in availability
+                    else effective_backend == "new"
+                ),
+                "legacyWorkspaceAvailable": bool(
+                    availability.get("legacyWorkspaceAvailable")
+                    if "legacyWorkspaceAvailable" in availability
+                    else effective_backend == "legacy"
+                ),
+                "replyContextAvailable": bool(availability.get("replyContextAvailable")),
+                "sendAvailable": bool(availability.get("sendAvailable")),
+                "autopilotAvailable": bool(availability.get("autopilotAvailable")),
+                "canLoadOlder": bool(availability.get("canLoadOlder")),
+            },
+            "messageSource": {
+                "backend": message_source.get("backend") or ("legacy_local_store" if effective_backend == "legacy" else "new_runtime"),
+                "chatKey": message_source.get("chatKey"),
+                "runtimeChatId": message_source.get("runtimeChatId"),
+                "localChatId": message_source.get("localChatId"),
+                "oldestMessageKey": message_source.get("oldestMessageKey"),
+                "newestMessageKey": message_source.get("newestMessageKey"),
+                "oldestRuntimeMessageId": message_source.get("oldestRuntimeMessageId"),
+                "newestRuntimeMessageId": message_source.get("newestRuntimeMessageId"),
+            },
+            "route": route_payload,
+        }
+        payload["status"] = status_payload
+        return status_payload
 
     async def _resolve_chat_handle(
         self,
@@ -1902,7 +2293,7 @@ def _event_item(timestamp_value, title: str, detail: str | None) -> dict[str, An
     }
 
 
-def _resolve_chat_roster_source(*, requested: str, effective: str) -> str:
+def _resolve_runtime_surface_source(*, requested: str, effective: str) -> str:
     if requested == "new" and effective == "legacy":
         return "fallback_to_legacy"
     if effective == "new":

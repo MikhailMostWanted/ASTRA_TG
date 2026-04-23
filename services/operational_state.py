@@ -33,6 +33,7 @@ SNAPSHOT_KEY_MAP = {
     "fullaccess_sync": "ops.fullaccess.last_sync",
     "new_runtime": "ops.runtime.new.status",
     "chat_roster": "ops.runtime.chat_roster.last",
+    "message_workspace": "ops.runtime.message_workspace.last",
 }
 
 FULLACCESS_CHAT_SYNC_PREFIX = "ops.fullaccess.chat_sync."
@@ -211,6 +212,18 @@ class OperationalStateService:
 
     async def get_chat_roster_status(self) -> OperationalEvent | None:
         return await self.get_named_snapshot("chat_roster")
+
+    async def record_message_workspace_status(self, *, payload: dict[str, Any]) -> None:
+        await self._store_json(
+            SNAPSHOT_KEY_MAP["message_workspace"],
+            {
+                "timestamp": _serialize_timestamp(None),
+                "payload": payload,
+            },
+        )
+
+    async def get_message_workspace_status(self) -> OperationalEvent | None:
+        return await self.get_named_snapshot("message_workspace")
 
     async def get_fullaccess_chat_sync(self, local_chat_id: int) -> OperationalEvent | None:
         return await self.get_snapshot(f"{FULLACCESS_CHAT_SYNC_PREFIX}{local_chat_id}")

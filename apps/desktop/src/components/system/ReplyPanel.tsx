@@ -24,7 +24,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatConfidence, formatDateTime, stringifyUnknown } from "@/lib/format";
 import { normalizeAutopilotPayload, normalizeReplyPreviewPayload } from "@/lib/runtime-guards";
-import type { AutopilotPayload, ChatFreshnessPayload, ReplyPreviewPayload } from "@/lib/types";
+import type {
+  AutopilotPayload,
+  ChatFreshnessPayload,
+  ReplyContextPayload,
+  ReplyPreviewPayload,
+  WorkspaceStatusPayload,
+} from "@/lib/types";
 import { buildReplyDraftScopeKey, type ChatWorkspaceState } from "@/stores/app-store";
 import { cn } from "@/lib/utils";
 
@@ -33,8 +39,10 @@ import { WarningState } from "./WarningState";
 
 interface ReplyPanelProps {
   reply: ReplyPreviewPayload | null;
+  replyContext?: ReplyContextPayload | null;
   autopilot?: AutopilotPayload | null;
   freshness?: ChatFreshnessPayload | null;
+  workspaceStatus?: WorkspaceStatusPayload | null;
   workflowState: ChatWorkspaceState | null;
   loading?: boolean;
   refreshing?: boolean;
@@ -43,9 +51,9 @@ interface ReplyPanelProps {
   errorMessage?: string | null;
   onRefresh: () => void;
   onCopy: (text: string) => void;
-  onUseDraft: (text: string, sourceMessageId: number | null) => void;
-  onSend?: (text: string, sourceMessageId: number | null) => void;
-  onMarkSent: (sourceMessageId: number | null) => void;
+  onUseDraft: (text: string, sourceMessageId: number | null, sourceMessageKey: string | null) => void;
+  onSend?: (text: string, sourceMessageId: number | null, sourceMessageKey: string | null) => void;
+  onMarkSent: (sourceMessageId: number | null, sourceMessageKey: string | null) => void;
   onClearDraft: () => void;
   onUpdateAutopilotGlobal?: (enabled: boolean) => void;
   onUpdateChatAutopilot?: (payload: { trusted?: boolean; mode?: string }) => void;
@@ -53,8 +61,10 @@ interface ReplyPanelProps {
 
 export function ReplyPanel({
   reply,
+  replyContext = null,
   autopilot = null,
   freshness = null,
+  workspaceStatus = null,
   workflowState,
   loading = false,
   refreshing = false,
@@ -73,6 +83,27 @@ export function ReplyPanel({
   const safeReply = normalizeReplyPreviewPayload(reply);
   const safeAutopilot = normalizeAutopilotPayload(autopilot);
   const suggestion = safeReply?.suggestion;
+  const contextFocusLabel = replyContext?.focusLabel ?? suggestion?.focusLabel ?? null;
+  const contextFocusReason = replyContext?.focusReason ?? suggestion?.focusReason ?? null;
+  const contextSourceMessageId = replyContext?.sourceLocalMessageId ?? suggestion?.sourceMessageId ?? null;
+  const contextSourceMessageKey = replyContext?.sourceMessageKey ?? null;
+  const contextSourceMessagePreview =
+    replyContext?.sourceMessagePreview
+    || safeReply?.sourceMessagePreview
+    || suggestion?.sourceMessagePreview
+    || null;
+  const contextSourceSenderName =
+    replyContext?.sourceSenderName
+    || safeReply?.sourceSenderName
+    || null;
+  const contextReplyOpportunityMode =
+    replyContext?.replyOpportunityMode
+    || suggestion?.replyOpportunityMode
+    || null;
+  const contextReplyOpportunityReason =
+    replyContext?.replyOpportunityReason
+    || suggestion?.replyOpportunityReason
+    || null;
   const replyOptions = useMemo(() => {
     if (!suggestion) {
       return [];
@@ -104,25 +135,30 @@ export function ReplyPanel({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [showDebug, setShowDebug] = useState(false);
   const [draftText, setDraftText] = useState("");
+  const triggerPreview = buildTriggerPreview(
+    contextSourceSenderName,
+    contextSourceMessagePreview,
+  );
 
   useEffect(() => {
     setSelectedIndex(0);
     setShowDebug(false);
-  }, [suggestion?.sourceMessageId, suggestion?.replyText]);
+  }, [contextSourceMessageId, contextSourceMessagePreview, suggestion?.replyText]);
 
   const selectedReply = replyOptions[selectedIndex]?.text || "";
   const selectedVariant = replyOptions[selectedIndex] || null;
   const llmDebug = suggestion?.llmDebug ?? null;
   const llmDecisionReason = llmDebug?.decisionReason ?? null;
   const llmStatusLabel = suggestion?.llmStatus?.label || "Детерминированный";
-  const currentDraftScopeKey = suggestion
-    ? buildReplyDraftScopeKey({
-        sourceMessageId: suggestion.sourceMessageId,
-        focusLabel: suggestion.focusLabel,
-        sourceMessagePreview: safeReply?.sourceMessagePreview || suggestion.sourceMessagePreview,
-        replyOpportunityMode: suggestion.replyOpportunityMode,
-      })
-    : null;
+  const currentDraftScopeKey =
+    replyContext?.draftScopeKey
+    || buildReplyDraftScopeKey({
+      sourceMessageId: contextSourceMessageId,
+      sourceMessageKey: contextSourceMessageKey,
+      focusLabel: contextFocusLabel,
+      sourceMessagePreview: contextSourceMessagePreview,
+      replyOpportunityMode: contextReplyOpportunityMode,
+    });
   const draftScopeMatches = Boolean(
     workflowState?.draftText
       && workflowState.draftScopeKey
@@ -133,7 +169,7 @@ export function ReplyPanel({
     workflowState?.draftText
       && !workflowState.draftScopeKey
       && workflowState.draftSourceMessageId !== null
-      && workflowState.draftSourceMessageId === suggestion?.sourceMessageId,
+      && workflowState.draftSourceMessageId === contextSourceMessageId,
   );
   const hasActiveDraft = Boolean(workflowState?.draftText && (draftScopeMatches || legacyDraftMatches));
   const hasStaleDraft = Boolean(workflowState?.draftText && !hasActiveDraft);
@@ -142,7 +178,11 @@ export function ReplyPanel({
     setDraftText(activeDraft || selectedReply || "");
   }, [hasActiveDraft, selectedReply, workflowState?.draftScopeKey, workflowState?.draftText]);
 
-  const sendDisabledReason = safeReply?.actions.disabledReason || "Отправка сейчас недоступна.";
+  const sendDisabledReason =
+    safeReply?.actions.disabledReason
+    || (workspaceStatus?.availability.sendAvailable ? null : "Write-path на этом этапе выключен.")
+    || "Отправка сейчас недоступна.";
+  const hasContextOnlyWorkspace = Boolean(replyContext?.available && !suggestion);
 
   if (loading && !reply) {
     return (
@@ -201,6 +241,111 @@ export function ReplyPanel({
   }
 
   if (!suggestion) {
+    if (hasContextOnlyWorkspace) {
+      return (
+        <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/7 bg-white/[0.035]">
+          <div className="border-b border-white/7 px-4 py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Контекст</div>
+                <div className="text-base font-semibold text-white">Astra Reply</div>
+                <div className="mt-1 text-sm leading-6 text-slate-400">
+                  Reply generation ещё не переведён на new runtime, но единый workspace уже отдал фокус и trigger.
+                </div>
+              </div>
+
+              <Button
+                variant="outline"
+                size="icon-sm"
+                className="border-white/8 bg-black/18 text-slate-100"
+                onClick={onRefresh}
+                disabled={refreshing}
+              >
+                {refreshing ? <LoaderCircle className="animate-spin" /> : <RefreshCcw />}
+              </Button>
+            </div>
+          </div>
+
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="flex flex-col gap-4 px-4 py-4">
+              {workspaceStatus ? (
+                <div className="rounded-[22px] border border-white/8 bg-black/16 p-4">
+                  <div className="mb-2 flex items-center gap-2 text-sm font-medium text-white">
+                    <DatabaseZap />
+                    Workspace status
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
+                      {workspaceStatus.source}
+                    </Badge>
+                    <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
+                      {workspaceStatus.messageSource.backend}
+                    </Badge>
+                    {!workspaceStatus.availability.sendAvailable ? (
+                      <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
+                        read-only
+                      </Badge>
+                    ) : null}
+                    {workspaceStatus.degraded ? (
+                      <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
+                        degraded
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 text-sm leading-6 text-slate-300">
+                    {workspaceStatus.degradedReason
+                      || sendDisabledReason
+                      || "Этот snapshot сейчас используется только для чтения и focus context."}
+                  </div>
+                </div>
+              ) : null}
+
+              {freshness ? (
+                <div
+                  className={cn(
+                    "rounded-[22px] border p-4",
+                    freshness.isStale
+                      ? "border-amber-300/16 bg-amber-300/8"
+                      : "border-emerald-300/14 bg-emerald-300/8",
+                  )}
+                >
+                  <div className="mb-2 flex items-center gap-2 text-sm font-medium text-white">
+                    <DatabaseZap />
+                    {freshness.label}
+                  </div>
+                  <div className="text-sm leading-6 text-slate-200">{freshness.detail}</div>
+                </div>
+              ) : null}
+
+              <div className="rounded-[22px] border border-cyan-300/10 bg-cyan-400/8 p-4">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-cyan-100">
+                  <Sparkles />
+                  Фокус ответа
+                </div>
+                <div className="text-xl font-semibold tracking-tight text-white">
+                  {contextFocusLabel || "Контекст доступен"}
+                </div>
+                <div className="mt-2 text-sm leading-6 text-cyan-50/85">
+                  {contextFocusReason || contextReplyOpportunityReason || "Workspace snapshot уже собрал опорный trigger."}
+                </div>
+                {triggerPreview ? (
+                  <div className="mt-3 rounded-[18px] border border-white/8 bg-black/16 px-4 py-3 text-sm leading-6 text-slate-200">
+                    <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Опорный триггер</div>
+                    <div className="mt-2">{triggerPreview}</div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-[22px] border border-white/8 bg-black/16 p-4 text-sm leading-6 text-slate-300">
+                Write-path и generation surface на этом этапе не включены. Этот экран показывает тот же focus context,
+                что и message list, чтобы UI не жил в двух разных мирах.
+              </div>
+            </div>
+          </ScrollArea>
+        </section>
+      );
+    }
+
     return (
       <WarningState
         title="Reply пока не собран"
@@ -217,10 +362,6 @@ export function ReplyPanel({
     );
   }
 
-  const triggerPreview = buildTriggerPreview(
-    safeReply.sourceSenderName,
-    safeReply.sourceMessagePreview || suggestion.sourceMessagePreview,
-  );
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/7 bg-white/[0.035]">
       <div className="border-b border-white/7 px-4 py-4">
@@ -309,23 +450,55 @@ export function ReplyPanel({
             </div>
           ) : null}
 
+          {workspaceStatus ? (
+            <div className="rounded-[22px] border border-white/8 bg-black/16 p-4">
+              <div className="mb-2 flex items-center gap-2 text-sm font-medium text-white">
+                <DatabaseZap />
+                Workspace status
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
+                  {workspaceStatus.source}
+                </Badge>
+                <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
+                  {workspaceStatus.messageSource.backend}
+                </Badge>
+                {!workspaceStatus.availability.sendAvailable ? (
+                  <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
+                    read-only
+                  </Badge>
+                ) : null}
+                {workspaceStatus.degraded ? (
+                  <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
+                    degraded
+                  </Badge>
+                ) : null}
+              </div>
+              {workspaceStatus.degradedReason || workspaceStatus.syncError ? (
+                <div className="mt-3 text-sm leading-6 text-slate-300">
+                  {workspaceStatus.degradedReason || workspaceStatus.syncError}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="rounded-[22px] border border-cyan-300/10 bg-cyan-400/8 p-4">
             <div className="mb-2 flex items-center gap-2 text-sm font-medium text-cyan-100">
               <Sparkles />
               Фокус ответа
             </div>
             <div className="text-xl font-semibold tracking-tight text-white">
-              {suggestion.focusLabel || "Нормальный рабочий ответ"}
+              {contextFocusLabel || "Нормальный рабочий ответ"}
             </div>
             <div className="mt-2 text-sm leading-6 text-cyan-50/85">
-              {suggestion.focusReason || suggestion.reasonShort}
+              {contextFocusReason || suggestion.reasonShort}
             </div>
-            {suggestion.replyOpportunityMode === "follow_up_after_self" ? (
+            {contextReplyOpportunityMode === "follow_up_after_self" ? (
               <div className="mt-3 rounded-[18px] border border-cyan-300/12 bg-black/16 px-4 py-3 text-sm leading-6 text-cyan-50/90">
                 <div className="text-[11px] uppercase tracking-[0.24em] text-cyan-200/70">
                   Почему reply уместен после твоего сообщения
                 </div>
-                <div className="mt-2">{suggestion.replyOpportunityReason || "В контексте остался незакрытый хвост."}</div>
+                <div className="mt-2">{contextReplyOpportunityReason || "В контексте остался незакрытый хвост."}</div>
               </div>
             ) : null}
             {triggerPreview ? (
@@ -419,7 +592,7 @@ export function ReplyPanel({
               className="bg-cyan-300 text-[#05111c] hover:bg-cyan-200"
               onClick={() => {
                 setDraftText(selectedReply);
-                onUseDraft(selectedReply, suggestion.sourceMessageId);
+                onUseDraft(selectedReply, contextSourceMessageId, contextSourceMessageKey);
               }}
               disabled={!selectedReply}
               aria-label="Использовать как черновик"
@@ -434,7 +607,7 @@ export function ReplyPanel({
                     variant="outline"
                     className="w-full border-emerald-300/14 bg-emerald-300/10 text-emerald-50"
                     disabled={!safeReply.actions.send || !selectedReply || sending}
-                    onClick={() => onSend(selectedReply, suggestion.sourceMessageId)}
+                    onClick={() => onSend(selectedReply, contextSourceMessageId, contextSourceMessageKey)}
                   >
                     {sending ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
                     Отправить вариант
@@ -446,7 +619,7 @@ export function ReplyPanel({
             <Button
               variant="outline"
               className="border-white/8 bg-black/16 text-slate-100"
-              onClick={() => onMarkSent(suggestion.sourceMessageId)}
+              onClick={() => onMarkSent(contextSourceMessageId, contextSourceMessageKey)}
             >
               <CheckCheck data-icon="inline-start" />
               Отметить отправленным
@@ -470,14 +643,14 @@ export function ReplyPanel({
               <Button
                 variant="outline"
                 className="border-white/8 bg-black/18 text-slate-100"
-                onClick={() => onUseDraft(draftText, suggestion.sourceMessageId)}
+                onClick={() => onUseDraft(draftText, contextSourceMessageId, contextSourceMessageKey)}
                 disabled={!draftText.trim()}
               >
                 Сохранить черновик
               </Button>
               <Button
                 className="bg-emerald-300 text-[#05111c] hover:bg-emerald-200"
-                onClick={() => onSend(draftText, suggestion.sourceMessageId)}
+                onClick={() => onSend(draftText, contextSourceMessageId, contextSourceMessageKey)}
                 disabled={!safeReply.actions.send || !draftText.trim() || sending}
               >
                 {sending ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
@@ -729,7 +902,7 @@ export function ReplyPanel({
                         onClick={() => {
                           const text = safeAutopilot.pendingDraft?.text || "";
                           setDraftText(text);
-                          onUseDraft(text, safeAutopilot.decision.sourceMessageId);
+                          onUseDraft(text, safeAutopilot.decision.sourceMessageId, contextSourceMessageKey);
                         }}
                       >
                         Вставить
@@ -737,7 +910,11 @@ export function ReplyPanel({
                       <Button
                         className="bg-emerald-300 text-[#05111c] hover:bg-emerald-200"
                         disabled={!safeReply.actions.send || sending}
-                        onClick={() => onSend(safeAutopilot.pendingDraft?.text || "", safeAutopilot.decision.sourceMessageId)}
+                        onClick={() => onSend(
+                          safeAutopilot.pendingDraft?.text || "",
+                          safeAutopilot.decision.sourceMessageId,
+                          contextSourceMessageKey,
+                        )}
                       >
                         Отправить
                       </Button>

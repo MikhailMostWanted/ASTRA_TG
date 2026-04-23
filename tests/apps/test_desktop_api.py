@@ -219,6 +219,98 @@ def test_desktop_api_chat_roster_payload_exposes_new_runtime_source_and_identity
     asyncio.run(run_assertions())
 
 
+def test_desktop_api_workspace_payload_uses_new_runtime_for_runtime_only_chat(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, _ = await _seed_runtime(monkeypatch, tmp_path)
+        app = create_app(
+            settings,
+            runtime=runtime,
+            target_runtime=_FakeTargetRuntime(),
+            runtime_switches=RuntimeSwitches(
+                chat_roster="new",
+                message_workspace="new",
+            ),
+        )
+
+        with TestClient(app) as client:
+            workspace = client.get("/api/chats/-200001/workspace", params={"limit": 10})
+            assert workspace.status_code == 200
+            payload = workspace.json()
+            assert payload["chat"]["chatKey"] == "telegram:-100777"
+            assert payload["chat"]["localChatId"] is None
+            assert payload["messages"][0]["messageKey"] == "telegram:-100777:41"
+            assert payload["messages"][1]["replyToMessageKey"] == "telegram:-100777:41"
+            assert payload["replyContext"]["available"] is True
+            assert payload["replyContext"]["sourceMessageKey"] == "telegram:-100777:41"
+            assert payload["reply"]["kind"] == "workspace_context_only"
+            assert payload["status"]["source"] == "new"
+            assert payload["status"]["effectiveBackend"] == "new"
+            assert payload["status"]["availability"]["workspaceAvailable"] is True
+            assert payload["status"]["availability"]["legacyWorkspaceAvailable"] is False
+            assert payload["status"]["messageSource"]["backend"] == "new_runtime"
+            assert payload["history"]["returnedCount"] == 2
+
+            paged_messages = client.get(
+                "/api/chats/-200001/messages",
+                params={"limit": 10, "before_runtime_message_id": 52},
+            )
+            assert paged_messages.status_code == 200
+            paged_payload = paged_messages.json()
+            assert [item["runtimeMessageId"] for item in paged_payload["messages"]] == [41]
+            assert paged_payload["status"]["source"] == "new"
+
+            runtime_payload = client.get("/api/runtime").json()
+            assert runtime_payload["messageWorkspace"]["source"] == "new"
+            assert runtime_payload["messageWorkspace"]["effectiveBackend"] == "new"
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_desktop_api_workspace_fallback_to_legacy_is_visible_in_payload(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, seeded = await _seed_runtime(monkeypatch, tmp_path)
+        app = create_app(
+            settings,
+            runtime=runtime,
+            target_runtime=_FakeTargetRuntime(fail_workspace=True),
+            runtime_switches=RuntimeSwitches(message_workspace="new"),
+        )
+
+        with TestClient(app) as client:
+            workspace = client.get(f"/api/chats/{seeded['chat_id']}/workspace")
+            assert workspace.status_code == 200
+            payload = workspace.json()
+            assert payload["status"]["source"] == "fallback_to_legacy"
+            assert payload["status"]["effectiveBackend"] == "legacy"
+            assert payload["status"]["degraded"] is True
+            assert payload["status"]["messageSource"]["backend"] == "legacy_local_store"
+            assert "Target workspace failure" in payload["status"]["degradedReason"]
+            assert payload["status"]["route"]["requested"] == "new"
+            assert payload["status"]["route"]["effective"] == "legacy"
+
+            messages = client.get(f"/api/chats/{seeded['chat_id']}/messages")
+            assert messages.status_code == 200
+            messages_payload = messages.json()
+            assert messages_payload["status"]["source"] == "fallback_to_legacy"
+            assert messages_payload["status"]["effectiveBackend"] == "legacy"
+
+            runtime_payload = client.get("/api/runtime").json()
+            assert runtime_payload["messageWorkspace"]["source"] == "fallback_to_legacy"
+            assert runtime_payload["messageWorkspace"]["effectiveBackend"] == "legacy"
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
 def test_desktop_api_reply_payload_includes_rejected_llm_candidate_debug(
     monkeypatch,
     tmp_path: Path,
@@ -595,6 +687,9 @@ def test_desktop_api_new_runtime_auth_flow_endpoints(
 
 
 class _FakeTargetRuntime:
+    def __init__(self, *, fail_workspace: bool = False) -> None:
+        self.fail_workspace = fail_workspace
+
     @property
     def chat_roster(self):
         return self
@@ -680,6 +775,274 @@ class _FakeTargetRuntime:
             "count": 1,
             "filters": {"active": "all", "sort": "activity", "search": ""},
             "refreshedAt": "2026-04-23T09:05:00+00:00",
+        }
+
+    async def get_chat_workspace(self, chat_id: int, *, limit: int = 80):
+        if self.fail_workspace:
+            raise RuntimeError("Target workspace failure.")
+        return self._build_workspace_payload(chat_id, limit=limit)
+
+    async def get_chat_messages(
+        self,
+        chat_id: int,
+        *,
+        limit: int = 80,
+        before_runtime_message_id: int | None = None,
+    ):
+        if self.fail_workspace:
+            raise RuntimeError("Target workspace failure.")
+        payload = self._build_workspace_payload(
+            chat_id,
+            limit=limit,
+            before_runtime_message_id=before_runtime_message_id,
+        )
+        return {
+            "chat": payload["chat"],
+            "messages": payload["messages"],
+            "history": payload["history"],
+            "status": payload["status"],
+            "refreshedAt": payload["refreshedAt"],
+        }
+
+    def _build_workspace_payload(
+        self,
+        chat_id: int,
+        *,
+        limit: int,
+        before_runtime_message_id: int | None = None,
+    ) -> dict[str, object]:
+        all_messages = [
+            {
+                "id": 41,
+                "chatKey": "telegram:-100777",
+                "messageKey": "telegram:-100777:41",
+                "runtimeMessageId": 41,
+                "localMessageId": None,
+                "telegramMessageId": 41,
+                "chatId": -200001,
+                "direction": "inbound",
+                "sourceAdapter": "new_runtime",
+                "sourceType": "message",
+                "senderId": 11,
+                "senderName": "Анна",
+                "sentAt": "2026-04-23T09:04:00+00:00",
+                "text": "Сможешь посмотреть это сегодня?",
+                "normalizedText": "Сможешь посмотреть это сегодня?",
+                "replyToMessageId": None,
+                "replyToLocalMessageId": None,
+                "replyToRuntimeMessageId": None,
+                "replyToMessageKey": None,
+                "hasMedia": False,
+                "mediaType": None,
+                "mediaPreviewUrl": None,
+                "forwardInfo": None,
+                "entities": None,
+                "preview": "Сможешь посмотреть это сегодня?",
+            },
+            {
+                "id": 52,
+                "chatKey": "telegram:-100777",
+                "messageKey": "telegram:-100777:52",
+                "runtimeMessageId": 52,
+                "localMessageId": None,
+                "telegramMessageId": 52,
+                "chatId": -200001,
+                "direction": "outbound",
+                "sourceAdapter": "new_runtime",
+                "sourceType": "message",
+                "senderId": 7,
+                "senderName": "Михаил",
+                "sentAt": "2026-04-23T09:05:00+00:00",
+                "text": "Да, смотрю это сейчас.",
+                "normalizedText": "Да, смотрю это сейчас.",
+                "replyToMessageId": None,
+                "replyToLocalMessageId": None,
+                "replyToRuntimeMessageId": 41,
+                "replyToMessageKey": "telegram:-100777:41",
+                "hasMedia": False,
+                "mediaType": None,
+                "mediaPreviewUrl": None,
+                "forwardInfo": None,
+                "entities": None,
+                "preview": "Да, смотрю это сейчас.",
+            },
+        ]
+        if before_runtime_message_id is not None:
+            filtered_messages = [
+                message
+                for message in all_messages
+                if int(message["runtimeMessageId"]) < before_runtime_message_id
+            ]
+        else:
+            filtered_messages = all_messages
+        messages = filtered_messages[-limit:]
+        oldest = messages[0] if messages else None
+        newest = messages[-1] if messages else None
+        return {
+            "chat": {
+                "id": chat_id,
+                "localChatId": None,
+                "runtimeChatId": -100777,
+                "chatKey": "telegram:-100777",
+                "workspaceAvailable": False,
+                "identity": {
+                    "id": chat_id,
+                    "localChatId": None,
+                    "runtimeChatId": -100777,
+                    "chatKey": "telegram:-100777",
+                    "workspaceAvailable": False,
+                },
+                "telegramChatId": -100777,
+                "reference": "@runtime_chat",
+                "title": "Runtime chat",
+                "handle": "runtime_chat",
+                "type": "group",
+                "enabled": False,
+                "category": "runtime_only",
+                "summarySchedule": None,
+                "replyAssistEnabled": False,
+                "autoReplyMode": None,
+                "excludeFromMemory": False,
+                "excludeFromDigest": False,
+                "isDigestTarget": False,
+                "messageCount": len(messages),
+                "lastMessageAt": newest["sentAt"] if newest else None,
+                "lastMessageId": None,
+                "lastMessageKey": newest["messageKey"] if newest else None,
+                "lastTelegramMessageId": newest["runtimeMessageId"] if newest else None,
+                "lastMessagePreview": newest["preview"] if newest else "Сообщений пока нет",
+                "lastDirection": newest["direction"] if newest else None,
+                "lastSourceAdapter": "new_runtime" if newest else None,
+                "lastSenderName": newest["senderName"] if newest else None,
+                "avatarUrl": None,
+                "syncStatus": "runtime" if newest else "empty",
+                "memory": None,
+                "favorite": False,
+                "rosterSource": "new",
+                "rosterLastActivityAt": newest["sentAt"] if newest else None,
+                "rosterLastMessageKey": newest["messageKey"] if newest else None,
+                "rosterLastMessagePreview": newest["preview"] if newest else "Сообщений пока нет",
+                "rosterLastDirection": newest["direction"] if newest else None,
+                "rosterLastSenderName": newest["senderName"] if newest else None,
+                "rosterFreshness": {
+                    "mode": "fresh",
+                    "label": "свежее",
+                    "lastActivityAt": newest["sentAt"] if newest else None,
+                },
+                "unreadCount": 4,
+                "unreadMentionCount": 1,
+                "pinned": True,
+                "muted": False,
+                "archived": False,
+                "assetHints": {
+                    "avatarCached": False,
+                    "avatarSource": None,
+                },
+            },
+            "messages": messages,
+            "history": {
+                "limit": limit,
+                "returnedCount": len(messages),
+                "hasMoreBefore": bool(oldest and int(oldest["runtimeMessageId"]) > 1),
+                "beforeRuntimeMessageId": oldest["runtimeMessageId"] if oldest else None,
+                "oldestMessageKey": oldest["messageKey"] if oldest else None,
+                "newestMessageKey": newest["messageKey"] if newest else None,
+                "oldestRuntimeMessageId": oldest["runtimeMessageId"] if oldest else None,
+                "newestRuntimeMessageId": newest["runtimeMessageId"] if newest else None,
+            },
+            "replyContext": {
+                "available": True,
+                "sourceBackend": "new",
+                "focusLabel": "вопрос",
+                "focusReason": "Последний входящий message остаётся без ответа.",
+                "replyOpportunityMode": "direct_reply",
+                "replyOpportunityReason": "Есть свежий незакрытый вопрос.",
+                "sourceMessageKey": "telegram:-100777:41",
+                "sourceRuntimeMessageId": 41,
+                "sourceLocalMessageId": None,
+                "sourceSenderName": "Анна",
+                "sourceMessagePreview": "Сможешь посмотреть это сегодня?",
+                "sourceSentAt": "2026-04-23T09:04:00+00:00",
+                "draftScopeBasis": {
+                    "sourceMessageKey": "telegram:-100777:41",
+                    "sourceMessageId": None,
+                    "runtimeMessageId": 41,
+                    "focusLabel": "вопрос",
+                    "sourceMessagePreview": "Сможешь посмотреть это сегодня?",
+                    "replyOpportunityMode": "direct_reply",
+                },
+                "draftScopeKey": "telegram:-100777:41::вопрос::direct_reply::Сможешь посмотреть это сегодня?",
+            },
+            "reply": {
+                "kind": "workspace_context_only",
+                "chatId": None,
+                "chatTitle": "Runtime chat",
+                "chatReference": "@runtime_chat",
+                "errorMessage": "Reply generation на новом workspace пока не включена.",
+                "sourceSenderName": "Анна",
+                "sourceMessagePreview": "Сможешь посмотреть это сегодня?",
+                "suggestion": None,
+                "actions": {
+                    "copy": False,
+                    "refresh": True,
+                    "pasteToTelegram": False,
+                    "send": False,
+                    "markSent": False,
+                    "variants": {},
+                    "disabledReason": "Write-path на этом этапе выключен.",
+                },
+            },
+            "autopilot": None,
+            "freshness": {
+                "mode": "fresh",
+                "label": "Контекст из new runtime",
+                "detail": "Активный чат читается напрямую из нового Telegram runtime.",
+                "isStale": False,
+                "fullaccessReady": False,
+                "canManualSync": False,
+                "lastSyncAt": "2026-04-23T09:05:02+00:00",
+                "reference": "@runtime_chat",
+                "createdCount": 0,
+                "updatedCount": 0,
+                "skippedCount": 0,
+                "syncTrigger": "runtime_poll",
+                "updatedNow": before_runtime_message_id is None,
+                "syncError": None,
+            },
+            "status": {
+                "source": "new",
+                "effectiveBackend": "new",
+                "degraded": False,
+                "degradedReason": None,
+                "syncTrigger": "runtime_poll",
+                "updatedNow": before_runtime_message_id is None,
+                "syncError": None,
+                "lastUpdatedAt": "2026-04-23T09:05:02+00:00",
+                "lastSuccessAt": "2026-04-23T09:05:02+00:00",
+                "lastError": None,
+                "lastErrorAt": None,
+                "availability": {
+                    "workspaceAvailable": True,
+                    "historyReadable": True,
+                    "runtimeReadable": True,
+                    "legacyWorkspaceAvailable": False,
+                    "replyContextAvailable": True,
+                    "sendAvailable": False,
+                    "autopilotAvailable": False,
+                    "canLoadOlder": bool(oldest and int(oldest["runtimeMessageId"]) > 1),
+                },
+                "messageSource": {
+                    "backend": "new_runtime",
+                    "chatKey": "telegram:-100777",
+                    "runtimeChatId": -100777,
+                    "localChatId": None,
+                    "oldestMessageKey": oldest["messageKey"] if oldest else None,
+                    "newestMessageKey": newest["messageKey"] if newest else None,
+                    "oldestRuntimeMessageId": oldest["runtimeMessageId"] if oldest else None,
+                    "newestRuntimeMessageId": newest["runtimeMessageId"] if newest else None,
+                },
+            },
+            "refreshedAt": "2026-04-23T09:05:02+00:00",
         }
 
 

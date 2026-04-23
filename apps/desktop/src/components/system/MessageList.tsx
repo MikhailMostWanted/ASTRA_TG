@@ -15,7 +15,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDateTime, formatRelativeTime, initials } from "@/lib/format";
 import { safeArray } from "@/lib/runtime-guards";
-import type { ChatFreshnessPayload, ChatItem, MessageItem } from "@/lib/types";
+import type { ChatFreshnessPayload, ChatItem, MessageItem, WorkspaceStatusPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { EmptyState } from "./EmptyState";
@@ -27,9 +27,13 @@ interface MessageListProps {
   loading?: boolean;
   refreshing?: boolean;
   fullaccessReady?: boolean;
+  workspaceStatus?: WorkspaceStatusPayload | null;
+  canLoadOlder?: boolean;
+  loadingOlder?: boolean;
   lastUpdatedAt?: string | null;
   freshness?: ChatFreshnessPayload | null;
   errorMessage?: string | null;
+  onLoadOlder: () => void;
   onRefresh: () => void;
   onSyncChat: () => void;
 }
@@ -40,19 +44,31 @@ export function MessageList({
   loading = false,
   refreshing = false,
   fullaccessReady = false,
+  workspaceStatus = null,
+  canLoadOlder = false,
+  loadingOlder = false,
   lastUpdatedAt = null,
   freshness = null,
   errorMessage = null,
+  onLoadOlder,
   onRefresh,
   onSyncChat,
 }: MessageListProps) {
   const endRef = useRef<HTMLDivElement | null>(null);
   const safeMessages = safeArray(messages);
   const displayActivityAt = chat?.rosterLastActivityAt || chat?.lastMessageAt || null;
+  const workspaceReadable = Boolean(workspaceStatus?.availability.workspaceAvailable);
+  const historyReadable = Boolean(workspaceStatus?.availability.historyReadable);
+  const sourceLabel =
+    workspaceStatus?.source === "new"
+      ? "new workspace"
+      : workspaceStatus?.source === "fallback_to_legacy"
+        ? "fallback на legacy"
+        : "legacy workspace";
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
-  }, [chat?.id, safeMessages.length]);
+  }, [chat?.chatKey, safeMessages.length]);
 
   if (!chat) {
     return (
@@ -105,8 +121,13 @@ export function MessageList({
                 {chat.syncStatus}
               </Badge>
               <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-                {chat.rosterSource === "new" ? "new runtime" : "legacy roster"}
+                {sourceLabel}
               </Badge>
+              {workspaceStatus?.degraded ? (
+                <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
+                  degraded
+                </Badge>
+              ) : null}
               {chat.unreadCount > 0 ? (
                 <Badge variant="outline" className="border-0 bg-cyan-400/12 text-cyan-100 ring-1 ring-cyan-300/15">
                   {chat.unreadCount} непрочит.
@@ -123,10 +144,18 @@ export function MessageList({
               <span>Последняя активность {formatRelativeTime(displayActivityAt)}</span>
               <span>UI обновлён {lastUpdatedAt ? formatDateTime(lastUpdatedAt) : "только открылся"}</span>
               <span>{formatDateTime(displayActivityAt)} • {chat.messageCount} сообщений</span>
+              {workspaceStatus?.messageSource.backend ? (
+                <span>источник {workspaceStatus.messageSource.backend}</span>
+              ) : null}
               {freshness ? <span>{freshness.label}</span> : null}
-              {freshness?.syncTrigger ? <span>{freshness.syncTrigger === "auto" ? "auto-sync" : "manual sync"}</span> : null}
+              {workspaceStatus?.syncTrigger ? (
+                <span>{workspaceStatus.syncTrigger === "auto" ? "auto-sync" : workspaceStatus.syncTrigger}</span>
+              ) : null}
               {freshness?.updatedNow ? <span>хвост дочитан сейчас</span> : null}
               {freshness?.syncError ? <span className="text-rose-200">{freshness.syncError}</span> : null}
+              {workspaceStatus?.degradedReason ? (
+                <span className="text-amber-100">{workspaceStatus.degradedReason}</span>
+              ) : null}
             </div>
           </div>
 
@@ -155,16 +184,37 @@ export function MessageList({
 
       <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-4 px-4 py-4">
+          {canLoadOlder ? (
+            <div className="flex justify-center">
+              <Button
+                variant="outline"
+                className="border-white/8 bg-black/18 text-slate-100"
+                onClick={onLoadOlder}
+                disabled={loadingOlder}
+              >
+                {loadingOlder ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <RefreshCcw data-icon="inline-start" />}
+                Показать более ранние сообщения
+              </Button>
+            </div>
+          ) : null}
+
           {loading && safeMessages.length === 0 ? <MessageListSkeleton /> : null}
 
-          {!loading && safeMessages.length === 0 && !chat.workspaceAvailable ? (
+          {!loading && safeMessages.length === 0 && !workspaceReadable ? (
             <EmptyState
-              title="История пока остаётся на legacy"
-              description="Чат уже виден через new runtime roster, но локальный workspace для него ещё не подтянут. Нажми sync справа, если нужен legacy-хвост."
+              title="Workspace для чтения пока недоступен"
+              description="Этот чат уже виден в roster, но history path сейчас недоступен. Проверь backend и fallback-статус справа сверху."
             />
           ) : null}
 
-          {!loading && safeMessages.length === 0 && chat.workspaceAvailable ? (
+          {!loading && safeMessages.length === 0 && workspaceReadable && !historyReadable ? (
+            <EmptyState
+              title="История временно нечитабельна"
+              description="Маршрут workspace существует, но текущий backend не смог отдать читаемую history-ленту."
+            />
+          ) : null}
+
+          {!loading && safeMessages.length === 0 && workspaceReadable && historyReadable ? (
             <EmptyState
               title="Сообщений пока нет"
               description="Когда в выбранный чат придут данные, здесь появится рабочая лента сообщений."
@@ -176,7 +226,7 @@ export function MessageList({
 
             return (
               <div
-                key={message.id}
+                key={message.messageKey}
                 className={cn(
                   "flex w-full gap-3",
                   inbound ? "justify-start" : "justify-end",
@@ -221,6 +271,12 @@ export function MessageList({
                   <div className="whitespace-pre-wrap text-sm leading-6">
                     {message.text || "Без текста"}
                   </div>
+
+                  {message.replyToMessageKey || message.replyToRuntimeMessageId ? (
+                    <div className="mt-3 rounded-[16px] border border-white/6 bg-black/18 px-3 py-2 text-xs leading-5 text-slate-300">
+                      Ответ на сообщение {message.replyToRuntimeMessageId || message.replyToMessageKey}
+                    </div>
+                  ) : null}
 
                   {message.mediaPreviewUrl ? (
                     <div className="mt-3 overflow-hidden rounded-[18px] border border-white/8 bg-black/20">

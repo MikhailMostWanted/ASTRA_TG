@@ -128,8 +128,13 @@ export const api = {
         sort: params.sort,
       }),
     ),
-  chatMessages: (chatId: number, limit = 80) =>
-    request<ChatMessagesPayload>(withQuery(`/api/chats/${chatId}/messages`, { limit })),
+  chatMessages: (chatId: number, limit = 80, beforeRuntimeMessageId?: number | null) =>
+    request<ChatMessagesPayload>(
+      withQuery(`/api/chats/${chatId}/messages`, {
+        limit,
+        before_runtime_message_id: beforeRuntimeMessageId ?? undefined,
+      }),
+    ),
   chatWorkspace: (chatId: number, limit = 80) =>
     request<ChatWorkspacePayload>(withQuery(`/api/chats/${chatId}/workspace`, { limit })),
   replyPreview: (chatId: number, useProviderRefinement?: boolean) =>

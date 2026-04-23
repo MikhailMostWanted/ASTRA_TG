@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from astra_runtime.chat_identity import ChatIdentity
+from astra_runtime.message_identity import build_message_key
 from astra_runtime.new_telegram.config import NewTelegramRuntimeConfig
 from astra_runtime.new_telegram.transport import (
     NewTelegramDialogMessage,
@@ -229,6 +230,11 @@ def _serialize_runtime_roster_item(
         "messageCount": local_message_count,
         "lastMessageAt": local_last_message_at,
         "lastMessageId": local_last_message.id if local_last_message is not None else None,
+        "lastMessageKey": (
+            build_message_key(dialog.telegram_chat_id, local_last_message.telegram_message_id)
+            if local_last_message is not None
+            else None
+        ),
         "lastTelegramMessageId": (
             local_last_message.telegram_message_id if local_last_message is not None else None
         ),
@@ -245,6 +251,11 @@ def _serialize_runtime_roster_item(
         "favorite": False,
         "rosterSource": "new",
         "rosterLastActivityAt": runtime_last_activity_at,
+        "rosterLastMessageKey": (
+            build_message_key(dialog.telegram_chat_id, dialog.last_message.telegram_message_id)
+            if dialog.last_message is not None and dialog.last_message.telegram_message_id is not None
+            else None
+        ),
         "rosterLastMessagePreview": runtime_preview,
         "rosterLastDirection": dialog.last_message.direction if dialog.last_message is not None else None,
         "rosterLastSenderName": dialog.last_message.sender_name if dialog.last_message is not None else None,

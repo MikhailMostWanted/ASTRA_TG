@@ -7,11 +7,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
-from fullaccess.cache import avatar_base_path, find_cached_variant
+from fullaccess.cache import (
+    avatar_base_path,
+    clear_cached_variants,
+    find_cached_variant,
+    media_preview_base_path,
+)
 
 from astra_runtime.new_telegram.config import NewTelegramRuntimeConfig
+from services.message_normalizer import normalize_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +54,32 @@ class NewTelegramDialogSummary:
     last_activity_at: datetime | None
     last_message: NewTelegramDialogMessage | None = None
     avatar_cached: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class NewTelegramChatSummary:
+    telegram_chat_id: int
+    title: str
+    chat_type: str
+    username: str | None
+    avatar_cached: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class NewTelegramRemoteMessage:
+    telegram_message_id: int
+    sender_id: int | None
+    sender_name: str | None
+    direction: str
+    sent_at: datetime
+    raw_text: str
+    normalized_text: str
+    reply_to_telegram_message_id: int | None
+    forward_info: dict[str, Any] | list[Any] | None
+    has_media: bool
+    media_type: str | None
+    entities_json: list[dict[str, Any]] | dict[str, Any] | None
+    source_type: str
 
 
 class NewTelegramAuthClientError(RuntimeError):
@@ -89,6 +121,17 @@ class NewTelegramRosterClientProtocol(Protocol):
     async def list_dialogs(self, *, limit: int) -> tuple[NewTelegramDialogSummary, ...]: ...
 
 
+class NewTelegramHistoryClientProtocol(Protocol):
+    async def fetch_history(
+        self,
+        reference: int | str,
+        *,
+        limit: int,
+        min_message_id: int | None = None,
+        max_message_id: int | None = None,
+    ) -> tuple[NewTelegramChatSummary, tuple[NewTelegramRemoteMessage, ...]]: ...
+
+
 NewTelegramAuthClientFactory = Callable[
     [NewTelegramRuntimeConfig],
     NewTelegramAuthClientProtocol,
@@ -96,6 +139,10 @@ NewTelegramAuthClientFactory = Callable[
 NewTelegramRosterClientFactory = Callable[
     [NewTelegramRuntimeConfig],
     NewTelegramRosterClientProtocol,
+]
+NewTelegramHistoryClientFactory = Callable[
+    [NewTelegramRuntimeConfig],
+    NewTelegramHistoryClientProtocol,
 ]
 
 
@@ -228,6 +275,55 @@ class RuntimeBackedNewTelegramRosterClient:
         return await self.runtime.run(_list)
 
 
+@dataclass(slots=True)
+class RuntimeBackedNewTelegramHistoryClient:
+    config: NewTelegramRuntimeConfig
+    runtime: ManagedNewTelegramRuntime
+
+    async def fetch_history(
+        self,
+        reference: int | str,
+        *,
+        limit: int,
+        min_message_id: int | None = None,
+        max_message_id: int | None = None,
+    ) -> tuple[NewTelegramChatSummary, tuple[NewTelegramRemoteMessage, ...]]:
+        async def _fetch(
+            client: _TelethonClientProtocol,
+        ) -> tuple[NewTelegramChatSummary, tuple[NewTelegramRemoteMessage, ...]]:
+            entity = await _resolve_entity(client, reference)
+            chat = _build_chat_summary(entity, config=self.config)
+            await _cache_profile_photo(
+                client,
+                entity=entity,
+                config=self.config,
+                telegram_chat_id=chat.telegram_chat_id,
+            )
+
+            messages: list[NewTelegramRemoteMessage] = []
+            iter_kwargs: dict[str, int] = {"limit": limit}
+            if min_message_id is not None:
+                iter_kwargs["min_id"] = min_message_id
+            if max_message_id is not None:
+                iter_kwargs["max_id"] = max_message_id
+
+            async for message in client.iter_messages(entity, **iter_kwargs):
+                remote_message = _build_remote_message(message)
+                await _cache_message_preview(
+                    client,
+                    message=message,
+                    config=self.config,
+                    telegram_chat_id=chat.telegram_chat_id,
+                    remote_message=remote_message,
+                )
+                messages.append(remote_message)
+
+            messages.reverse()
+            return chat, tuple(messages)
+
+        return await self.runtime.run(_fetch)
+
+
 def build_new_telegram_auth_client(
     config: NewTelegramRuntimeConfig,
 ) -> NewTelegramAuthClientProtocol:
@@ -238,6 +334,15 @@ def build_new_telegram_roster_client(
     config: NewTelegramRuntimeConfig,
 ) -> NewTelegramRosterClientProtocol:
     return RuntimeBackedNewTelegramRosterClient(
+        config=config,
+        runtime=_get_managed_runtime(config),
+    )
+
+
+def build_new_telegram_history_client(
+    config: NewTelegramRuntimeConfig,
+) -> NewTelegramHistoryClientProtocol:
+    return RuntimeBackedNewTelegramHistoryClient(
         config=config,
         runtime=_get_managed_runtime(config),
     )
@@ -297,6 +402,17 @@ class _TelethonClientProtocol(Protocol):
     async def log_out(self) -> bool: ...
 
     def iter_dialogs(self, *, limit: int) -> AsyncIterator[_TelethonDialogProtocol]: ...
+    def iter_messages(
+        self,
+        entity: object,
+        *,
+        limit: int,
+        min_id: int | None = None,
+        max_id: int | None = None,
+    ) -> AsyncIterator[object]: ...
+    async def get_entity(self, target: int | str) -> object: ...
+    async def download_profile_photo(self, entity: object, file: str | None = None) -> object: ...
+    async def download_media(self, message: object, file: str | None = None) -> object: ...
 
 
 @asynccontextmanager
@@ -432,6 +548,133 @@ def _build_dialog_message(message: object | None) -> NewTelegramDialogMessage | 
         media_type=media_type,
         source_type="channel_post" if bool(getattr(message, "post", False)) else "message",
     )
+
+
+async def _resolve_entity(
+    client: _TelethonClientProtocol,
+    reference: int | str,
+) -> object:
+    target: int | str
+    if isinstance(reference, int):
+        target = reference
+    else:
+        candidate = reference.strip()
+        if not candidate:
+            raise ValueError("Укажи runtime chat_id или @username для чтения истории.")
+        if candidate.startswith("@"):
+            target = candidate
+        else:
+            try:
+                target = int(candidate)
+            except ValueError:
+                target = f"@{candidate.lstrip('@')}"
+
+    try:
+        return await client.get_entity(target)
+    except Exception as error:  # pragma: no cover - depends on Telethon runtime
+        raise ValueError("Не удалось найти чат в новом runtime.") from error
+
+
+def _build_chat_summary(
+    entity: object,
+    *,
+    config: NewTelegramRuntimeConfig,
+) -> NewTelegramChatSummary:
+    from telethon import utils
+
+    telegram_chat_id = _coerce_optional_int(utils.get_peer_id(entity)) or 0
+    return NewTelegramChatSummary(
+        telegram_chat_id=telegram_chat_id,
+        title=_resolve_entity_title(entity),
+        chat_type=_resolve_entity_type(entity),
+        username=_resolve_entity_username(entity),
+        avatar_cached=telegram_chat_id != 0
+        and find_cached_variant(avatar_base_path(config.session_path, telegram_chat_id)) is not None,
+    )
+
+
+def _build_remote_message(message: object) -> NewTelegramRemoteMessage:
+    raw_text = getattr(message, "text", None) or getattr(message, "message", None) or ""
+    media = getattr(message, "media", None)
+    media_type = type(media).__name__.lower() if media is not None else None
+    reply_to = getattr(getattr(message, "reply_to", None), "reply_to_msg_id", None)
+    sender = getattr(message, "sender", None)
+    sender_name = _resolve_entity_title(sender) if sender is not None else None
+    if sender_name is None:
+        post_author = getattr(message, "post_author", None)
+        if isinstance(post_author, str) and post_author.strip():
+            sender_name = post_author.strip()
+
+    entities_payload = _to_json_compatible(getattr(message, "entities", None))
+    if entities_payload is not None and not isinstance(entities_payload, (list, dict)):
+        entities_payload = None
+
+    return NewTelegramRemoteMessage(
+        telegram_message_id=int(getattr(message, "id")),
+        sender_id=_coerce_optional_int(getattr(message, "sender_id", None)),
+        sender_name=sender_name,
+        direction="outbound" if bool(getattr(message, "out", False)) else "inbound",
+        sent_at=_normalize_datetime(getattr(message, "date", None)) or datetime.now(UTC),
+        raw_text=str(raw_text or ""),
+        normalized_text=normalize_text(str(raw_text or "")),
+        reply_to_telegram_message_id=_coerce_optional_int(reply_to),
+        forward_info=_to_json_compatible(getattr(message, "fwd_from", None)),
+        has_media=media is not None,
+        media_type=media_type,
+        entities_json=entities_payload if isinstance(entities_payload, (list, dict)) else None,
+        source_type="channel_post" if bool(getattr(message, "post", False)) else "message",
+    )
+
+
+async def _cache_profile_photo(
+    client: _TelethonClientProtocol,
+    *,
+    entity: object,
+    config: NewTelegramRuntimeConfig,
+    telegram_chat_id: int,
+) -> None:
+    if telegram_chat_id == 0:
+        return
+
+    base_path = avatar_base_path(config.session_path, telegram_chat_id)
+    if find_cached_variant(base_path) is not None:
+        return
+
+    base_path.parent.mkdir(parents=True, exist_ok=True)
+    clear_cached_variants(base_path)
+    try:
+        await client.download_profile_photo(entity, file=str(base_path))
+    except Exception:  # pragma: no cover - depends on Telethon runtime
+        clear_cached_variants(base_path)
+
+
+async def _cache_message_preview(
+    client: _TelethonClientProtocol,
+    *,
+    message: object,
+    config: NewTelegramRuntimeConfig,
+    telegram_chat_id: int,
+    remote_message: NewTelegramRemoteMessage,
+) -> None:
+    if remote_message.telegram_message_id <= 0:
+        return
+    if remote_message.media_type not in {"photo", "messagemediaphoto", "sticker", "messagemediadocument"}:
+        return
+
+    base_path = media_preview_base_path(
+        config.session_path,
+        telegram_chat_id=telegram_chat_id,
+        telegram_message_id=remote_message.telegram_message_id,
+    )
+    if find_cached_variant(base_path) is not None:
+        return
+
+    base_path.parent.mkdir(parents=True, exist_ok=True)
+    clear_cached_variants(base_path)
+    try:
+        await client.download_media(message, file=str(base_path))
+    except Exception:  # pragma: no cover - depends on Telethon runtime
+        clear_cached_variants(base_path)
 
 
 def _dialog_is_muted(dialog: _TelethonDialogProtocol) -> bool:
@@ -587,6 +830,38 @@ def _map_submit_password_error(error: Exception) -> NewTelegramAuthClientError:
         "submit_password_failed",
         f"Не удалось подтвердить пароль 2FA: {error}",
     )
+
+
+def _to_json_compatible(value: object) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, datetime):
+        normalized = _normalize_datetime(value)
+        return normalized.isoformat() if normalized is not None else None
+
+    if isinstance(value, dict):
+        return {
+            str(key): _to_json_compatible(item)
+            for key, item in value.items()
+            if item is not None
+        }
+
+    if isinstance(value, (list, tuple, set)):
+        return [_to_json_compatible(item) for item in value]
+
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _to_json_compatible(model_dump())
+
+    dataclass_fields = getattr(value, "__dataclass_fields__", None)
+    if dataclass_fields:
+        return {
+            field_name: _to_json_compatible(getattr(value, field_name))
+            for field_name in dataclass_fields
+        }
+
+    return str(value)
 
 
 def _normalize_datetime(value: object) -> datetime | None:

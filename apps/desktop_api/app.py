@@ -233,8 +233,16 @@ def create_app(
     async def chat_messages(
         chat_id: int,
         limit: int = Query(default=80, ge=10, le=200),
+        before_runtime_message_id: int | None = Query(default=None, ge=1),
     ) -> dict[str, Any]:
-        return await _call_with_lookup(app, lambda: _bridge(app).get_chat_messages(chat_id, limit=limit))
+        return await _call_with_lookup(
+            app,
+            lambda: _bridge(app).get_chat_messages(
+                chat_id,
+                limit=limit,
+                before_runtime_message_id=before_runtime_message_id,
+            ),
+        )
 
     @app.get("/api/chats/{chat_id}/workspace")
     async def chat_workspace(

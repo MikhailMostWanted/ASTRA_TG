@@ -53,8 +53,13 @@ class LegacyAstraRuntime:
         chat_id: int,
         *,
         limit: int = 80,
+        before_runtime_message_id: int | None = None,
     ) -> dict[str, Any]:
-        return await self.bridge._legacy_get_chat_messages(chat_id, limit=limit)
+        return await self.bridge._legacy_get_chat_messages(
+            chat_id,
+            limit=limit,
+            before_runtime_message_id=before_runtime_message_id,
+        )
 
     async def get_chat_workspace(
         self,

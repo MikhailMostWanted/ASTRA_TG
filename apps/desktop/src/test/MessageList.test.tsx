@@ -34,6 +34,7 @@ const runtimeOnlyChat: ChatItem = {
   messageCount: 0,
   lastMessageAt: null,
   lastMessageId: null,
+  lastMessageKey: null,
   lastTelegramMessageId: null,
   lastMessagePreview: "Сообщений пока нет",
   lastDirection: null,
@@ -45,6 +46,7 @@ const runtimeOnlyChat: ChatItem = {
   favorite: false,
   rosterSource: "new",
   rosterLastActivityAt: "2026-04-22T11:00:00.000Z",
+  rosterLastMessageKey: null,
   rosterLastMessagePreview: "Новый runtime только что увидел этот чат.",
   rosterLastDirection: "inbound",
   rosterLastSenderName: "Анна",
@@ -66,7 +68,7 @@ const runtimeOnlyChat: ChatItem = {
 
 
 describe("MessageList", () => {
-  it("shows a soft runtime-only workspace notice when history is still legacy", () => {
+  it("shows workspace backend and unavailable state for runtime-only chat", () => {
     render(
       <MessageList
         chat={runtimeOnlyChat}
@@ -74,16 +76,54 @@ describe("MessageList", () => {
         loading={false}
         refreshing={false}
         fullaccessReady
+        workspaceStatus={{
+          source: "new",
+          requestedBackend: "new",
+          effectiveBackend: "new",
+          degraded: false,
+          degradedReason: null,
+          syncTrigger: "runtime_poll",
+          updatedNow: true,
+          syncError: null,
+          lastUpdatedAt: "2026-04-22T11:01:00.000Z",
+          lastSuccessAt: "2026-04-22T11:01:00.000Z",
+          lastError: null,
+          lastErrorAt: null,
+          availability: {
+            workspaceAvailable: false,
+            historyReadable: false,
+            runtimeReadable: true,
+            legacyWorkspaceAvailable: false,
+            replyContextAvailable: false,
+            sendAvailable: false,
+            autopilotAvailable: false,
+            canLoadOlder: false,
+          },
+          messageSource: {
+            backend: "new_runtime",
+            chatKey: "telegram:-100500",
+            runtimeChatId: -100500,
+            localChatId: null,
+            oldestMessageKey: null,
+            newestMessageKey: null,
+            oldestRuntimeMessageId: null,
+            newestRuntimeMessageId: null,
+          },
+          route: {},
+        }}
+        canLoadOlder={false}
+        loadingOlder={false}
         lastUpdatedAt="2026-04-22T11:01:00.000Z"
         freshness={null}
         errorMessage={null}
+        onLoadOlder={vi.fn()}
         onRefresh={vi.fn()}
         onSyncChat={vi.fn()}
       />,
     );
 
-    expect(screen.getByText("new runtime")).toBeInTheDocument();
+    expect(screen.getByText("new workspace")).toBeInTheDocument();
     expect(screen.getByText("2 непрочит.")).toBeInTheDocument();
-    expect(screen.getByText("История пока остаётся на legacy")).toBeInTheDocument();
+    expect(screen.getByText("Workspace для чтения пока недоступен")).toBeInTheDocument();
   });
 });

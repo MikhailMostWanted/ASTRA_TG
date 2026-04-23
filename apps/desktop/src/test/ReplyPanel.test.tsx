@@ -279,17 +279,21 @@ describe("ReplyPanel", () => {
             },
           }}
           workflowState={{
+            seenMessageKey: "telegram:-10042:512",
             seenMessageId: 512,
             draftText: "Старый черновик не по теме",
+            draftSourceMessageKey: "telegram:-10042:401",
             draftSourceMessageId: 401,
             draftFocusLabel: "просьба",
             draftScopeKey: buildReplyDraftScopeKey({
               sourceMessageId: 401,
+              sourceMessageKey: "telegram:-10042:401",
               focusLabel: "просьба",
               sourceMessagePreview: "Скинь, пожалуйста, итоговый файл.",
               replyOpportunityMode: "direct_reply",
             }),
             draftUpdatedAt: "2026-04-22T12:30:00.000Z",
+            sentSourceMessageKey: null,
             sentSourceMessageId: null,
             sentAt: null,
           }}
@@ -305,5 +309,103 @@ describe("ReplyPanel", () => {
     expect(screen.getByText("Черновик устарел для текущего фокуса")).toBeInTheDocument();
     expect(screen.queryByText("Старый черновик не по теме")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Скопировать старый черновик" })).toBeInTheDocument();
+  });
+
+  it("renders workspace context without reply generation when new runtime is read-only", () => {
+    render(
+      <TooltipProvider>
+        <ReplyPanel
+          reply={{
+            kind: "workspace_context_only",
+            chatId: -200001,
+            chatTitle: "Runtime chat",
+            chatReference: "@runtime_chat",
+            errorMessage: null,
+            sourceSenderName: "Анна",
+            sourceMessagePreview: "Сможешь посмотреть это сегодня?",
+            suggestion: null,
+            actions: {
+              copy: false,
+              refresh: true,
+              pasteToTelegram: false,
+              send: false,
+              markSent: false,
+              variants: {},
+              disabledReason: "Write-path на этом этапе выключен.",
+            },
+          }}
+          replyContext={{
+            available: true,
+            sourceBackend: "new",
+            focusLabel: "вопрос",
+            focusReason: "Последний входящий message остаётся без ответа.",
+            replyOpportunityMode: "direct_reply",
+            replyOpportunityReason: "Есть свежий незакрытый вопрос.",
+            sourceMessageKey: "telegram:-100777:51",
+            sourceRuntimeMessageId: 51,
+            sourceLocalMessageId: null,
+            sourceSenderName: "Анна",
+            sourceMessagePreview: "Сможешь посмотреть это сегодня?",
+            sourceSentAt: "2026-04-23T09:05:00.000Z",
+            draftScopeBasis: {
+              sourceMessageKey: "telegram:-100777:51",
+              sourceMessageId: null,
+              runtimeMessageId: 51,
+              focusLabel: "вопрос",
+              sourceMessagePreview: "Сможешь посмотреть это сегодня?",
+              replyOpportunityMode: "direct_reply",
+            },
+            draftScopeKey: "telegram:-100777:51::вопрос::direct_reply::Сможешь посмотреть это сегодня?",
+          }}
+          freshness={null}
+          workspaceStatus={{
+            source: "new",
+            requestedBackend: "new",
+            effectiveBackend: "new",
+            degraded: false,
+            degradedReason: null,
+            syncTrigger: "runtime_poll",
+            updatedNow: true,
+            syncError: null,
+            lastUpdatedAt: "2026-04-23T09:05:02.000Z",
+            lastSuccessAt: "2026-04-23T09:05:02.000Z",
+            lastError: null,
+            lastErrorAt: null,
+            availability: {
+              workspaceAvailable: true,
+              historyReadable: true,
+              runtimeReadable: true,
+              legacyWorkspaceAvailable: false,
+              replyContextAvailable: true,
+              sendAvailable: false,
+              autopilotAvailable: false,
+              canLoadOlder: true,
+            },
+            messageSource: {
+              backend: "new_runtime",
+              chatKey: "telegram:-100777",
+              runtimeChatId: -100777,
+              localChatId: null,
+              oldestMessageKey: "telegram:-100777:40",
+              newestMessageKey: "telegram:-100777:51",
+              oldestRuntimeMessageId: 40,
+              newestRuntimeMessageId: 51,
+            },
+            route: {},
+          }}
+          workflowState={null}
+          onRefresh={vi.fn()}
+          onCopy={vi.fn()}
+          onUseDraft={vi.fn()}
+          onMarkSent={vi.fn()}
+          onClearDraft={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Контекст")).toBeInTheDocument();
+    expect(screen.getByText("Reply generation ещё не переведён на new runtime, но единый workspace уже отдал фокус и trigger.")).toBeInTheDocument();
+    expect(screen.getByText("вопрос")).toBeInTheDocument();
+    expect(screen.getByText("Write-path и generation surface на этом этапе не включены. Этот экран показывает тот же focus context, что и message list, чтобы UI не жил в двух разных мирах.")).toBeInTheDocument();
   });
 });

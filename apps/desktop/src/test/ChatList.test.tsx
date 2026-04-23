@@ -33,6 +33,7 @@ const baseChat: ChatItem = {
   messageCount: 18,
   lastMessageAt: "2026-04-22T10:30:00.000Z",
   lastMessageId: 300,
+  lastMessageKey: "telegram:-10042:300",
   lastTelegramMessageId: 9001,
   lastMessagePreview: "Когда сможешь прислать финальный файл?",
   lastDirection: "inbound",
@@ -44,6 +45,7 @@ const baseChat: ChatItem = {
   favorite: false,
   rosterSource: "new",
   rosterLastActivityAt: "2026-04-22T10:30:00.000Z",
+  rosterLastMessageKey: "telegram:-10042:300",
   rosterLastMessagePreview: "Когда сможешь прислать финальный файл?",
   rosterLastDirection: "inbound",
   rosterLastSenderName: "Анна",
@@ -68,12 +70,12 @@ describe("ChatList", () => {
     render(
       <ChatList
         chats={[baseChat]}
-        selectedChatId={42}
+        selectedChatKey="telegram:-10042"
         search=""
         filter="all"
         sort="activity"
         favorites={null as unknown as number[]}
-        workspaceStateByChat={null as unknown as Record<number, never>}
+        workspaceStateByChat={null as unknown as Record<string, never>}
         loading={false}
         refreshing={false}
         refreshedAt="2026-04-22T10:31:00.000Z"
@@ -94,7 +96,7 @@ describe("ChatList", () => {
     render(
       <ChatList
         chats={[baseChat]}
-        selectedChatId={42}
+        selectedChatKey="telegram:-10042"
         search=""
         filter="all"
         sort="activity"

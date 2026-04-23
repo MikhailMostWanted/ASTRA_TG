@@ -174,6 +174,7 @@ export interface RuntimeStatusPayload {
   legacy: RuntimeBackendPayload | null;
   newRuntime: RuntimeBackendPayload | null;
   chatRoster?: ChatRosterStatePayload | null;
+  messageWorkspace?: WorkspaceStatusPayload | null;
   managedProcess?: ProcessState;
 }
 
@@ -227,17 +228,19 @@ export interface ChatItem {
   messageCount: number;
   lastMessageAt: string | null;
   lastMessageId: number | null;
+  lastMessageKey: string | null;
   lastTelegramMessageId: number | null;
   lastMessagePreview: string;
   lastDirection: string | null;
   lastSourceAdapter: string | null;
   lastSenderName: string | null;
   avatarUrl: string | null;
-  syncStatus: "fullaccess" | "local" | "empty";
+  syncStatus: "fullaccess" | "local" | "runtime" | "empty" | string;
   memory: ChatMemorySummary | null;
   favorite: boolean;
   rosterSource: "legacy" | "new" | string;
   rosterLastActivityAt: string | null;
+  rosterLastMessageKey: string | null;
   rosterLastMessagePreview: string;
   rosterLastDirection: string | null;
   rosterLastSenderName: string | null;
@@ -278,6 +281,10 @@ export interface ChatsPayload {
 
 export interface MessageItem {
   id: number;
+  chatKey: string;
+  messageKey: string;
+  runtimeMessageId: number;
+  localMessageId: number | null;
   telegramMessageId: number | null;
   chatId: number;
   direction: "inbound" | "outbound" | string;
@@ -289,17 +296,73 @@ export interface MessageItem {
   text: string | null;
   normalizedText: string | null;
   replyToMessageId: number | null;
+  replyToLocalMessageId: number | null;
+  replyToRuntimeMessageId: number | null;
+  replyToMessageKey: string | null;
   hasMedia: boolean;
   mediaType: string | null;
   mediaPreviewUrl: string | null;
-  forwardInfo: Record<string, unknown> | null;
-  entities: unknown[] | null;
+  forwardInfo: Record<string, unknown> | unknown[] | null;
+  entities: Record<string, unknown> | unknown[] | null;
   preview: string;
+}
+
+export interface MessageHistoryPayload {
+  limit: number;
+  returnedCount: number;
+  hasMoreBefore: boolean;
+  beforeRuntimeMessageId: number | null;
+  oldestMessageKey: string | null;
+  newestMessageKey: string | null;
+  oldestRuntimeMessageId: number | null;
+  newestRuntimeMessageId: number | null;
+}
+
+export interface WorkspaceAvailabilityPayload {
+  workspaceAvailable: boolean;
+  historyReadable: boolean;
+  runtimeReadable: boolean;
+  legacyWorkspaceAvailable: boolean;
+  replyContextAvailable: boolean;
+  sendAvailable: boolean;
+  autopilotAvailable: boolean;
+  canLoadOlder: boolean;
+}
+
+export interface MessageSourceIdentityPayload {
+  backend: string;
+  chatKey: string | null;
+  runtimeChatId: number | null;
+  localChatId: number | null;
+  oldestMessageKey: string | null;
+  newestMessageKey: string | null;
+  oldestRuntimeMessageId: number | null;
+  newestRuntimeMessageId: number | null;
+}
+
+export interface WorkspaceStatusPayload {
+  source: "legacy" | "new" | "fallback_to_legacy" | string;
+  requestedBackend: "legacy" | "new" | string | null;
+  effectiveBackend: "legacy" | "new" | string | null;
+  degraded: boolean;
+  degradedReason: string | null;
+  syncTrigger: string | null;
+  updatedNow: boolean;
+  syncError: string | null;
+  lastUpdatedAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  availability: WorkspaceAvailabilityPayload;
+  messageSource: MessageSourceIdentityPayload;
+  route?: RuntimeRoutePayload | Record<string, unknown>;
 }
 
 export interface ChatMessagesPayload {
   chat: ChatItem;
   messages: MessageItem[];
+  history: MessageHistoryPayload;
+  status: WorkspaceStatusPayload;
   refreshedAt: string | null;
 }
 
@@ -401,6 +464,30 @@ export interface ReplyPreviewPayload {
   };
 }
 
+export interface ReplyContextPayload {
+  available: boolean;
+  sourceBackend: string;
+  focusLabel: string | null;
+  focusReason: string | null;
+  replyOpportunityMode: string | null;
+  replyOpportunityReason: string | null;
+  sourceMessageKey: string | null;
+  sourceRuntimeMessageId: number | null;
+  sourceLocalMessageId: number | null;
+  sourceSenderName: string | null;
+  sourceMessagePreview: string | null;
+  sourceSentAt: string | null;
+  draftScopeBasis: {
+    sourceMessageKey: string | null;
+    sourceMessageId: number | null;
+    runtimeMessageId: number | null;
+    focusLabel: string | null;
+    sourceMessagePreview: string | null;
+    replyOpportunityMode: string | null;
+  } | null;
+  draftScopeKey: string | null;
+}
+
 export interface AutopilotPayload {
   masterEnabled: boolean;
   allowChannels: boolean;
@@ -458,9 +545,12 @@ export interface AutopilotPayload {
 export interface ChatWorkspacePayload {
   chat: ChatItem;
   messages: MessageItem[];
+  history: MessageHistoryPayload;
+  replyContext: ReplyContextPayload | null;
   reply: ReplyPreviewPayload;
   autopilot: AutopilotPayload | null;
   freshness: ChatFreshnessPayload;
+  status: WorkspaceStatusPayload;
   refreshedAt: string | null;
 }
 

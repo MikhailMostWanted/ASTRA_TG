@@ -87,6 +87,22 @@ def test_runtime_manager_keeps_unimplemented_surfaces_on_legacy_even_when_chat_r
     asyncio.run(run_assertions())
 
 
+def test_runtime_manager_routes_message_workspace_to_new_when_surface_is_ready() -> None:
+    async def run_assertions() -> None:
+        manager = RuntimeManager(RuntimeSwitches(message_workspace="new"))
+        manager.register_backend(LegacyRuntimeBackend(_FakeRuntime("legacy")))
+        manager.register_backend(_WorkspaceAwareBackend())
+
+        route = manager.describe_routes()["routes"]["messageWorkspace"]
+
+        assert manager.active_backend_for_surface("messageWorkspace") == "new"
+        assert route["requested"] == "new"
+        assert route["effective"] == "new"
+        assert route["targetReady"] is True
+
+    asyncio.run(run_assertions())
+
+
 class _MemoryAuthStore:
     def __init__(self, state: RuntimeAuthSessionState) -> None:
         self.state = state
@@ -129,6 +145,12 @@ class _FakeRuntime:
     async def list_chats(self, **_kwargs):
         return {"runtime": self.name}
 
+    async def get_chat_messages(self, *_args, **_kwargs):
+        return {"runtime": self.name, "surface": "messageWorkspace"}
+
+    async def get_chat_workspace(self, *_args, **_kwargs):
+        return {"runtime": self.name, "surface": "messageWorkspace"}
+
 
 class _SurfaceAwareBackend:
     backend = "new"
@@ -164,5 +186,43 @@ class _SurfaceAwareBackend:
 
     def route_reason_for(self, surface: str) -> str | None:
         if surface == "chatRoster":
+            return None
+        return "New runtime пока не реализует этот surface; legacy remains effective."
+
+
+class _WorkspaceAwareBackend:
+    backend = "new"
+    runtime = _FakeRuntime("new")
+    route_available = True
+
+    async def start(self):
+        return await self.status()
+
+    async def stop(self):
+        return await self.status()
+
+    async def health(self):
+        return await self.status()
+
+    async def status(self):
+        from astra_runtime.status import RuntimeBackendStatus
+
+        return RuntimeBackendStatus(
+            backend="new",
+            name="workspace-aware-runtime",
+            registered=True,
+            lifecycle="running",
+            active=True,
+            healthy=True,
+            ready=True,
+            route_available=True,
+            capabilities=("message-history",),
+        )
+
+    def route_available_for(self, surface: str) -> bool:
+        return surface == "messageWorkspace"
+
+    def route_reason_for(self, surface: str) -> str | None:
+        if surface == "messageWorkspace":
             return None
         return "New runtime пока не реализует этот surface; legacy remains effective."

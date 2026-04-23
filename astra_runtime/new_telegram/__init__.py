@@ -14,14 +14,18 @@ from astra_runtime.new_telegram.auth import (
     NewTelegramAuthSessionStore,
 )
 from astra_runtime.new_telegram.config import NewTelegramRuntimeConfig
+from astra_runtime.new_telegram.history import NewTelegramMessageHistory
 from astra_runtime.new_telegram.runtime import NewTelegramRuntimeService
 from astra_runtime.new_telegram.transport import (
     NewTelegramAccount,
     NewTelegramAuthClientError,
+    NewTelegramChatSummary,
     NewTelegramDialogMessage,
     NewTelegramDialogSummary,
+    NewTelegramRemoteMessage,
     NewTelegramPasswordRequiredError,
     build_new_telegram_auth_client,
+    build_new_telegram_history_client,
     build_new_telegram_roster_client,
     close_managed_new_telegram_clients,
     delete_session_file,
@@ -37,12 +41,16 @@ __all__ = [
     "NewTelegramAuthClientError",
     "NewTelegramAuthController",
     "NewTelegramAuthSessionStore",
+    "NewTelegramChatSummary",
     "NewTelegramRuntimeConfig",
     "NewTelegramRuntimeService",
     "NewTelegramDialogMessage",
     "NewTelegramDialogSummary",
+    "NewTelegramMessageHistory",
     "NewTelegramPasswordRequiredError",
+    "NewTelegramRemoteMessage",
     "build_new_telegram_auth_client",
+    "build_new_telegram_history_client",
     "build_new_telegram_roster_client",
     "close_managed_new_telegram_clients",
     "delete_session_file",

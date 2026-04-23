@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from astra_runtime.chat_identity import ChatIdentity
+from astra_runtime.message_identity import MessageIdentity, build_message_key
 from apps.cli.processes import ProcessState
 from fullaccess.cache import avatar_base_path, find_cached_variant, media_preview_base_path
 from fullaccess.models import FullAccessChatSummary, FullAccessStatusReport, FullAccessSyncResult
@@ -111,6 +112,15 @@ def serialize_chat(
         "messageCount": message_count,
         "lastMessageAt": serialize_datetime(last_message.sent_at if last_message is not None else None),
         "lastMessageId": last_message.id if last_message is not None else None,
+        "lastMessageKey": (
+            _build_message_identity(
+                runtime_chat_id=chat.telegram_chat_id,
+                runtime_message_id=last_message.telegram_message_id,
+                local_message_id=last_message.id,
+            ).message_key
+            if last_message is not None
+            else None
+        ),
         "lastTelegramMessageId": (
             last_message.telegram_message_id if last_message is not None else None
         ),
@@ -137,6 +147,15 @@ def serialize_chat(
         "favorite": False,
         "rosterSource": "legacy",
         "rosterLastActivityAt": roster_last_activity_at,
+        "rosterLastMessageKey": (
+            _build_message_identity(
+                runtime_chat_id=chat.telegram_chat_id,
+                runtime_message_id=last_message.telegram_message_id,
+                local_message_id=last_message.id,
+            ).message_key
+            if last_message is not None
+            else None
+        ),
         "rosterLastMessagePreview": roster_last_preview,
         "rosterLastDirection": last_message.direction if last_message is not None else None,
         "rosterLastSenderName": last_message.sender_name if last_message is not None else None,
@@ -159,8 +178,21 @@ def serialize_message(
     session_file: Path | None = None,
     telegram_chat_id: int | None = None,
 ) -> dict[str, Any]:
+    runtime_chat_id = telegram_chat_id if telegram_chat_id is not None else message.chat.telegram_chat_id
+    identity = _build_message_identity(
+        runtime_chat_id=runtime_chat_id,
+        runtime_message_id=message.telegram_message_id,
+        local_message_id=message.id,
+    )
+    reply_to_runtime_message_id = None
+    if "reply_to_message" in message.__dict__:
+        reply_to_message = message.__dict__.get("reply_to_message")
+        if isinstance(reply_to_message, Message):
+            reply_to_runtime_message_id = reply_to_message.telegram_message_id
+
     return {
         "id": message.id,
+        **identity.to_payload(),
         "telegramMessageId": message.telegram_message_id,
         "chatId": message.chat_id,
         "direction": message.direction,
@@ -172,6 +204,13 @@ def serialize_message(
         "text": message.raw_text,
         "normalizedText": message.normalized_text,
         "replyToMessageId": message.reply_to_message_id,
+        "replyToLocalMessageId": message.reply_to_message_id,
+        "replyToRuntimeMessageId": reply_to_runtime_message_id,
+        "replyToMessageKey": (
+            build_message_key(runtime_chat_id, reply_to_runtime_message_id)
+            if reply_to_runtime_message_id is not None
+            else None
+        ),
         "hasMedia": message.has_media,
         "mediaType": message.media_type,
         "mediaPreviewUrl": _build_media_preview_url(
@@ -264,6 +303,19 @@ def serialize_fullaccess_status(report: FullAccessStatusReport) -> dict[str, Any
         "readyForManualSend": report.ready_for_manual_send,
         "reason": report.reason,
     }
+
+
+def _build_message_identity(
+    *,
+    runtime_chat_id: int,
+    runtime_message_id: int,
+    local_message_id: int | None,
+) -> MessageIdentity:
+    return MessageIdentity(
+        runtime_chat_id=runtime_chat_id,
+        runtime_message_id=runtime_message_id,
+        local_message_id=local_message_id,
+    )
 
 
 def serialize_fullaccess_chat(

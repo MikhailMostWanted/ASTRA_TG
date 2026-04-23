@@ -7,7 +7,13 @@ import { MessageList } from "@/components/system/MessageList";
 import { ReplyPanel } from "@/components/system/ReplyPanel";
 import { WarningState } from "@/components/system/WarningState";
 import { api } from "@/lib/api";
-import { extractErrorMessage, safeArray } from "@/lib/runtime-guards";
+import {
+  extractErrorMessage,
+  normalizeReplyContextPayload,
+  normalizeWorkspaceStatusPayload,
+  safeArray,
+} from "@/lib/runtime-guards";
+import type { MessageItem } from "@/lib/types";
 import { useAppStore } from "@/stores/app-store";
 
 const CHAT_POLL_MS = 6_000;
@@ -16,8 +22,8 @@ const LOCAL_WORKSPACE_POLL_MS = 7_000;
 
 export function ChatsScreen() {
   const queryClient = useQueryClient();
-  const rawSelectedChatId = useAppStore((state) => state.selectedChatId);
-  const setSelectedChatId = useAppStore((state) => state.setSelectedChatId);
+  const rawSelectedChatKey = useAppStore((state) => state.selectedChatKey);
+  const setSelectedChatKey = useAppStore((state) => state.setSelectedChatKey);
   const rawFavoriteChatIds = useAppStore((state) => state.favoriteChatIds);
   const toggleFavoriteChat = useAppStore((state) => state.toggleFavoriteChat);
   const rawChatWorkspace = useAppStore((state) => state.chatWorkspace);
@@ -25,10 +31,9 @@ export function ChatsScreen() {
   const saveReplyDraft = useAppStore((state) => state.saveReplyDraft);
   const markReplySent = useAppStore((state) => state.markReplySent);
   const clearReplyDraft = useAppStore((state) => state.clearReplyDraft);
-  const selectedChatId =
-    typeof rawSelectedChatId === "number" && Number.isFinite(rawSelectedChatId)
-      ? rawSelectedChatId
-      : null;
+  const selectedChatKey = typeof rawSelectedChatKey === "string" && rawSelectedChatKey.trim()
+    ? rawSelectedChatKey
+    : null;
   const favoriteChatIds = safeArray(rawFavoriteChatIds).filter(
     (item): item is number => typeof item === "number" && Number.isFinite(item),
   );
@@ -42,7 +47,8 @@ export function ChatsScreen() {
   const [sort, setSort] = useState("activity");
   const deferredSearch = useDeferredValue(search);
   const lastWorkspaceSyncAtRef = useRef<string | null>(null);
-  const lastSelectedChatKeyRef = useRef<string | null>(null);
+  const [olderMessages, setOlderMessages] = useState<MessageItem[]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
   const chatsQuery = useQuery({
     queryKey: ["chats", deferredSearch, filter, sort],
@@ -64,43 +70,39 @@ export function ChatsScreen() {
   const rosterState = chatsQuery.data?.roster ?? null;
 
   useEffect(() => {
-    const currentlySelected = chatItems.find((item) => item.id === selectedChatId) || null;
-    if (currentlySelected?.chatKey) {
-      lastSelectedChatKeyRef.current = currentlySelected.chatKey;
-    }
-  }, [chatItems, selectedChatId]);
-
-  useEffect(() => {
     if (chatItems.length === 0) {
-      if (selectedChatId !== null) {
-        startTransition(() => setSelectedChatId(null));
+      if (selectedChatKey !== null) {
+        startTransition(() => setSelectedChatKey(null));
       }
       return;
     }
 
-    const stillExists = chatItems.some((item) => item.id === selectedChatId);
+    const stillExists = chatItems.some((item) => item.chatKey === selectedChatKey);
     if (!stillExists) {
-      const sameChatByKey = lastSelectedChatKeyRef.current
-        ? chatItems.find((item) => item.chatKey === lastSelectedChatKeyRef.current)
-        : null;
-      startTransition(() => setSelectedChatId(sameChatByKey?.id ?? chatItems[0]?.id ?? null));
+      startTransition(() => setSelectedChatKey(chatItems[0]?.chatKey ?? null));
     }
-  }, [chatItems, selectedChatId, setSelectedChatId]);
+  }, [chatItems, selectedChatKey, setSelectedChatKey]);
 
   useEffect(() => {
     lastWorkspaceSyncAtRef.current = null;
-  }, [selectedChatId]);
+    setOlderMessages([]);
+  }, [selectedChatKey]);
 
-  const selectedChat = chatItems.find((item) => item.id === selectedChatId) || null;
+  const selectedChat = chatItems.find((item) => item.chatKey === selectedChatKey) || null;
   const selectedLocalChatId = selectedChat?.localChatId ?? null;
-  const selectedChatWorkspace = selectedChatId !== null ? chatWorkspace[selectedChatId] || null : null;
+  const selectedChatWorkspace = selectedChat?.chatKey ? chatWorkspace[selectedChat.chatKey] || null : null;
   const fullaccessReady = Boolean(fullaccessQuery.data?.status.readyForManualSync);
   const fullaccessWriteReady = Boolean(fullaccessQuery.data?.status.readyForManualSend);
 
   const workspaceQuery = useQuery({
-    queryKey: ["chat-workspace", selectedLocalChatId],
-    queryFn: () => api.chatWorkspace(selectedLocalChatId as number, 60),
-    enabled: selectedLocalChatId !== null,
+    queryKey: ["chat-workspace", selectedChat?.chatKey],
+    queryFn: () => {
+      if (!selectedChat) {
+        throw new Error("Активный чат не выбран.");
+      }
+      return api.chatWorkspace(selectedChat.id, 60);
+    },
+    enabled: selectedChat !== null,
     refetchInterval:
       selectedChat?.syncStatus === "fullaccess"
         ? FULLACCESS_WORKSPACE_POLL_MS
@@ -110,15 +112,17 @@ export function ChatsScreen() {
   const syncChatMutation = useMutation({
     mutationFn: ({
       chatId,
+      chatKey: _chatKey,
       chatTitle,
       silent = false,
     }: {
       chatId: number;
+      chatKey: string;
       chatTitle: string;
       silent?: boolean;
       trigger?: "manual" | "auto";
     }) => api.syncSource(chatId).then((payload) => ({ payload, chatTitle, silent })),
-    onSuccess: async ({ payload, chatTitle, silent }) => {
+    onSuccess: async ({ payload, chatTitle, silent }, variables) => {
       if (!silent) {
         toast.success(
           `Чат «${chatTitle}» синхронизирован: +${payload.createdCount}, обновлено ${payload.updatedCount}.`,
@@ -126,7 +130,7 @@ export function ChatsScreen() {
       }
       await Promise.all([
         queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
-        queryClient.refetchQueries({ queryKey: ["chat-workspace", payload.localChatId], exact: true }),
+        queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
         queryClient.refetchQueries({ queryKey: ["fullaccess"], type: "active" }),
       ]);
     },
@@ -139,11 +143,12 @@ export function ChatsScreen() {
   const sendMessageMutation = useMutation({
     mutationFn: ({
       localChatId,
+      chatKey: _chatKey,
       text,
       sourceMessageId,
     }: {
       localChatId: number;
-      rosterChatId: number;
+      chatKey: string;
       text: string;
       sourceMessageId: number | null;
     }) =>
@@ -153,12 +158,16 @@ export function ChatsScreen() {
         reply_to_source_message_id: sourceMessageId,
       }),
     onSuccess: async (payload, variables) => {
-      queryClient.setQueryData(["chat-workspace", variables.localChatId], payload.workspace);
-      markReplySent(variables.rosterChatId, variables.sourceMessageId);
-      clearReplyDraft(variables.rosterChatId);
+      queryClient.setQueryData(["chat-workspace", variables.chatKey], payload.workspace);
+      markReplySent(variables.chatKey, {
+        sourceMessageId: variables.sourceMessageId,
+        sourceMessageKey: payload.sentMessage?.messageKey ?? null,
+      });
+      clearReplyDraft(variables.chatKey);
       toast.success("Сообщение отправлено через Desktop.");
       await Promise.all([
         queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
         queryClient.refetchQueries({ queryKey: ["fullaccess"], type: "active" }),
       ]);
     },
@@ -170,7 +179,9 @@ export function ChatsScreen() {
     mutationFn: (enabled: boolean) => api.updateAutopilotGlobal({ master_enabled: enabled }),
     onSuccess: async () => {
       toast.success("Глобальный режим автопилота обновлён.");
-      await queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedLocalChatId], exact: true });
+      if (selectedChat?.chatKey) {
+        await queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedChat.chatKey], exact: true });
+      }
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Не удалось обновить master switch.");
@@ -179,15 +190,17 @@ export function ChatsScreen() {
   const autopilotChatMutation = useMutation({
     mutationFn: ({
       localChatId,
+      chatKey: _chatKey,
       payload,
     }: {
       localChatId: number;
+      chatKey: string;
       payload: { trusted?: boolean; mode?: string };
     }) => api.updateChatAutopilot(localChatId, payload),
     onSuccess: async (_payload, variables) => {
       toast.success("Настройки автопилота для чата обновлены.");
       await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.localChatId], exact: true }),
+        queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
         queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
       ]);
     },
@@ -195,18 +208,48 @@ export function ChatsScreen() {
       toast.error(error instanceof Error ? error.message : "Не удалось обновить автопилот чата.");
     },
   });
-  const messageItems = safeArray(workspaceQuery.data?.messages);
+  const tailMessageItems = safeArray(workspaceQuery.data?.messages);
+  const messageItems = mergeMessageLists(olderMessages, tailMessageItems);
   const replyPayload = workspaceQuery.data?.reply ?? null;
+  const replyContext = normalizeReplyContextPayload(workspaceQuery.data?.replyContext);
   const autopilotPayload = workspaceQuery.data?.autopilot ?? null;
   const freshness = workspaceQuery.data?.freshness ?? null;
+  const workspaceStatus = normalizeWorkspaceStatusPayload(workspaceQuery.data?.status);
+  const activeChat =
+    selectedChat && workspaceQuery.data?.chat
+      ? {
+          ...selectedChat,
+          ...workspaceQuery.data.chat,
+          unreadCount: selectedChat.unreadCount,
+          unreadMentionCount: selectedChat.unreadMentionCount,
+          pinned: selectedChat.pinned,
+          muted: selectedChat.muted,
+          archived: selectedChat.archived,
+        }
+      : selectedChat;
 
   useEffect(() => {
     const lastMessage = messageItems.length > 0 ? messageItems[messageItems.length - 1] : null;
-    if (selectedChatId === null || !lastMessage) {
+    if (!selectedChat?.chatKey || !lastMessage) {
       return;
     }
-    markChatSeen(selectedChatId, lastMessage.id);
-  }, [messageItems, markChatSeen, selectedChatId]);
+    if (
+      selectedChatWorkspace?.seenMessageKey === lastMessage.messageKey
+      && selectedChatWorkspace?.seenMessageId === (lastMessage.localMessageId ?? null)
+    ) {
+      return;
+    }
+    markChatSeen(selectedChat.chatKey, {
+      messageId: lastMessage.localMessageId,
+      messageKey: lastMessage.messageKey,
+    });
+  }, [
+    messageItems,
+    markChatSeen,
+    selectedChat?.chatKey,
+    selectedChatWorkspace?.seenMessageId,
+    selectedChatWorkspace?.seenMessageKey,
+  ]);
 
   useEffect(() => {
     if (!selectedChat || selectedChat.syncStatus !== "fullaccess") {
@@ -220,17 +263,46 @@ export function ChatsScreen() {
     void queryClient.refetchQueries({ queryKey: ["chats"], type: "active" });
   }, [freshness?.lastSyncAt, queryClient, selectedChat]);
 
+  const loadOlderMessages = async () => {
+    if (!selectedChat || loadingOlder) {
+      return;
+    }
+    const beforeRuntimeMessageId =
+      olderMessages[0]?.runtimeMessageId
+      || tailMessageItems[0]?.runtimeMessageId
+      || workspaceQuery.data?.history?.beforeRuntimeMessageId
+      || null;
+    if (beforeRuntimeMessageId === null) {
+      return;
+    }
+
+    setLoadingOlder(true);
+    try {
+      const payload = await api.chatMessages(selectedChat.id, 50, beforeRuntimeMessageId);
+      setOlderMessages((current) => mergeMessageLists(safeArray(payload.messages), current));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Не удалось догрузить историю.");
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
   const refreshWorkspace = async () => {
-      if (selectedChat) {
-        if (selectedChat.syncStatus === "fullaccess" && fullaccessReady) {
-          try {
-            await syncChatMutation.mutateAsync({
-              chatId: selectedChat.localChatId ?? selectedChat.id,
-              chatTitle: selectedChat.title,
-              trigger: "manual",
-            });
-          } catch {
-            return;
+    if (selectedChat) {
+      if (selectedChat.syncStatus === "fullaccess" && fullaccessReady) {
+        if (selectedLocalChatId === null) {
+          toast.error("Этот чат пока не связан с legacy source, поэтому manual sync недоступен.");
+          return;
+        }
+        try {
+          await syncChatMutation.mutateAsync({
+            chatId: selectedLocalChatId,
+            chatKey: selectedChat.chatKey,
+            chatTitle: selectedChat.title,
+            trigger: "manual",
+          });
+        } catch {
+          return;
         }
         return;
       }
@@ -238,7 +310,7 @@ export function ChatsScreen() {
 
     await Promise.all([
       queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
-      queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedLocalChatId], exact: true }),
+      queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedChat?.chatKey], exact: true }),
     ]);
     toast.success("Контекст обновлён.");
   };
@@ -252,7 +324,11 @@ export function ChatsScreen() {
           : freshness?.updatedNow
             ? "Активный чат только что обновлён"
             : freshness?.label || null
-      : rosterState?.source === "new"
+      : workspaceStatus?.source === "new"
+        ? "Workspace читается через new runtime"
+        : workspaceStatus?.source === "fallback_to_legacy"
+          ? "Workspace временно откатился на legacy"
+          : rosterState?.source === "new"
         ? "Roster идёт из new runtime"
         : rosterState?.source === "fallback_to_legacy"
           ? "New runtime roster деградировал, поэтому сейчас используется legacy"
@@ -284,7 +360,7 @@ export function ChatsScreen() {
     <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)_400px]">
       <ChatList
         chats={chatItems}
-        selectedChatId={selectedChatId}
+        selectedChatKey={selectedChatKey}
         search={search}
         filter={filter}
         sort={sort}
@@ -298,7 +374,7 @@ export function ChatsScreen() {
         onSearchChange={setSearch}
         onFilterChange={setFilter}
         onSortChange={setSort}
-        onSelectChat={setSelectedChatId}
+        onSelectChat={setSelectedChatKey}
         onToggleFavorite={toggleFavoriteChat}
         onRefresh={() => {
           void refreshWorkspace();
@@ -306,11 +382,14 @@ export function ChatsScreen() {
       />
 
       <MessageList
-        chat={selectedChat}
+        chat={activeChat}
         messages={messageItems}
         loading={workspaceQuery.isLoading}
         refreshing={workspaceQuery.isFetching || syncChatMutation.isPending}
         fullaccessReady={fullaccessReady}
+        workspaceStatus={workspaceStatus}
+        canLoadOlder={Boolean(workspaceStatus?.availability.canLoadOlder)}
+        loadingOlder={loadingOlder}
         lastUpdatedAt={workspaceQuery.data?.refreshedAt || chatsQuery.data?.refreshedAt || null}
         freshness={freshness}
         errorMessage={
@@ -318,6 +397,9 @@ export function ChatsScreen() {
             ? extractErrorMessage(workspaceQuery.error, "Не удалось загрузить рабочий контекст чата.")
             : null
         }
+        onLoadOlder={() => {
+          void loadOlderMessages();
+        }}
         onRefresh={() => {
           void refreshWorkspace();
         }}
@@ -325,8 +407,13 @@ export function ChatsScreen() {
           if (!selectedChat) {
             return;
           }
+          if (selectedLocalChatId === null) {
+            toast.error("Для runtime-only чата manual sync пока недоступен.");
+            return;
+          }
           syncChatMutation.mutate({
-            chatId: selectedChat.localChatId ?? selectedChat.id,
+            chatId: selectedLocalChatId,
+            chatKey: selectedChat.chatKey,
             chatTitle: selectedChat.title,
             trigger: "manual",
           });
@@ -335,8 +422,10 @@ export function ChatsScreen() {
 
       <ReplyPanel
         reply={replyPayload}
+        replyContext={replyContext}
         autopilot={autopilotPayload}
         freshness={freshness}
+        workspaceStatus={workspaceStatus}
         workflowState={selectedChatWorkspace}
         loading={workspaceQuery.isLoading}
         refreshing={workspaceQuery.isFetching || syncChatMutation.isPending}
@@ -351,24 +440,29 @@ export function ChatsScreen() {
           void refreshWorkspace();
         }}
         onCopy={handleCopy}
-        onUseDraft={(text, sourceMessageId) => {
-          if (selectedChatId === null) {
+        onUseDraft={(text, sourceMessageId, sourceMessageKey) => {
+          if (!selectedChat?.chatKey) {
             return;
           }
-          saveReplyDraft(selectedChatId, {
+          saveReplyDraft(selectedChat.chatKey, {
             text,
             sourceMessageId,
-            focusLabel: replyPayload?.suggestion?.focusLabel ?? null,
+            sourceMessageKey,
+            focusLabel: replyContext?.focusLabel ?? replyPayload?.suggestion?.focusLabel ?? null,
             sourceMessagePreview:
-              replyPayload?.sourceMessagePreview
+              replyContext?.sourceMessagePreview
+              || replyPayload?.sourceMessagePreview
               || replyPayload?.suggestion?.sourceMessagePreview
               || null,
-            replyOpportunityMode: replyPayload?.suggestion?.replyOpportunityMode ?? null,
+            replyOpportunityMode:
+              replyContext?.replyOpportunityMode
+              || replyPayload?.suggestion?.replyOpportunityMode
+              || null,
           });
           toast.success("Черновик сохранён локально.");
         }}
-        onSend={(text, sourceMessageId) => {
-          if (selectedChatId === null) {
+        onSend={(text, sourceMessageId, _sourceMessageKey) => {
+          if (!selectedChat?.chatKey) {
             return;
           }
           if (selectedLocalChatId === null) {
@@ -381,24 +475,27 @@ export function ChatsScreen() {
           }
           sendMessageMutation.mutate({
             localChatId: selectedLocalChatId,
-            rosterChatId: selectedChatId,
+            chatKey: selectedChat.chatKey,
             text,
             sourceMessageId,
           });
         }}
-        onMarkSent={(sourceMessageId) => {
-          if (selectedChatId === null) {
+        onMarkSent={(sourceMessageId, sourceMessageKey) => {
+          if (!selectedChat?.chatKey) {
             return;
           }
-          markReplySent(selectedChatId, sourceMessageId);
-          clearReplyDraft(selectedChatId);
+          markReplySent(selectedChat.chatKey, {
+            sourceMessageId,
+            sourceMessageKey,
+          });
+          clearReplyDraft(selectedChat.chatKey);
           toast.success("Локальная отметка «отправлено» сохранена.");
         }}
         onClearDraft={() => {
-          if (selectedChatId === null) {
+          if (!selectedChat?.chatKey) {
             return;
           }
-          clearReplyDraft(selectedChatId);
+          clearReplyDraft(selectedChat.chatKey);
           toast.success("Черновик очищен.");
         }}
         onUpdateAutopilotGlobal={(enabled) => {
@@ -408,9 +505,26 @@ export function ChatsScreen() {
           if (selectedLocalChatId === null) {
             return;
           }
-          autopilotChatMutation.mutate({ localChatId: selectedLocalChatId, payload });
+          if (!selectedChat?.chatKey) {
+            return;
+          }
+          autopilotChatMutation.mutate({
+            localChatId: selectedLocalChatId,
+            chatKey: selectedChat.chatKey,
+            payload,
+          });
         }}
       />
     </div>
   );
+}
+
+function mergeMessageLists(...pages: Array<MessageItem[] | undefined>): MessageItem[] {
+  const byKey = new Map<string, MessageItem>();
+  for (const page of pages) {
+    for (const message of safeArray(page)) {
+      byKey.set(message.messageKey, message);
+    }
+  }
+  return Array.from(byKey.values()).sort((left, right) => left.runtimeMessageId - right.runtimeMessageId);
 }

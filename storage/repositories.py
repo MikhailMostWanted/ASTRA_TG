@@ -276,6 +276,30 @@ class MessageRepository:
         )
         return result.scalar_one_or_none()
 
+    async def list_by_chat_and_telegram_message_ids(
+        self,
+        *,
+        chat_id: int,
+        telegram_message_ids: Sequence[int],
+    ) -> dict[int, Message]:
+        normalized_message_ids = [int(message_id) for message_id in telegram_message_ids]
+        if not normalized_message_ids:
+            return {}
+
+        result = await self.session.execute(
+            select(Message)
+            .options(selectinload(Message.reply_to_message))
+            .where(
+                Message.chat_id == chat_id,
+                Message.telegram_message_id.in_(normalized_message_ids),
+            )
+        )
+        messages = list(result.scalars().all())
+        return {
+            int(message.telegram_message_id): message
+            for message in messages
+        }
+
     async def create_or_update_message(
         self,
         *,
@@ -413,6 +437,7 @@ class MessageRepository:
         result = await self.session.execute(
             select(Message)
             .join(ranked_messages, ranked_messages.c.message_id == Message.id)
+            .options(selectinload(Message.reply_to_message))
             .where(ranked_messages.c.row_number == 1)
         )
         messages = list(result.scalars().all())
@@ -442,7 +467,11 @@ class MessageRepository:
         limit: int | None = None,
         ascending: bool = True,
     ) -> list[Message]:
-        statement = select(Message).where(Message.chat_id == chat_id)
+        statement = (
+            select(Message)
+            .options(selectinload(Message.reply_to_message))
+            .where(Message.chat_id == chat_id)
+        )
         if ascending:
             statement = statement.order_by(Message.sent_at, Message.id)
         else:
@@ -456,7 +485,27 @@ class MessageRepository:
     async def get_recent_messages(self, *, chat_id: int, limit: int = 20) -> list[Message]:
         result = await self.session.execute(
             select(Message)
+            .options(selectinload(Message.reply_to_message))
             .where(Message.chat_id == chat_id)
+            .order_by(desc(Message.sent_at), desc(Message.id))
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def get_recent_messages_before(
+        self,
+        *,
+        chat_id: int,
+        before_telegram_message_id: int,
+        limit: int = 20,
+    ) -> list[Message]:
+        result = await self.session.execute(
+            select(Message)
+            .options(selectinload(Message.reply_to_message))
+            .where(
+                Message.chat_id == chat_id,
+                Message.telegram_message_id < before_telegram_message_id,
+            )
             .order_by(desc(Message.sent_at), desc(Message.id))
             .limit(limit)
         )

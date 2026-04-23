@@ -1,8 +1,10 @@
 import type {
   AutopilotPayload,
   ChatFreshnessPayload,
+  ReplyContextPayload,
   ReplyPreviewPayload,
   ReplySuggestion,
+  WorkspaceStatusPayload,
   ScreenId,
 } from "@/lib/types";
 
@@ -287,5 +289,83 @@ export function normalizeChatFreshnessPayload(value: unknown): ChatFreshnessPayl
     syncTrigger: safeStringOrNull(value.syncTrigger),
     updatedNow: safeBoolean(value.updatedNow),
     syncError: safeStringOrNull(value.syncError),
+  };
+}
+
+export function normalizeReplyContextPayload(value: unknown): ReplyContextPayload | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+
+  const draftScopeBasis = isPlainObject(value.draftScopeBasis) ? value.draftScopeBasis : null;
+  return {
+    available: safeBoolean(value.available),
+    sourceBackend: safeString(value.sourceBackend, "unknown"),
+    focusLabel: safeStringOrNull(value.focusLabel),
+    focusReason: safeStringOrNull(value.focusReason),
+    replyOpportunityMode: safeStringOrNull(value.replyOpportunityMode),
+    replyOpportunityReason: safeStringOrNull(value.replyOpportunityReason),
+    sourceMessageKey: safeStringOrNull(value.sourceMessageKey),
+    sourceRuntimeMessageId: safeNumberOrNull(value.sourceRuntimeMessageId),
+    sourceLocalMessageId: safeNumberOrNull(value.sourceLocalMessageId),
+    sourceSenderName: safeStringOrNull(value.sourceSenderName),
+    sourceMessagePreview: safeStringOrNull(value.sourceMessagePreview),
+    sourceSentAt: safeStringOrNull(value.sourceSentAt),
+    draftScopeBasis: draftScopeBasis
+      ? {
+          sourceMessageKey: safeStringOrNull(draftScopeBasis.sourceMessageKey),
+          sourceMessageId: safeNumberOrNull(draftScopeBasis.sourceMessageId),
+          runtimeMessageId: safeNumberOrNull(draftScopeBasis.runtimeMessageId),
+          focusLabel: safeStringOrNull(draftScopeBasis.focusLabel),
+          sourceMessagePreview: safeStringOrNull(draftScopeBasis.sourceMessagePreview),
+          replyOpportunityMode: safeStringOrNull(draftScopeBasis.replyOpportunityMode),
+        }
+      : null,
+    draftScopeKey: safeStringOrNull(value.draftScopeKey),
+  };
+}
+
+export function normalizeWorkspaceStatusPayload(value: unknown): WorkspaceStatusPayload | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+
+  const availability = isPlainObject(value.availability) ? value.availability : {};
+  const messageSource = isPlainObject(value.messageSource) ? value.messageSource : {};
+
+  return {
+    source: safeString(value.source, "legacy"),
+    requestedBackend: safeStringOrNull(value.requestedBackend),
+    effectiveBackend: safeStringOrNull(value.effectiveBackend),
+    degraded: safeBoolean(value.degraded),
+    degradedReason: safeStringOrNull(value.degradedReason),
+    syncTrigger: safeStringOrNull(value.syncTrigger),
+    updatedNow: safeBoolean(value.updatedNow),
+    syncError: safeStringOrNull(value.syncError),
+    lastUpdatedAt: safeStringOrNull(value.lastUpdatedAt),
+    lastSuccessAt: safeStringOrNull(value.lastSuccessAt),
+    lastError: safeStringOrNull(value.lastError),
+    lastErrorAt: safeStringOrNull(value.lastErrorAt),
+    availability: {
+      workspaceAvailable: safeBoolean(availability.workspaceAvailable),
+      historyReadable: safeBoolean(availability.historyReadable),
+      runtimeReadable: safeBoolean(availability.runtimeReadable),
+      legacyWorkspaceAvailable: safeBoolean(availability.legacyWorkspaceAvailable),
+      replyContextAvailable: safeBoolean(availability.replyContextAvailable),
+      sendAvailable: safeBoolean(availability.sendAvailable),
+      autopilotAvailable: safeBoolean(availability.autopilotAvailable),
+      canLoadOlder: safeBoolean(availability.canLoadOlder),
+    },
+    messageSource: {
+      backend: safeString(messageSource.backend, "unknown"),
+      chatKey: safeStringOrNull(messageSource.chatKey),
+      runtimeChatId: safeNumberOrNull(messageSource.runtimeChatId),
+      localChatId: safeNumberOrNull(messageSource.localChatId),
+      oldestMessageKey: safeStringOrNull(messageSource.oldestMessageKey),
+      newestMessageKey: safeStringOrNull(messageSource.newestMessageKey),
+      oldestRuntimeMessageId: safeNumberOrNull(messageSource.oldestRuntimeMessageId),
+      newestRuntimeMessageId: safeNumberOrNull(messageSource.newestRuntimeMessageId),
+    },
+    route: isPlainObject(value.route) ? value.route : {},
   };
 }
