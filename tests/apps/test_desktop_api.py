@@ -78,7 +78,7 @@ def test_desktop_api_dashboard_chats_and_reply_preview(
             assert reply_payload["kind"] == "suggestion"
             assert reply_payload["suggestion"]["focusReason"]
             assert reply_payload["suggestion"]["replyText"]
-            assert reply_payload["suggestion"]["llmStatus"]["label"] == "Deterministic"
+            assert reply_payload["suggestion"]["llmStatus"]["label"] == "Детерминированный"
             assert reply_payload["suggestion"]["llmDebug"]["rawCandidate"] is None
             assert reply_payload["suggestion"]["variants"][0]["label"] == "Основной"
             assert reply_payload["actions"]["copy"] is True
@@ -205,7 +205,7 @@ def test_desktop_api_reply_payload_includes_rejected_llm_candidate_debug(
                             source="guardrails",
                             code="guardrails_rejected",
                             summary="LLM-кандидат для reply отклонён guardrails.",
-                            detail="Сработали guardrails: слишком_литературно. Сохранён deterministic baseline.",
+                            detail="Сработали guardrails: слишком_литературно. Сохранена детерминированная база.",
                             flags=("слишком_литературно",),
                         ),
                     ),
@@ -225,6 +225,109 @@ def test_desktop_api_reply_payload_includes_rejected_llm_candidate_debug(
             assert payload["suggestion"]["llmDebug"]["decisionReason"]["source"] == "guardrails"
             assert payload["suggestion"]["llmDebug"]["decisionReason"]["flags"] == ["слишком_литературно"]
             assert payload["suggestion"]["replyOpportunityReason"].startswith("Несмотря на последнее исходящее")
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_desktop_api_send_path_writes_message_and_refreshes_workspace(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, seeded = await _seed_runtime(monkeypatch, tmp_path)
+
+        class FakeFullAccessAuthService:
+            async def build_status_report(self) -> FullAccessStatusReport:
+                return FullAccessStatusReport(
+                    enabled=True,
+                    api_credentials_configured=True,
+                    phone_configured=True,
+                    session_path=tmp_path / "fullaccess.session",
+                    session_exists=True,
+                    authorized=True,
+                    telethon_available=True,
+                    requested_readonly=False,
+                    effective_readonly=False,
+                    sync_limit=50,
+                    pending_login=False,
+                    synced_chat_count=1,
+                    synced_message_count=10,
+                    ready_for_manual_sync=True,
+                    ready_for_manual_send=True,
+                    reason="Full-access готов к отправке.",
+                )
+
+        class FakeFullAccessSendService:
+            def __init__(self, session) -> None:
+                self.message_repository = MessageRepository(session)
+
+            async def send_chat_message(
+                self,
+                chat,
+                *,
+                text: str,
+                reply_to_source_message_id: int | None = None,
+                trigger: str = "manual",
+            ):
+                created = await self.message_repository.create_message(
+                    chat_id=chat.id,
+                    telegram_message_id=777,
+                    sender_id=7,
+                    sender_name="Михаил",
+                    direction="outbound",
+                    source_adapter="fullaccess",
+                    source_type="message",
+                    sent_at=datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc),
+                    raw_text=text,
+                    normalized_text=text,
+                    reply_to_message_id=reply_to_source_message_id,
+                )
+                return type(
+                    "FakeSendResult",
+                    (),
+                    {
+                        "local_chat_id": chat.id,
+                        "telegram_chat_id": chat.telegram_chat_id,
+                        "sent_message_id": created.id,
+                    },
+                )()
+
+        monkeypatch.setattr(
+            DesktopBridge,
+            "_build_fullaccess_auth_service",
+            lambda self, session: FakeFullAccessAuthService(),
+        )
+        monkeypatch.setattr(
+            DesktopBridge,
+            "_build_fullaccess_send_service",
+            lambda self, session: FakeFullAccessSendService(session),
+        )
+
+        app = create_app(settings, runtime=runtime)
+
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/chats/{seeded['chat_id']}/send",
+                json={
+                    "text": "Да, вижу. Сейчас гляну и вернусь.",
+                    "source_message_id": seeded["last_message_id"],
+                },
+            )
+
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["ok"] is True
+            assert payload["sentMessage"]["text"] == "Да, вижу. Сейчас гляну и вернусь."
+            assert payload["workspace"]["messages"][-1]["direction"] == "outbound"
+            assert payload["workspace"]["messages"][-1]["text"] == "Да, вижу. Сейчас гляну и вернусь."
+            assert payload["workspace"]["reply"]["actions"]["send"] is True
+
+        async with runtime.session_factory() as session:
+            journal = await SettingRepository(session).get_value(f"workflow.journal.chat.{seeded['chat_id']}")
+            assert isinstance(journal, list)
+            assert journal[0]["action"] == "manual_send"
 
         await runtime.dispose()
 
@@ -279,6 +382,7 @@ def test_desktop_api_fullaccess_auth_flow_endpoints(
                     synced_chat_count=3,
                     synced_message_count=48,
                     ready_for_manual_sync=False,
+                    ready_for_manual_send=False,
                     reason="Код уже запрошен. Заверши вход в Astra Desktop на экране Full-access.",
                 )
 
@@ -401,6 +505,7 @@ def test_desktop_api_workspace_auto_refreshes_fullaccess_chat(
                     synced_chat_count=1,
                     synced_message_count=10,
                     ready_for_manual_sync=True,
+                    ready_for_manual_send=False,
                     reason="Full-access готов.",
                 )
 
@@ -532,6 +637,7 @@ def test_desktop_api_workspace_keeps_shell_alive_when_auto_refresh_fails(
                     synced_chat_count=1,
                     synced_message_count=10,
                     ready_for_manual_sync=True,
+                    ready_for_manual_send=False,
                     reason="Full-access готов.",
                 )
 
@@ -717,4 +823,8 @@ async def _seed_runtime(monkeypatch, tmp_path: Path):
 
         await session.commit()
 
-    return settings, runtime, {"chat_id": team_chat.id, "digest_id": digest.id}
+    return settings, runtime, {
+        "chat_id": team_chat.id,
+        "digest_id": digest.id,
+        "last_message_id": inbound_two.id,
+    }

@@ -56,6 +56,7 @@ class ReplyExampleSearchCandidate:
     outbound_text: str
     inbound_normalized: str
     outbound_normalized: str
+    context_before_json: dict[str, Any] | list[Any] | None
     example_type: str
     source_person_key: str | None
     quality_score: float
@@ -199,6 +200,10 @@ class MessageRepository:
     class UpsertResult:
         message: Message
         created: bool
+
+    async def get_by_id(self, message_id: int) -> Message | None:
+        result = await self.session.execute(select(Message).where(Message.id == message_id))
+        return result.scalar_one_or_none()
 
     async def create_message(
         self,
@@ -735,6 +740,7 @@ class ReplyExampleRepository:
                     reply_examples.outbound_text,
                     reply_examples.inbound_normalized,
                     reply_examples.outbound_normalized,
+                    reply_examples.context_before_json,
                     reply_examples.example_type,
                     reply_examples.source_person_key,
                     reply_examples.quality_score,
@@ -767,6 +773,7 @@ class ReplyExampleRepository:
                 outbound_text=str(row["outbound_text"] or ""),
                 inbound_normalized=str(row["inbound_normalized"] or ""),
                 outbound_normalized=str(row["outbound_normalized"] or ""),
+                context_before_json=row["context_before_json"],
                 example_type=str(row["example_type"] or "soft_reply"),
                 source_person_key=str(row["source_person_key"]) if row["source_person_key"] else None,
                 quality_score=float(row["quality_score"] or 0.0),

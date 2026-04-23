@@ -135,7 +135,7 @@ class StyleProfileService:
         chat = await self.chat_repository.find_chat_by_handle_or_telegram_id(reference)
         if chat is None:
             raise ValueError(
-                "Чат не зарегистрирован в allowlist. "
+                "Чат не зарегистрирован в списке разрешённых. "
                 "Сначала добавь его как источник через /source_add <chat_id|@username>."
             )
         return chat

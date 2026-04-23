@@ -239,18 +239,95 @@ export interface ReplyPreviewPayload {
     copy: boolean;
     refresh: boolean;
     pasteToTelegram: boolean;
+    send: boolean;
     markSent: boolean;
     variants: Record<string, boolean>;
     disabledReason: string | null;
   };
 }
 
+export interface AutopilotPayload {
+  masterEnabled: boolean;
+  allowChannels: boolean;
+  mode: "off" | "draft" | "confirm" | "autopilot" | string;
+  trusted: boolean;
+  writeReady: boolean;
+  decision: {
+    mode: string;
+    action: string;
+    allowed: boolean;
+    reason: string;
+    confidence: number | null;
+    trigger: string | null;
+    sourceMessageId: number | null;
+    replyText: string | null;
+    pendingDraftStatus: string | null;
+  };
+  pendingDraft: {
+    text?: string;
+    mode?: string;
+    status?: string;
+    created_at?: string;
+    source_message_id?: number;
+    confidence?: number;
+    trigger?: string;
+    focus_label?: string;
+    source_message_preview?: string;
+    reply_opportunity_reason?: string;
+  } | null;
+  lastSentAt: string | null;
+  lastSentSourceMessageId: number | null;
+  cooldown: {
+    active: boolean;
+    remainingSeconds: number;
+    until: string | null;
+  };
+  journal: Array<{
+    timestamp?: string;
+    action?: string;
+    mode?: string;
+    status?: string;
+    actor?: string;
+    automatic?: boolean;
+    message?: string;
+    reason?: string | null;
+    confidence?: number | null;
+    trigger?: string | null;
+    chat_id?: number | null;
+    source_message_id?: number | null;
+    sent_message_id?: number | null;
+    text_preview?: string | null;
+  }>;
+}
+
 export interface ChatWorkspacePayload {
   chat: ChatItem;
   messages: MessageItem[];
   reply: ReplyPreviewPayload;
+  autopilot: AutopilotPayload | null;
   freshness: ChatFreshnessPayload;
   refreshedAt: string | null;
+}
+
+export interface ChatSendPayload {
+  ok: boolean;
+  sentMessage: MessageItem | null;
+  workspace: ChatWorkspacePayload;
+}
+
+export interface AutopilotGlobalPayload {
+  settings: {
+    master_enabled: boolean;
+    allow_channels: boolean;
+    cooldown_seconds?: number;
+    min_prepare_confidence?: number;
+    min_send_confidence?: number;
+  };
+}
+
+export interface ChatAutopilotPayload {
+  chat: ChatItem;
+  autopilot: AutopilotPayload;
 }
 
 export interface SourcesPayload {
@@ -279,6 +356,7 @@ export interface FullAccessStatus {
   syncedChatCount: number;
   syncedMessageCount: number;
   readyForManualSync: boolean;
+  readyForManualSend: boolean;
   reason: string | null;
 }
 

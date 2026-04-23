@@ -127,11 +127,11 @@ def test_fullaccess_status_command_reports_disabled_mode(monkeypatch, tmp_path: 
 
         assert len(message.answers) == 1
         assert "🧪 Full-access" in message.answers[0]
-        assert "Экспериментальный read-only слой" in message.answers[0]
+        assert "Локальный слой для чтения истории" in message.answers[0]
         assert "Статус: не авторизован." in message.answers[0]
         assert "[OFF] api_id/api_hash: не настроены" in message.answers[0]
         assert "[OFF] Авторизация: нет" in message.answers[0]
-        assert "[OK] Read-only: активен" in message.answers[0]
+        assert "[OFF] Режим записи: выключен" in message.answers[0]
         assert "FULLACCESS_ENABLED=false" in message.answers[0]
 
         await runtime.dispose()
@@ -167,7 +167,7 @@ def test_fullaccess_login_command_rejects_code_in_bot(monkeypatch, tmp_path: Pat
     asyncio.run(run_assertions())
 
 
-def test_fullaccess_status_forces_readonly_barrier(monkeypatch, tmp_path: Path) -> None:
+def test_fullaccess_status_exposes_write_mode_when_readonly_is_disabled(monkeypatch, tmp_path: Path) -> None:
     async def run_assertions() -> None:
         database_path = tmp_path / "fullaccess-readonly" / "astra.db"
         monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
@@ -191,8 +191,9 @@ def test_fullaccess_status_forces_readonly_barrier(monkeypatch, tmp_path: Path) 
             report = await service.build_status_report()
 
         assert report.requested_readonly is False
-        assert report.effective_readonly is True
-        assert "принудительно" in report.reason.lower()
+        assert report.effective_readonly is False
+        assert report.ready_for_manual_send is False
+        assert "принудительно" not in report.reason.lower()
 
         await runtime.dispose()
 

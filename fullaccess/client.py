@@ -16,7 +16,12 @@ from fullaccess.cache import (
     media_preview_base_path,
 )
 from fullaccess.copy import LOCAL_LOGIN_COMMAND
-from fullaccess.models import FullAccessChatSummary, FullAccessConfig, FullAccessRemoteMessage
+from fullaccess.models import (
+    FullAccessChatSummary,
+    FullAccessConfig,
+    FullAccessRemoteMessage,
+    FullAccessSendResult,
+)
 from services.message_normalizer import normalize_text
 
 
@@ -62,6 +67,14 @@ class FullAccessClientProtocol(Protocol):
         min_message_id: int | None = None,
     ) -> tuple[FullAccessChatSummary, list[FullAccessRemoteMessage]]: ...
 
+    async def send_message(
+        self,
+        reference: str,
+        *,
+        text: str,
+        reply_to_message_id: int | None = None,
+    ) -> FullAccessSendResult: ...
+
 
 FullAccessClientFactory = Callable[[FullAccessConfig], FullAccessClientProtocol]
 
@@ -103,6 +116,13 @@ class _TelethonClientProtocol(Protocol):
     ) -> AsyncIterator[object]: ...
 
     async def get_entity(self, target: int | str) -> object: ...
+    async def send_message(
+        self,
+        entity: object,
+        message: str,
+        *,
+        reply_to: int | None = None,
+    ) -> object: ...
     async def download_profile_photo(self, entity: object, file: str | None = None) -> object: ...
     async def download_media(self, message: object, file: str | None = None) -> object: ...
 
@@ -302,6 +322,37 @@ class RuntimeBackedFullAccessClient:
 
         return await self.runtime.run(_fetch)
 
+    async def send_message(
+        self,
+        reference: str,
+        *,
+        text: str,
+        reply_to_message_id: int | None = None,
+    ) -> FullAccessSendResult:
+        async def _send(client: _TelethonClientProtocol) -> FullAccessSendResult:
+            entity = await _resolve_entity(client, reference)
+            chat = _build_chat_summary(entity)
+            await _cache_profile_photo(
+                client,
+                entity=entity,
+                config=self.config,
+                telegram_chat_id=chat.telegram_chat_id,
+            )
+            try:
+                message = await client.send_message(
+                    entity,
+                    text,
+                    reply_to=reply_to_message_id,
+                )
+            except Exception as error:  # pragma: no cover - depends on Telethon runtime
+                raise ValueError(f"Не удалось отправить сообщение через full-access: {error}") from error
+            return FullAccessSendResult(
+                chat=chat,
+                message=_build_remote_message(message),
+            )
+
+        return await self.runtime.run(_send)
+
 
 @dataclass(slots=True)
 class TelethonFullAccessClient:
@@ -418,6 +469,35 @@ class TelethonFullAccessClient:
                 messages.append(remote_message)
             messages.reverse()
             return chat, messages
+
+    async def send_message(
+        self,
+        reference: str,
+        *,
+        text: str,
+        reply_to_message_id: int | None = None,
+    ) -> FullAccessSendResult:
+        async with self._open_client() as client:
+            entity = await _resolve_entity(client, reference)
+            chat = _build_chat_summary(entity)
+            await _cache_profile_photo(
+                client,
+                entity=entity,
+                config=self.config,
+                telegram_chat_id=chat.telegram_chat_id,
+            )
+            try:
+                message = await client.send_message(
+                    entity,
+                    text,
+                    reply_to=reply_to_message_id,
+                )
+            except Exception as error:  # pragma: no cover - depends on Telethon runtime
+                raise ValueError(f"Не удалось отправить сообщение через full-access: {error}") from error
+            return FullAccessSendResult(
+                chat=chat,
+                message=_build_remote_message(message),
+            )
 
     @asynccontextmanager
     async def _open_client(self) -> AsyncIterator[_TelethonClientProtocol]:

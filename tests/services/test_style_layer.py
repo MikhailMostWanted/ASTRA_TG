@@ -274,7 +274,7 @@ def test_style_management_commands_show_profiles_and_chat_status(
             SimpleNamespace(args="@missing_chat"),
             runtime.session_factory,
         )
-        assert any("не зарегистрирован в allowlist" in answer.lower() for answer in missing_message.answers)
+        assert any("не зарегистрирован в списке разрешённых" in answer.lower() for answer in missing_message.answers)
 
         await runtime.dispose()
 

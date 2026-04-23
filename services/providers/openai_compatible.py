@@ -14,6 +14,7 @@ from services.providers.models import (
     ProviderPrompt,
     ProviderTask,
     ReplyRefinementCandidate,
+    ReplyVariantCandidate,
     RewriteReplyRequest,
 )
 
@@ -44,13 +45,19 @@ class OpenAICompatibleProvider(BaseProvider):
             prompt=request.prompt,
             model_name=self.model_fast,
         )
-        messages = _extract_reply_messages(raw_text)
+        variants = _extract_reply_variants(raw_text)
+        if variants:
+            primary_text = next((variant.text for variant in variants if variant.id == "primary"), None)
+            messages = _extract_reply_messages(primary_text or "")
+        else:
+            messages = _extract_reply_messages(raw_text)
         if not messages:
             raise ProviderResponseError("Provider вернул пустой reply refine ответ.")
         return ReplyRefinementCandidate(
             messages=messages,
             raw_text=raw_text,
             model_name=self.model_fast,
+            variants=variants,
         )
 
     async def improve_digest(
@@ -89,7 +96,7 @@ class OpenAICompatibleProvider(BaseProvider):
                 {"role": "system", "content": prompt.system_instructions},
                 {"role": "user", "content": prompt.user_input},
             ],
-            "temperature": 0.0,
+            "temperature": 0.35 if prompt.task == ProviderTask.REWRITE_REPLY else 0.0,
             "stream": False,
             "think": False,
             "reasoning_effort": "none",
@@ -183,7 +190,7 @@ def _extract_completion_text(payload: dict[str, object]) -> str:
 
 def _max_tokens_for_task(task: ProviderTask) -> int:
     if task == ProviderTask.REWRITE_REPLY:
-        return 96
+        return 280
     if task == ProviderTask.IMPROVE_DIGEST:
         return 384
     return 256
@@ -201,6 +208,21 @@ def _extract_reply_messages(raw_text: str) -> tuple[str, ...]:
     return (normalized,) if normalized else ()
 
 
+def _extract_reply_variants(raw_text: str) -> tuple[ReplyVariantCandidate, ...]:
+    try:
+        payload = _extract_json_payload(raw_text)
+    except ProviderResponseError:
+        return ()
+
+    variants: list[ReplyVariantCandidate] = []
+    for variant_id in ("primary", "short", "soft", "style"):
+        text = _extract_variant_text(payload.get(variant_id))
+        if not text:
+            continue
+        variants.append(ReplyVariantCandidate(id=variant_id, text=text))
+    return tuple(variants)
+
+
 def _extract_json_payload(raw_text: str) -> dict[str, object]:
     cleaned = raw_text.strip()
     if cleaned.startswith("```"):
@@ -213,6 +235,21 @@ def _extract_json_payload(raw_text: str) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ProviderResponseError("Digest improve JSON должен быть объектом.")
     return payload
+
+
+def _extract_variant_text(value: object) -> str | None:
+    if isinstance(value, list):
+        parts = [
+            _normalize_text(str(item)).lstrip("-•1234567890. ").strip()
+            for item in value
+            if _normalize_text(str(item))
+        ]
+        if parts:
+            return "\n".join(parts)
+    if isinstance(value, str):
+        cleaned = _normalize_text(value)
+        return cleaned or None
+    return None
 
 
 def _normalize_lines(value: object) -> tuple[str, ...]:

@@ -159,7 +159,7 @@ def test_reply_refinement_guardrails_still_reject_obvious_off_topic_candidate() 
 
     assert decision.used_fallback is True
     assert decision.messages == baseline
-    assert "сильное_отклонение_от_baseline" in decision.flags
+    assert "явный_оффтопик" in decision.flags
 
 
 def _build_profile() -> StyleProfileSnapshot:

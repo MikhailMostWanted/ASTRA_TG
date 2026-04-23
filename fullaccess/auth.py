@@ -52,11 +52,6 @@ class FullAccessAuthService:
         authorized = False
         reason_parts: list[str] = []
 
-        if not config.requested_readonly:
-            reason_parts.append(
-                "FULLACCESS_READONLY=false игнорируется: слой принудительно остаётся read-only."
-            )
-
         if not config.enabled:
             reason_parts.append("FULLACCESS_ENABLED=false, experimental слой выключен.")
         elif not config.api_credentials_configured:
@@ -76,7 +71,14 @@ class FullAccessAuthService:
                 reason_parts.append(f"Не удалось проверить авторизацию: {error}")
             else:
                 if authorized:
-                    reason_parts.append("Experimental full-access готов к ручному чтению и синхронизации.")
+                    if config.effective_readonly:
+                        reason_parts.append(
+                            "Experimental full-access готов к ручному чтению и синхронизации."
+                        )
+                    else:
+                        reason_parts.append(
+                            "Experimental full-access готов к чтению, синхронизации и ручной отправке."
+                        )
                 elif pending_state is not None:
                     reason_parts.append(
                         "Код уже запрошен. Заверши вход в Astra Desktop на экране Full-access."
@@ -92,7 +94,7 @@ class FullAccessAuthService:
                 else:
                     reason_parts.append(
                         "Код можно запросить и завершить прямо в Astra Desktop. "
-                        f"CLI остаётся резервным fallback: {LOCAL_LOGIN_COMMAND}."
+                        f"CLI остаётся резервным путём: {LOCAL_LOGIN_COMMAND}."
                     )
 
         return FullAccessStatusReport(
@@ -113,8 +115,14 @@ class FullAccessAuthService:
                 config.enabled
                 and config.api_credentials_configured
                 and transport_available
-                and config.effective_readonly
                 and authorized
+            ),
+            ready_for_manual_send=(
+                config.enabled
+                and config.api_credentials_configured
+                and transport_available
+                and authorized
+                and not config.effective_readonly
             ),
             reason=" ".join(reason_parts).strip(),
         )
@@ -159,7 +167,7 @@ class FullAccessAuthService:
         if pending_state is None:
             raise ValueError(
                 "Нет активного запроса кода. Сначала нажми «Запросить код» в Astra Desktop "
-                f"или используй fallback {LOCAL_LOGIN_COMMAND}."
+                f"или используй резервный путь {LOCAL_LOGIN_COMMAND}."
             )
 
         client = self.client_factory(config)

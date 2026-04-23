@@ -46,10 +46,17 @@ class AnalyzeContextRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplyVariantCandidate:
+    id: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class ReplyRefinementCandidate:
     messages: tuple[str, ...]
     raw_text: str
     model_name: str | None = None
+    variants: tuple[ReplyVariantCandidate, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

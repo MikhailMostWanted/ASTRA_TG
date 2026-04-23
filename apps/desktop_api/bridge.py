@@ -19,7 +19,9 @@ from apps.cli.runtime import (
 from config.settings import Settings
 from fullaccess.auth import FullAccessAuthService
 from fullaccess.copy import LOCAL_LOGIN_COMMAND, local_login_instruction_lines
+from fullaccess.send import FullAccessSendService
 from fullaccess.sync import FullAccessSyncService
+from services.autopilot import AutopilotService
 from services.chat_memory_builder import ChatMemoryBuilder
 from services.command_parser import ParsedDigestTargetCommand, ParsedSourceAddCommand
 from services.digest_builder import DigestBuilder
@@ -52,6 +54,7 @@ from services.style_selector import StyleSelectorService
 from services.system_health import SystemHealthService
 from services.system_readiness import OperationalFacts, OperationalReport, SystemReadinessService
 from services.telegram_lookup import TelegramChatResolver
+from services.workflow_journal import WorkflowJournalService
 from storage.database import DatabaseRuntime
 from storage.repositories import (
     ChatMemoryRepository,
@@ -263,7 +266,6 @@ class DesktopBridge:
     async def get_chat_workspace(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
         async with self.runtime.session_factory() as session:
             chat_repository = ChatRepository(session)
-            message_repository = MessageRepository(session)
             chat = await chat_repository.get_by_id(chat_id)
             if chat is None:
                 raise LookupError("Чат не найден.")
@@ -273,40 +275,12 @@ class DesktopBridge:
                 chat = await chat_repository.get_by_id(chat_id)
                 if chat is None:
                     raise LookupError("Чат не найден.")
-
-            recent_desc = await message_repository.get_recent_messages(chat_id=chat.id, limit=max(1, limit))
-            messages = list(reversed(recent_desc))
-            last_message = recent_desc[0] if recent_desc else None
-            message_count = await message_repository.count_messages_for_chat(chat_id=chat.id)
-            reply_payload = serialize_reply_result(
-                await self._build_reply_service(session).build_reply(build_chat_reference(chat))
-            )
-            freshness = await self._build_chat_freshness(
+            return await self._build_workspace_payload(
                 session,
                 chat=chat,
-                last_message=last_message,
+                limit=limit,
                 tail_refresh=tail_refresh,
             )
-
-            return {
-                "chat": serialize_chat(
-                    chat,
-                    message_count=message_count,
-                    last_message=last_message,
-                    session_file=self.settings.fullaccess_session_file,
-                ),
-                "messages": [
-                    serialize_message(
-                        message,
-                        session_file=self.settings.fullaccess_session_file,
-                        telegram_chat_id=chat.telegram_chat_id,
-                    )
-                    for message in messages
-                ],
-                "reply": self._decorate_reply_payload(reply_payload),
-                "freshness": freshness,
-                "refreshedAt": serialize_datetime(datetime.now(timezone.utc)),
-            }
 
     async def get_chat_messages(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
         async with self.runtime.session_factory() as session:
@@ -353,7 +327,115 @@ class DesktopBridge:
                 build_chat_reference(chat),
                 use_provider_refinement=use_provider_refinement,
             )
-            return self._decorate_reply_payload(serialize_reply_result(result))
+            fullaccess_status = await self._build_fullaccess_auth_service(session).build_status_report()
+            return self._decorate_reply_payload(
+                serialize_reply_result(result),
+                write_ready=fullaccess_status.ready_for_manual_send,
+            )
+
+    async def send_chat_message(
+        self,
+        chat_id: int,
+        *,
+        text: str,
+        source_message_id: int | None = None,
+        reply_to_source_message_id: int | None = None,
+    ) -> dict[str, Any]:
+        async with self.runtime.session_factory() as session:
+            chat_repository = ChatRepository(session)
+            message_repository = MessageRepository(session)
+            chat = await chat_repository.get_by_id(chat_id)
+            if chat is None:
+                raise LookupError("Чат не найден.")
+
+            send_result = await self._build_fullaccess_send_service(session).send_chat_message(
+                chat,
+                text=text,
+                reply_to_source_message_id=reply_to_source_message_id or source_message_id,
+                trigger="desktop_manual",
+            )
+            await self._build_autopilot_service(session).record_manual_send(
+                chat_id=chat.id,
+                source_message_id=source_message_id,
+                sent_message_id=send_result.sent_message_id,
+                text=text,
+                actor="desktop",
+            )
+            await session.commit()
+
+            updated_chat = await chat_repository.get_by_id(chat_id)
+            if updated_chat is None:
+                raise LookupError("Чат не найден.")
+            sent_message = await message_repository.get_by_id(send_result.sent_message_id)
+            workspace = await self._build_workspace_payload(
+                session,
+                chat=updated_chat,
+                limit=80,
+                tail_refresh=ChatTailRefreshStatus(attempted=False, updated=False, trigger="manual_send"),
+            )
+            return {
+                "ok": True,
+                "sentMessage": (
+                    serialize_message(
+                        sent_message,
+                        session_file=self.settings.fullaccess_session_file,
+                        telegram_chat_id=updated_chat.telegram_chat_id,
+                    )
+                    if sent_message is not None
+                    else None
+                ),
+                "workspace": workspace,
+            }
+
+    async def update_autopilot_global(
+        self,
+        *,
+        master_enabled: bool | None = None,
+        allow_channels: bool | None = None,
+    ) -> dict[str, Any]:
+        async with self.runtime.session_factory() as session:
+            payload = await self._build_autopilot_service(session).update_global_settings(
+                master_enabled=master_enabled,
+                allow_channels=allow_channels,
+            )
+            await session.commit()
+            return {"settings": payload}
+
+    async def update_chat_autopilot(
+        self,
+        chat_id: int,
+        *,
+        trusted: bool | None = None,
+        mode: str | None = None,
+    ) -> dict[str, Any]:
+        async with self.runtime.session_factory() as session:
+            chat_repository = ChatRepository(session)
+            message_repository = MessageRepository(session)
+            chat = await chat_repository.get_by_id(chat_id)
+            if chat is None:
+                raise LookupError("Чат не найден.")
+            updated_chat = await self._build_autopilot_service(session).update_chat_settings(
+                chat,
+                trusted=trusted,
+                mode=mode,
+            )
+            await session.commit()
+            fullaccess_status = await self._build_fullaccess_auth_service(session).build_status_report()
+            reply_result = await self._build_reply_service(session).build_reply(build_chat_reference(updated_chat))
+            overview = await self._build_autopilot_service(session).build_chat_overview(
+                chat=updated_chat,
+                reply_result=reply_result,
+                write_ready=fullaccess_status.ready_for_manual_send,
+            )
+            return {
+                "chat": serialize_chat(
+                    updated_chat,
+                    message_count=await message_repository.count_messages_for_chat(chat_id=updated_chat.id),
+                    last_message=await _load_last_message(message_repository, updated_chat.id),
+                    session_file=self.settings.fullaccess_session_file,
+                ),
+                "autopilot": overview,
+            }
 
     async def list_sources(self) -> dict[str, Any]:
         chats = await self.list_chats(sort_key="title")
@@ -444,7 +526,8 @@ class DesktopBridge:
                 "instructions": list(local_login_instruction_lines()),
                 "localLoginCommand": LOCAL_LOGIN_COMMAND,
                 "onboarding": (
-                    "Full-access работает только локально и только в read-only режиме. "
+                    "Full-access работает только локально: чтение включено всегда после входа, "
+                    "ручная отправка доступна только при FULLACCESS_READONLY=false. "
                     "Код входа нельзя отправлять в Telegram-бота."
                 ),
             }
@@ -892,6 +975,23 @@ class DesktopBridge:
             setting_repository=SettingRepository(session),
         )
 
+    def _build_fullaccess_send_service(self, session) -> FullAccessSendService:
+        return FullAccessSendService(
+            settings=self.settings,
+            chat_repository=ChatRepository(session),
+            message_repository=MessageRepository(session),
+            setting_repository=SettingRepository(session),
+        )
+
+    def _build_autopilot_service(self, session) -> AutopilotService:
+        setting_repository = SettingRepository(session)
+        return AutopilotService(
+            chat_repository=ChatRepository(session),
+            setting_repository=setting_repository,
+            send_service=self._build_fullaccess_send_service(session),
+            journal=WorkflowJournalService(setting_repository),
+        )
+
     def _build_memory_service(self, session) -> MemoryService:
         return MemoryService(
             chat_repository=ChatRepository(session),
@@ -970,22 +1070,79 @@ class DesktopBridge:
             formatter=ReminderFormatter(),
         )
 
-    def _decorate_reply_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _build_workspace_payload(
+        self,
+        session,
+        *,
+        chat,
+        limit: int,
+        tail_refresh: ChatTailRefreshStatus | None = None,
+    ) -> dict[str, Any]:
+        message_repository = MessageRepository(session)
+        fullaccess_status = await self._build_fullaccess_auth_service(session).build_status_report()
+        recent_desc = await message_repository.get_recent_messages(chat_id=chat.id, limit=max(1, limit))
+        messages = list(reversed(recent_desc))
+        last_message = recent_desc[0] if recent_desc else None
+        message_count = await message_repository.count_messages_for_chat(chat_id=chat.id)
+        reply_result = await self._build_reply_service(session).build_reply(
+            build_chat_reference(chat),
+            workspace_messages=tuple(messages),
+        )
+        freshness = await self._build_chat_freshness(
+            session,
+            chat=chat,
+            last_message=last_message,
+            tail_refresh=tail_refresh,
+        )
+        autopilot = await self._build_autopilot_service(session).build_chat_overview(
+            chat=chat,
+            reply_result=reply_result,
+            write_ready=fullaccess_status.ready_for_manual_send,
+        )
+        return {
+            "chat": serialize_chat(
+                chat,
+                message_count=message_count,
+                last_message=last_message,
+                session_file=self.settings.fullaccess_session_file,
+            ),
+            "messages": [
+                serialize_message(
+                    message,
+                    session_file=self.settings.fullaccess_session_file,
+                    telegram_chat_id=chat.telegram_chat_id,
+                )
+                for message in messages
+            ],
+            "reply": self._decorate_reply_payload(
+                serialize_reply_result(reply_result),
+                write_ready=fullaccess_status.ready_for_manual_send,
+            ),
+            "autopilot": autopilot,
+            "freshness": freshness,
+            "refreshedAt": serialize_datetime(datetime.now(timezone.utc)),
+        }
+
+    def _decorate_reply_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        write_ready: bool,
+    ) -> dict[str, Any]:
         payload["actions"] = {
             "copy": True,
             "refresh": True,
             "pasteToTelegram": False,
-            "markSent": False,
+            "send": write_ready,
+            "markSent": True,
             "variants": {
-                "short": False,
+                "short": True,
                 "normal": True,
-                "softer": False,
+                "softer": True,
                 "harder": False,
-                "myStyle": False,
+                "myStyle": True,
             },
-            "disabledReason": (
-                "Параметрические варианты ответа и отметка «отправлено» вынесены в следующий этап."
-            ),
+            "disabledReason": None if write_ready else "Write-path через full-access сейчас недоступен.",
         }
         return payload
 

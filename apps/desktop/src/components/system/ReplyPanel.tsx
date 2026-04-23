@@ -7,10 +7,12 @@ import {
   Copy,
   DatabaseZap,
   LoaderCircle,
+  Power,
   RefreshCcw,
   Send,
   ShieldAlert,
   Sparkles,
+  StopCircle,
   WandSparkles,
 } from "lucide-react";
 
@@ -21,8 +23,8 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatConfidence, formatDateTime, stringifyUnknown } from "@/lib/format";
-import { normalizeReplyPreviewPayload } from "@/lib/runtime-guards";
-import type { ChatFreshnessPayload, ReplyPreviewPayload } from "@/lib/types";
+import { normalizeAutopilotPayload, normalizeReplyPreviewPayload } from "@/lib/runtime-guards";
+import type { AutopilotPayload, ChatFreshnessPayload, ReplyPreviewPayload } from "@/lib/types";
 import { buildReplyDraftScopeKey, type ChatWorkspaceState } from "@/stores/app-store";
 import { cn } from "@/lib/utils";
 
@@ -31,32 +33,45 @@ import { WarningState } from "./WarningState";
 
 interface ReplyPanelProps {
   reply: ReplyPreviewPayload | null;
+  autopilot?: AutopilotPayload | null;
   freshness?: ChatFreshnessPayload | null;
   workflowState: ChatWorkspaceState | null;
   loading?: boolean;
   refreshing?: boolean;
+  sending?: boolean;
+  autopilotUpdating?: boolean;
   errorMessage?: string | null;
   onRefresh: () => void;
   onCopy: (text: string) => void;
   onUseDraft: (text: string, sourceMessageId: number | null) => void;
+  onSend?: (text: string, sourceMessageId: number | null) => void;
   onMarkSent: (sourceMessageId: number | null) => void;
   onClearDraft: () => void;
+  onUpdateAutopilotGlobal?: (enabled: boolean) => void;
+  onUpdateChatAutopilot?: (payload: { trusted?: boolean; mode?: string }) => void;
 }
 
 export function ReplyPanel({
   reply,
+  autopilot = null,
   freshness = null,
   workflowState,
   loading = false,
   refreshing = false,
+  sending = false,
+  autopilotUpdating = false,
   errorMessage = null,
   onRefresh,
   onCopy,
   onUseDraft,
+  onSend = () => undefined,
   onMarkSent,
   onClearDraft,
+  onUpdateAutopilotGlobal = () => undefined,
+  onUpdateChatAutopilot = () => undefined,
 }: ReplyPanelProps) {
   const safeReply = normalizeReplyPreviewPayload(reply);
+  const safeAutopilot = normalizeAutopilotPayload(autopilot);
   const suggestion = safeReply?.suggestion;
   const replyOptions = useMemo(() => {
     if (!suggestion) {
@@ -88,6 +103,7 @@ export function ReplyPanel({
 
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [showDebug, setShowDebug] = useState(false);
+  const [draftText, setDraftText] = useState("");
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -98,14 +114,41 @@ export function ReplyPanel({
   const selectedVariant = replyOptions[selectedIndex] || null;
   const llmDebug = suggestion?.llmDebug ?? null;
   const llmDecisionReason = llmDebug?.decisionReason ?? null;
-  const sendDisabledReason =
-    "Прямая отправка через Desktop пока отключена: current full-access слой остаётся read-only. Черновик и локальная отметка работают честно.";
+  const llmStatusLabel = suggestion?.llmStatus?.label || "Детерминированный";
+  const currentDraftScopeKey = suggestion
+    ? buildReplyDraftScopeKey({
+        sourceMessageId: suggestion.sourceMessageId,
+        focusLabel: suggestion.focusLabel,
+        sourceMessagePreview: safeReply?.sourceMessagePreview || suggestion.sourceMessagePreview,
+        replyOpportunityMode: suggestion.replyOpportunityMode,
+      })
+    : null;
+  const draftScopeMatches = Boolean(
+    workflowState?.draftText
+      && workflowState.draftScopeKey
+      && currentDraftScopeKey
+      && workflowState.draftScopeKey === currentDraftScopeKey,
+  );
+  const legacyDraftMatches = Boolean(
+    workflowState?.draftText
+      && !workflowState.draftScopeKey
+      && workflowState.draftSourceMessageId !== null
+      && workflowState.draftSourceMessageId === suggestion?.sourceMessageId,
+  );
+  const hasActiveDraft = Boolean(workflowState?.draftText && (draftScopeMatches || legacyDraftMatches));
+  const hasStaleDraft = Boolean(workflowState?.draftText && !hasActiveDraft);
+  useEffect(() => {
+    const activeDraft = hasActiveDraft ? workflowState?.draftText || "" : "";
+    setDraftText(activeDraft || selectedReply || "");
+  }, [hasActiveDraft, selectedReply, workflowState?.draftScopeKey, workflowState?.draftText]);
+
+  const sendDisabledReason = safeReply?.actions.disabledReason || "Отправка сейчас недоступна.";
 
   if (loading && !reply) {
     return (
       <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/7 bg-white/[0.035]">
         <div className="border-b border-white/7 px-4 py-4">
-          <div className="text-base font-semibold text-white">Astra Assistant</div>
+          <div className="text-base font-semibold text-white">Панель Astra</div>
         </div>
         <div className="flex flex-1 flex-col gap-4 px-4 py-4">
           <ReplyPanelSkeleton />
@@ -117,7 +160,7 @@ export function ReplyPanel({
   if (errorMessage) {
     return (
       <WarningState
-        title="Assistant panel не загрузилась"
+        title="Панель ответов не загрузилась"
         description={errorMessage}
         action={
           <div>
@@ -134,7 +177,7 @@ export function ReplyPanel({
   if (!reply) {
     return (
       <EmptyState
-        title="Assistant panel готова"
+        title="Панель ответов готова"
         description="Выбери чат и Astra покажет фокус, причины выбора, варианты ответа и рабочие действия."
       />
     );
@@ -143,8 +186,8 @@ export function ReplyPanel({
   if (!safeReply) {
     return (
       <WarningState
-        title="Reply вернулся в неожиданном формате"
-        description="Bridge отдал payload, который desktop не может безопасно отрисовать. Обнови экран или перезапусти локальный bridge."
+        title="Ответ вернулся в неожиданном формате"
+        description="Bridge отдал данные, которые desktop не может безопасно отрисовать. Обнови экран или перезапусти локальный bridge."
         action={
           <div>
             <Button variant="outline" onClick={onRefresh}>
@@ -178,33 +221,12 @@ export function ReplyPanel({
     safeReply.sourceSenderName,
     safeReply.sourceMessagePreview || suggestion.sourceMessagePreview,
   );
-  const currentDraftScopeKey = buildReplyDraftScopeKey({
-    sourceMessageId: suggestion.sourceMessageId,
-    focusLabel: suggestion.focusLabel,
-    sourceMessagePreview: safeReply.sourceMessagePreview || suggestion.sourceMessagePreview,
-    replyOpportunityMode: suggestion.replyOpportunityMode,
-  });
-  const draftScopeMatches = Boolean(
-    workflowState?.draftText
-      && workflowState.draftScopeKey
-      && currentDraftScopeKey
-      && workflowState.draftScopeKey === currentDraftScopeKey,
-  );
-  const legacyDraftMatches = Boolean(
-    workflowState?.draftText
-      && !workflowState.draftScopeKey
-      && workflowState.draftSourceMessageId !== null
-      && workflowState.draftSourceMessageId === suggestion.sourceMessageId,
-  );
-  const hasActiveDraft = Boolean(workflowState?.draftText && (draftScopeMatches || legacyDraftMatches));
-  const hasStaleDraft = Boolean(workflowState?.draftText && !hasActiveDraft);
-
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/7 bg-white/[0.035]">
       <div className="border-b border-white/7 px-4 py-4">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Assistant</div>
+            <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Ответы</div>
             <div className="text-base font-semibold text-white">Astra Reply</div>
             <div className="mt-1 text-sm leading-6 text-slate-400">
               Фокус строится по незакрытому триггеру из свежего окна сообщений.
@@ -230,13 +252,13 @@ export function ReplyPanel({
             риск {suggestion.riskLabel || "под контролем"}
           </Badge>
           <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-            style {suggestion.styleSource || "default"}
+            стиль {suggestion.styleSource || "по умолчанию"}
           </Badge>
           <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-            persona {suggestion.personaApplied ? "on" : "off"}
+            персона {suggestion.personaApplied ? "включена" : "выключена"}
           </Badge>
           <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-            few-shot {suggestion.fewShotFound ? suggestion.fewShotMatchCount : 0}
+            похожих ответов {suggestion.fewShotFound ? suggestion.fewShotMatchCount : 0}
           </Badge>
           <Badge
             variant="outline"
@@ -251,7 +273,7 @@ export function ReplyPanel({
                   : "bg-white/7 text-slate-200 ring-white/10",
             )}
           >
-            LLM {suggestion.llmStatus?.label || "Deterministic"}
+            LLM {llmStatusLabel}
           </Badge>
         </div>
       </div>
@@ -273,9 +295,9 @@ export function ReplyPanel({
               </div>
               <div className="text-sm leading-6 text-slate-200">{freshness.detail}</div>
               <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-300">
-                {freshness.lastSyncAt ? <span>sync {formatDateTime(freshness.lastSyncAt)}</span> : null}
+                {freshness.lastSyncAt ? <span>синхронизация {formatDateTime(freshness.lastSyncAt)}</span> : null}
                 {freshness.reference ? <span>{freshness.reference}</span> : null}
-                {freshness.syncTrigger ? <span>{freshness.syncTrigger === "auto" ? "auto-sync" : "manual sync"}</span> : null}
+                {freshness.syncTrigger ? <span>{freshness.syncTrigger === "auto" ? "автосинхронизация" : "ручная синхронизация"}</span> : null}
                 {freshness.updatedNow ? <span>хвост обновлён сейчас</span> : null}
                 {freshness.canManualSync ? (
                   <span>
@@ -321,6 +343,38 @@ export function ReplyPanel({
                 {replyOptions.length} варианта • обновлено {formatDateTime(new Date().toISOString())}
               </div>
             </div>
+            <div className="mb-3 flex flex-wrap gap-2">
+              {[
+                ["short", "Короче"],
+                ["soft", "Мягче"],
+                ["style", "В моём стиле"],
+              ].map(([variantId, label]) => {
+                const index = replyOptions.findIndex((item) => item.id === variantId);
+                return (
+                  <Button
+                    key={variantId}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="border-white/8 bg-black/16 text-slate-100"
+                    disabled={index < 0}
+                    onClick={() => setSelectedIndex(index)}
+                  >
+                    {label}
+                  </Button>
+                );
+              })}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="border-white/8 bg-black/16 text-slate-100"
+                onClick={onRefresh}
+                disabled={refreshing}
+              >
+                Пересобрать
+              </Button>
+            </div>
             <div className="flex flex-col gap-3">
               {replyOptions.map((item, index) => (
                 <button
@@ -363,26 +417,31 @@ export function ReplyPanel({
             </Button>
             <Button
               className="bg-cyan-300 text-[#05111c] hover:bg-cyan-200"
-              onClick={() => onUseDraft(selectedReply, suggestion.sourceMessageId)}
+              onClick={() => {
+                setDraftText(selectedReply);
+                onUseDraft(selectedReply, suggestion.sourceMessageId);
+              }}
               disabled={!selectedReply}
+              aria-label="Использовать как черновик"
             >
               <WandSparkles data-icon="inline-start" />
-              Использовать как черновик
+              Вставить в черновик
             </Button>
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="w-full">
                   <Button
                     variant="outline"
-                    className="w-full border-white/8 bg-black/16 text-slate-300"
-                    disabled
+                    className="w-full border-emerald-300/14 bg-emerald-300/10 text-emerald-50"
+                    disabled={!safeReply.actions.send || !selectedReply || sending}
+                    onClick={() => onSend(selectedReply, suggestion.sourceMessageId)}
                   >
-                    <Send data-icon="inline-start" />
-                    Отправить через Desktop
+                    {sending ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
+                    Отправить вариант
                   </Button>
                 </span>
               </TooltipTrigger>
-              <TooltipContent>{sendDisabledReason}</TooltipContent>
+              {!safeReply.actions.send ? <TooltipContent>{sendDisabledReason}</TooltipContent> : null}
             </Tooltip>
             <Button
               variant="outline"
@@ -397,7 +456,33 @@ export function ReplyPanel({
           <div className="rounded-[22px] border border-white/8 bg-black/16 p-4">
             <div className="mb-3 flex items-center gap-2 text-sm font-medium text-white">
               <ShieldAlert />
-              Черновик и статус
+              Черновик перед отправкой
+            </div>
+
+            <textarea
+              value={draftText}
+              onChange={(event) => setDraftText(event.target.value)}
+              rows={5}
+              className="min-h-28 w-full resize-y rounded-[18px] border border-white/8 bg-black/24 px-4 py-3 text-sm leading-6 text-slate-100 outline-none transition focus:border-cyan-300/24 focus:bg-black/32"
+              placeholder="Вставь вариант, поправь формулировку и отправь явно."
+            />
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Button
+                variant="outline"
+                className="border-white/8 bg-black/18 text-slate-100"
+                onClick={() => onUseDraft(draftText, suggestion.sourceMessageId)}
+                disabled={!draftText.trim()}
+              >
+                Сохранить черновик
+              </Button>
+              <Button
+                className="bg-emerald-300 text-[#05111c] hover:bg-emerald-200"
+                onClick={() => onSend(draftText, suggestion.sourceMessageId)}
+                disabled={!safeReply.actions.send || !draftText.trim() || sending}
+              >
+                {sending ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
+                Отправить черновик
+              </Button>
             </div>
 
             {hasActiveDraft ? (
@@ -461,7 +546,7 @@ export function ReplyPanel({
               </div>
             ) : (
               <div className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3 text-sm leading-6 text-slate-300">
-                Нажми «Использовать как черновик», чтобы зафиксировать текущий вариант локально и не потерять его при обновлении suggestion.
+                Нажми «Использовать как черновик», чтобы зафиксировать текущий вариант локально и не потерять его при обновлении предложения.
               </div>
             )}
 
@@ -481,33 +566,33 @@ export function ReplyPanel({
             <Separator className="my-4 bg-white/8" />
 
             <div className="flex flex-col gap-3 text-sm leading-6 text-slate-300">
-              <div>Стратегия: {suggestion.strategy || "deterministic"}</div>
+              <div>Стратегия: {suggestion.strategy || "детерминированная база"}</div>
               {selectedVariant ? <div>Выбранный вариант: {selectedVariant.label}</div> : null}
-              <div>Контекст: {suggestion.replyOpportunityReason || "стандартный reply"}</div>
-              <div>Style profile: {suggestion.styleProfileKey || "без профиля"}</div>
-              <div>Persona: {suggestion.personaApplied ? "применена" : "не применялась"}</div>
+              <div>Контекст: {suggestion.replyOpportunityReason || "стандартный ответ"}</div>
+              <div>Профиль стиля: {suggestion.styleProfileKey || "без профиля"}</div>
+              <div>Персона: {suggestion.personaApplied ? "применена" : "не применялась"}</div>
               <div>
-                Few-shot: {suggestion.fewShotFound ? `найдено ${suggestion.fewShotMatchCount}` : "не использовались"}
+                Похожие ответы: {suggestion.fewShotFound ? `найдено ${suggestion.fewShotMatchCount}` : "не использовались"}
               </div>
               <div>
-                LLM: {suggestion.llmStatus?.label || "Deterministic"}
+                LLM: {llmStatusLabel}
                 {suggestion.llmStatus?.provider ? ` • ${suggestion.llmStatus.provider}` : ""}
               </div>
-              {suggestion.llmStatus?.detail ? <div>LLM detail: {suggestion.llmStatus.detail}</div> : null}
+              {suggestion.llmStatus?.detail ? <div>Деталь LLM: {suggestion.llmStatus.detail}</div> : null}
               {suggestion.styleNotes.length > 0 ? (
-                <div>Style notes: {suggestion.styleNotes.join(" • ")}</div>
+                <div>Заметки стиля: {suggestion.styleNotes.join(" • ")}</div>
               ) : null}
               {suggestion.personaNotes.length > 0 ? (
-                <div>Persona notes: {suggestion.personaNotes.join(" • ")}</div>
+                <div>Заметки персоны: {suggestion.personaNotes.join(" • ")}</div>
               ) : null}
               {suggestion.fewShotNotes.length > 0 ? (
-                <div>Few-shot notes: {suggestion.fewShotNotes.join(" • ")}</div>
+                <div>Заметки похожих ответов: {suggestion.fewShotNotes.join(" • ")}</div>
               ) : null}
               {suggestion.guardrailFlags.length > 0 ? (
-                <div>Guardrails: {suggestion.guardrailFlags.join(" • ")}</div>
+                <div>Ограничители: {suggestion.guardrailFlags.join(" • ")}</div>
               ) : null}
               {suggestion.llmRefineNotes.length > 0 ? (
-                <div>LLM notes: {suggestion.llmRefineNotes.map(stringifyUnknown).join(" • ")}</div>
+                <div>Заметки LLM: {suggestion.llmRefineNotes.map(stringifyUnknown).join(" • ")}</div>
               ) : null}
             </div>
 
@@ -519,35 +604,35 @@ export function ReplyPanel({
               >
                 <div className="flex items-center gap-2 text-sm font-medium text-white">
                   <Bug className="size-4" />
-                  Debug / details
+                  Отладка / детали
                 </div>
                 <div className="inline-flex items-center gap-2 text-xs text-slate-400">
-                  {suggestion.llmStatus?.label || "Deterministic"}
+                  {llmStatusLabel}
                   {showDebug ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
                 </div>
               </button>
 
               {showDebug ? (
                 <div className="border-t border-white/6 px-4 py-4 text-sm leading-6 text-slate-300">
-                  <div>Режим: {suggestion.llmStatus?.mode || "deterministic"}</div>
+                  <div>Режим: {suggestion.llmStatus?.mode || "детерминированный"}</div>
                   <div className="mt-2">
                     Причина:{" "}
                     {llmDecisionReason?.detail
                       || suggestion.llmStatus?.detail
-                      || "LLM refine не запрашивался, используется deterministic baseline."}
+                      || "LLM-улучшение не запрашивалось, используется детерминированная база."}
                   </div>
                   {llmDecisionReason?.flags.length ? (
                     <div className="mt-2">
-                      Guardrails: {llmDecisionReason.flags.join(" • ")}
+                      Ограничители: {llmDecisionReason.flags.join(" • ")}
                     </div>
                   ) : null}
-                  <div className="mt-4 text-[11px] uppercase tracking-[0.24em] text-slate-500">Baseline</div>
+                  <div className="mt-4 text-[11px] uppercase tracking-[0.24em] text-slate-500">Базовый вариант</div>
                   <div className="mt-2 whitespace-pre-wrap rounded-[14px] border border-white/6 bg-black/18 px-3 py-3 text-slate-100">
-                    {llmDebug?.baselineText || suggestion.replyText || "Нет baseline."}
+                    {llmDebug?.baselineText || suggestion.replyText || "Нет базового варианта."}
                   </div>
-                  <div className="mt-4 text-[11px] uppercase tracking-[0.24em] text-slate-500">Raw LLM candidate</div>
+                  <div className="mt-4 text-[11px] uppercase tracking-[0.24em] text-slate-500">Сырой LLM-кандидат</div>
                   <div className="mt-2 whitespace-pre-wrap rounded-[14px] border border-white/6 bg-black/18 px-3 py-3 text-slate-100">
-                    {llmDebug?.rawCandidate || "Кандидат не сохранялся: LLM refine не применялся или провайдер не вернул текст."}
+                    {llmDebug?.rawCandidate || "Кандидат не сохранялся: LLM-улучшение не применялось или провайдер не вернул текст."}
                   </div>
                 </div>
               ) : null}
@@ -555,16 +640,162 @@ export function ReplyPanel({
           </div>
 
           <div className="rounded-[22px] border border-white/8 bg-black/16 px-4 py-4 text-sm leading-6 text-slate-300">
-            <div className="mb-2 flex items-center gap-2 font-medium text-white">
-              <ShieldAlert />
-              Auto-send / autopilot
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 font-medium text-white">
+                <ShieldAlert />
+                Autopilot
+              </div>
+              {safeAutopilot ? (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "border-0 ring-1",
+                    safeAutopilot.decision.allowed
+                      ? "bg-emerald-300/12 text-emerald-100 ring-emerald-300/15"
+                      : "bg-white/7 text-slate-200 ring-white/10",
+                  )}
+                >
+                  {formatAutopilotMode(safeAutopilot.mode)}
+                </Badge>
+              ) : null}
             </div>
-            Beta-режим пока намеренно отключён. Основа под него есть: фокус, стиль, persona, few-shot и локальный draft state уже показываются прямо в рабочем контуре.
+
+            {safeAutopilot ? (
+              <div className="flex flex-col gap-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      "border-white/8 bg-black/18 text-slate-100",
+                      safeAutopilot.masterEnabled ? "border-emerald-300/18 bg-emerald-300/10 text-emerald-50" : "",
+                    )}
+                    disabled={autopilotUpdating}
+                    onClick={() => onUpdateAutopilotGlobal(!safeAutopilot.masterEnabled)}
+                  >
+                    <Power data-icon="inline-start" />
+                    {safeAutopilot.masterEnabled ? "Глобально включён" : "Глобально выключен"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      "border-white/8 bg-black/18 text-slate-100",
+                      safeAutopilot.trusted ? "border-cyan-300/18 bg-cyan-300/10 text-cyan-50" : "",
+                    )}
+                    disabled={autopilotUpdating}
+                    onClick={() => onUpdateChatAutopilot({ trusted: !safeAutopilot.trusted })}
+                  >
+                    {safeAutopilot.trusted ? "Чат разрешён" : "Чат не разрешён"}
+                  </Button>
+                </div>
+
+                <label className="flex flex-col gap-2">
+                  <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Режим чата</span>
+                  <select
+                    value={safeAutopilot.mode}
+                    disabled={autopilotUpdating}
+                    onChange={(event) => onUpdateChatAutopilot({ mode: event.target.value })}
+                    className="rounded-[16px] border border-white/8 bg-black/24 px-3 py-2 text-sm text-slate-100 outline-none"
+                  >
+                    <option value="off">Выключен</option>
+                    <option value="draft">Черновик</option>
+                    <option value="confirm">Полуавтомат</option>
+                    <option value="autopilot">Автопилот</option>
+                  </select>
+                </label>
+
+                <div className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
+                  <div className="mb-1 text-xs uppercase tracking-[0.22em] text-slate-500">Решение сейчас</div>
+                  <div className="text-slate-100">{safeAutopilot.decision.reason}</div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-400">
+                    <span>триггер: {safeAutopilot.decision.trigger || "нет"}</span>
+                    <span>уверенность: {formatConfidence(safeAutopilot.decision.confidence)}</span>
+                    {safeAutopilot.cooldown.active ? (
+                      <span>пауза: {safeAutopilot.cooldown.remainingSeconds}с</span>
+                    ) : null}
+                    {safeAutopilot.writeReady ? <span>запись готова</span> : <span>запись закрыта</span>}
+                  </div>
+                </div>
+
+                {safeAutopilot.pendingDraft?.text ? (
+                  <div className="rounded-[18px] border border-amber-300/12 bg-amber-300/8 px-4 py-3">
+                    <div className="mb-1 text-xs uppercase tracking-[0.22em] text-amber-100/70">
+                      Авточерновик
+                    </div>
+                    <div className="whitespace-pre-wrap text-slate-100">{safeAutopilot.pendingDraft.text}</div>
+                    <div className="mt-3 flex gap-2">
+                      <Button
+                        variant="outline"
+                        className="border-white/8 bg-black/18 text-slate-100"
+                        onClick={() => {
+                          const text = safeAutopilot.pendingDraft?.text || "";
+                          setDraftText(text);
+                          onUseDraft(text, safeAutopilot.decision.sourceMessageId);
+                        }}
+                      >
+                        Вставить
+                      </Button>
+                      <Button
+                        className="bg-emerald-300 text-[#05111c] hover:bg-emerald-200"
+                        disabled={!safeReply.actions.send || sending}
+                        onClick={() => onSend(safeAutopilot.pendingDraft?.text || "", safeAutopilot.decision.sourceMessageId)}
+                      >
+                        Отправить
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="border-rose-300/14 bg-rose-400/8 text-rose-50"
+                    disabled={autopilotUpdating}
+                    onClick={() => onUpdateChatAutopilot({ trusted: false, mode: "off" })}
+                  >
+                    <StopCircle data-icon="inline-start" />
+                    Стоп для чата
+                  </Button>
+                </div>
+
+                {safeAutopilot.journal.length > 0 ? (
+                  <div className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
+                    <div className="mb-2 text-xs uppercase tracking-[0.22em] text-slate-500">
+                      Последние действия
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      {safeAutopilot.journal.slice(0, 3).map((item, index) => (
+                        <div key={`${item.timestamp || "event"}-${index}`} className="text-xs leading-5 text-slate-300">
+                          <span className="text-slate-100">{item.message || item.status || "событие"}</span>
+                          {item.reason ? ` — ${item.reason}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
+                Состояние автопилота пока не пришло от bridge.
+              </div>
+            )}
           </div>
         </div>
       </ScrollArea>
     </section>
   );
+}
+
+function formatAutopilotMode(mode: string | null | undefined): string {
+  if (mode === "draft") {
+    return "Черновик";
+  }
+  if (mode === "confirm") {
+    return "Полуавтомат";
+  }
+  if (mode === "autopilot") {
+    return "Автопилот";
+  }
+  return "Выключен";
 }
 
 function buildTriggerPreview(senderName: string | null, preview: string | null): string | null {

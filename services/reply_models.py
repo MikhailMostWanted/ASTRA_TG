@@ -16,6 +16,8 @@ class ReplyContextIssue:
 class ReplyContext:
     chat: Chat
     recent_messages: tuple[Message, ...]
+    working_messages: tuple[Message, ...]
+    broader_tail_messages: tuple[Message, ...]
     latest_message: Message
     target_message: Message
     focus_label: str
@@ -27,6 +29,10 @@ class ReplyContext:
     topic_hints: tuple[str, ...]
     pending_loops: tuple[str, ...]
     recent_conflicts: tuple[str, ...]
+    unanswered_questions: tuple[str, ...]
+    pending_promises: tuple[str, ...]
+    emotional_signals: tuple[str, ...]
+    local_dynamics: tuple[str, ...]
     reply_opportunity_mode: str
     reply_opportunity_reason: str
 
@@ -66,6 +72,14 @@ class ReplyDraft:
 
 
 @dataclass(frozen=True, slots=True)
+class ReplyVariant:
+    id: str
+    label: str
+    description: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
 class ReplySuggestion:
     base_reply_text: str
     reply_messages: tuple[str, ...]
@@ -100,6 +114,7 @@ class ReplySuggestion:
     llm_refine_baseline_messages: tuple[str, ...] = ()
     llm_refine_raw_candidate: str | None = None
     llm_refine_decision_reason: LLMDecisionReason | None = None
+    variants: tuple[ReplyVariant, ...] = ()
 
     @property
     def reply_text(self) -> str:

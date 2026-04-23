@@ -9,7 +9,7 @@ class OnboardingFormatter:
             "Быстрый путь:\n"
             "1. Открой /setup.\n"
             "2. Добавь источник: /source_add или /sources.\n"
-            "3. Накопи сообщения. Если нужен импорт истории, используй Full-access только в read-only режиме.\n"
+            "3. Накопи сообщения. Если нужен импорт истории, используй Full-access в режиме чтения.\n"
             "4. Задай получателя дайджеста: /digest_target.\n"
             "5. Пересобери память: /memory_rebuild.\n"
             "6. Проверь рабочий контур: /digest_now, /reply <chat_id|@username>, /reminders_scan.\n\n"

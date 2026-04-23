@@ -222,7 +222,7 @@ def test_services_manage_sources_digest_target_and_status(monkeypatch, tmp_path:
             assert "[WARN] Память: карт чатов 0, людей 0" in status_text
             assert "[WARN] Ответы:" in status_text
             assert "[WARN] Напоминания: личный чат: не задан" in status_text
-            assert "[OFF] Провайдер: Provider layer выключен" in status_text
+            assert "[OFF] Провайдер: Слой провайдера выключен" in status_text
             assert "Следующий шаг" in status_text
             assert "/setup, /checklist, /doctor" in status_text
             assert "digest_target_chat_id: -100900" in settings_text

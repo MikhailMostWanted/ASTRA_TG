@@ -58,6 +58,22 @@ class ReminderScanRequest(BaseModel):
     source_reference: str | None = None
 
 
+class ChatSendRequest(BaseModel):
+    text: str = Field(min_length=1)
+    source_message_id: int | None = None
+    reply_to_source_message_id: int | None = None
+
+
+class AutopilotGlobalRequest(BaseModel):
+    master_enabled: bool | None = None
+    allow_channels: bool | None = None
+
+
+class ChatAutopilotRequest(BaseModel):
+    trusted: bool | None = None
+    mode: str | None = None
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -177,6 +193,39 @@ def create_app(
             lambda: _bridge(app).get_reply_preview(
                 chat_id,
                 use_provider_refinement=use_provider_refinement,
+            ),
+        )
+
+    @app.post("/api/chats/{chat_id}/send")
+    async def chat_send(chat_id: int, payload: ChatSendRequest) -> dict[str, Any]:
+        return await _call_with_lookup(
+            app,
+            lambda: _bridge(app).send_chat_message(
+                chat_id,
+                text=payload.text,
+                source_message_id=payload.source_message_id,
+                reply_to_source_message_id=payload.reply_to_source_message_id,
+            ),
+        )
+
+    @app.post("/api/autopilot")
+    async def autopilot_global(payload: AutopilotGlobalRequest) -> dict[str, Any]:
+        return await _call_with_value_error(
+            app,
+            lambda: _bridge(app).update_autopilot_global(
+                master_enabled=payload.master_enabled,
+                allow_channels=payload.allow_channels,
+            ),
+        )
+
+    @app.post("/api/chats/{chat_id}/autopilot")
+    async def autopilot_chat(chat_id: int, payload: ChatAutopilotRequest) -> dict[str, Any]:
+        return await _call_with_lookup(
+            app,
+            lambda: _bridge(app).update_chat_autopilot(
+                chat_id,
+                trusted=payload.trusted,
+                mode=payload.mode,
             ),
         )
 

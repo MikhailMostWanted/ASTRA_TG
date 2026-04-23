@@ -347,7 +347,7 @@ class SystemReadinessService:
                 detail=(
                     f"Активных источников: {facts.active_sources}."
                     if facts.active_sources > 0
-                    else "Нет ни одного активного source в allowlist."
+                    else "Нет ни одного активного источника в списке разрешённых."
                 ),
                 next_command="/source_add",
                 next_action="Добавь хотя бы один источник через /source_add <chat_id|@username>.",
@@ -539,9 +539,9 @@ class SystemReadinessService:
         if not facts.reminders_worker_ready:
             warnings.append("Worker path reminder_delivery не зарегистрирован.")
         if facts.provider_status.enabled and not facts.provider_status.configured:
-            warnings.append(f"Provider layer включён, но не готов: {facts.provider_status.reason}")
+            warnings.append(f"Слой провайдера включён, но не готов: {facts.provider_status.reason}")
         if facts.fullaccess_status is not None and facts.fullaccess_status.enabled and not facts.fullaccess_status.ready_for_manual_sync:
-            warnings.append(f"Full-access experimental ещё не готов: {facts.fullaccess_status.reason}")
+            warnings.append(f"Full-access ещё не готов: {facts.fullaccess_status.reason}")
         if facts.recent_worker_error:
             warnings.append(f"Недавняя ошибка worker: {facts.recent_worker_error}")
         if facts.recent_provider_error:
@@ -597,10 +597,10 @@ def _reminders_check(facts: OperationalFacts) -> tuple[bool, str]:
 def _provider_check(facts: OperationalFacts) -> tuple[bool, str]:
     status = facts.provider_status
     if not status.enabled:
-        return True, "Provider layer выключен, deterministic fallback активен."
+        return True, "Слой провайдера выключен, детерминированная база активна."
     if not status.configured:
-        return False, f"Provider layer включён, но не готов: {status.reason}"
-    return True, f"Provider layer настроен: {status.provider_name or 'provider'}."
+        return False, f"Слой провайдера включён, но не готов: {status.reason}"
+    return True, f"Слой провайдера настроен: {status.provider_name or 'провайдер'}."
 
 
 def _fullaccess_check(facts: OperationalFacts) -> tuple[bool, str]:

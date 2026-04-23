@@ -1,4 +1,10 @@
-import type { ChatFreshnessPayload, ReplyPreviewPayload, ReplySuggestion, ScreenId } from "@/lib/types";
+import type {
+  AutopilotPayload,
+  ChatFreshnessPayload,
+  ReplyPreviewPayload,
+  ReplySuggestion,
+  ScreenId,
+} from "@/lib/types";
 
 const SCREEN_IDS: ScreenId[] = [
   "dashboard",
@@ -108,7 +114,7 @@ export function normalizeReplySuggestion(value: unknown): ReplySuggestion | null
     llmStatus: llmStatus
       ? {
           mode: safeString(llmStatus.mode, "deterministic"),
-          label: safeString(llmStatus.label, "Deterministic"),
+          label: safeString(llmStatus.label, "Детерминированный"),
           provider: safeStringOrNull(llmStatus.provider),
           detail: safeStringOrNull(llmStatus.detail),
         }
@@ -171,10 +177,78 @@ export function normalizeReplyPreviewPayload(value: unknown): ReplyPreviewPayloa
       copy: safeBoolean(actions.copy),
       refresh: safeBoolean(actions.refresh, true),
       pasteToTelegram: safeBoolean(actions.pasteToTelegram),
+      send: safeBoolean(actions.send),
       markSent: safeBoolean(actions.markSent),
       variants: safeRecord<boolean>(actions.variants),
       disabledReason: safeStringOrNull(actions.disabledReason),
     },
+  };
+}
+
+export function normalizeAutopilotPayload(value: unknown): AutopilotPayload | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const decision = isPlainObject(value.decision) ? value.decision : {};
+  const cooldown = isPlainObject(value.cooldown) ? value.cooldown : {};
+  const pendingDraft = isPlainObject(value.pendingDraft) ? value.pendingDraft : null;
+  const journal = Array.isArray(value.journal)
+    ? value.journal.filter((item): item is Record<string, unknown> => isPlainObject(item))
+    : [];
+  return {
+    masterEnabled: safeBoolean(value.masterEnabled),
+    allowChannels: safeBoolean(value.allowChannels),
+    mode: safeString(value.mode, "off"),
+    trusted: safeBoolean(value.trusted),
+    writeReady: safeBoolean(value.writeReady),
+    decision: {
+      mode: safeString(decision.mode, "off"),
+      action: safeString(decision.action, "none"),
+      allowed: safeBoolean(decision.allowed),
+      reason: safeString(decision.reason, "Нет решения автопилота."),
+      confidence: safeNumberOrNull(decision.confidence),
+      trigger: safeStringOrNull(decision.trigger),
+      sourceMessageId: safeNumberOrNull(decision.sourceMessageId),
+      replyText: safeStringOrNull(decision.replyText),
+      pendingDraftStatus: safeStringOrNull(decision.pendingDraftStatus),
+    },
+    pendingDraft: pendingDraft
+      ? {
+          text: safeStringOrNull(pendingDraft.text) ?? undefined,
+          mode: safeStringOrNull(pendingDraft.mode) ?? undefined,
+          status: safeStringOrNull(pendingDraft.status) ?? undefined,
+          created_at: safeStringOrNull(pendingDraft.created_at) ?? undefined,
+          source_message_id: safeNumberOrNull(pendingDraft.source_message_id) ?? undefined,
+          confidence: safeNumberOrNull(pendingDraft.confidence) ?? undefined,
+          trigger: safeStringOrNull(pendingDraft.trigger) ?? undefined,
+          focus_label: safeStringOrNull(pendingDraft.focus_label) ?? undefined,
+          source_message_preview: safeStringOrNull(pendingDraft.source_message_preview) ?? undefined,
+          reply_opportunity_reason: safeStringOrNull(pendingDraft.reply_opportunity_reason) ?? undefined,
+        }
+      : null,
+    lastSentAt: safeStringOrNull(value.lastSentAt),
+    lastSentSourceMessageId: safeNumberOrNull(value.lastSentSourceMessageId),
+    cooldown: {
+      active: safeBoolean(cooldown.active),
+      remainingSeconds: safeNumberOrNull(cooldown.remainingSeconds) ?? 0,
+      until: safeStringOrNull(cooldown.until),
+    },
+    journal: journal.map((item) => ({
+      timestamp: safeStringOrNull(item.timestamp) ?? undefined,
+      action: safeStringOrNull(item.action) ?? undefined,
+      mode: safeStringOrNull(item.mode) ?? undefined,
+      status: safeStringOrNull(item.status) ?? undefined,
+      actor: safeStringOrNull(item.actor) ?? undefined,
+      automatic: typeof item.automatic === "boolean" ? item.automatic : undefined,
+      message: safeStringOrNull(item.message) ?? undefined,
+      reason: safeStringOrNull(item.reason),
+      confidence: safeNumberOrNull(item.confidence),
+      trigger: safeStringOrNull(item.trigger),
+      chat_id: safeNumberOrNull(item.chat_id),
+      source_message_id: safeNumberOrNull(item.source_message_id),
+      sent_message_id: safeNumberOrNull(item.sent_message_id),
+      text_preview: safeStringOrNull(item.text_preview),
+    })),
   };
 }
 

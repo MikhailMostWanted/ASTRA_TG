@@ -49,17 +49,29 @@ class ReplyExamplesRetriever:
         *,
         limit: int = 3,
     ) -> ReplyExamplesRetrievalResult:
+        retrieval_context_text = _build_retrieval_context_text(context)
         target_text = _pick_context_text(context)
-        query = _build_fts_query(target_text)
+        query = _build_fts_query(retrieval_context_text)
         if not query:
             return _empty_result()
 
-        target_tokens = set(tokenize_text(target_text))
+        target_tokens = set(tokenize_text(retrieval_context_text))
         if not target_tokens:
             return _empty_result()
 
         source_person_key = _resolve_person_key(context)
         current_type = self.classifier.classify(context).situation
+        target_context_tokens = set(
+            tokenize_text(
+                " ".join(
+                    [
+                        *(message.get("text", "") for message in _build_working_context_messages(context)),
+                        *context.pending_loops,
+                        *context.topic_hints,
+                    ]
+                )
+            )
+        )
         candidates = await self.reply_example_repository.search_similar(
             query,
             limit=max(limit * 8, 12),
@@ -72,6 +84,7 @@ class ReplyExamplesRetriever:
                 candidate=candidate,
                 index=index,
                 target_tokens=target_tokens,
+                target_context_tokens=target_context_tokens,
                 current_chat_id=context.chat.id,
                 current_person_key=source_person_key,
                 current_type=current_type,
@@ -140,6 +153,7 @@ def _score_candidate(
     candidate,
     index: int,
     target_tokens: set[str],
+    target_context_tokens: set[str],
     current_chat_id: int,
     current_person_key: str | None,
     current_type: str,
@@ -149,6 +163,13 @@ def _score_candidate(
     overlap = len(target_tokens & candidate_tokens) / max(len(target_tokens), 1)
     score = overlap * 0.56
     reasons: list[str] = []
+
+    context_tokens = set(tokenize_text(_context_before_blob(candidate.context_before_json)))
+    if context_tokens:
+        context_overlap = len(target_context_tokens & context_tokens) / max(1, len(target_context_tokens))
+        if context_overlap:
+            score += context_overlap * 0.16
+            reasons.append("похожий живой контекст")
 
     fts_bonus = max(0.04, 0.18 - index * 0.012)
     score += fts_bonus
@@ -180,6 +201,11 @@ def _score_candidate(
     quality_bonus = candidate.quality_score * 0.12
     score += quality_bonus
     reasons.append(f"quality {candidate.quality_score:.2f}")
+
+    outbound_rhythm_bonus = _score_outbound_rhythm(candidate.outbound_text)
+    if outbound_rhythm_bonus:
+        score += outbound_rhythm_bonus
+        reasons.append("ритм ответа похож")
 
     if overlap == 0 and candidate.chat_id != current_chat_id and candidate.source_person_key != current_person_key:
         score -= 0.25
@@ -279,7 +305,7 @@ def _resolve_person_key(context) -> str | None:
 
 
 def _build_fts_query(text: str) -> str:
-    tokens = list(dict.fromkeys(tokenize_text(text)))[:8]
+    tokens = list(dict.fromkeys(tokenize_text(text)))[:12]
     if not tokens:
         return ""
     return " OR ".join(f"{token}*" for token in tokens)
@@ -289,6 +315,54 @@ def _pick_context_text(context) -> str:
     return " ".join(
         (context.target_message.normalized_text or context.target_message.raw_text or "").split()
     ).strip()
+
+
+def _build_retrieval_context_text(context) -> str:
+    parts = [
+        _pick_context_text(context),
+        *(message.get("text", "") for message in _build_working_context_messages(context)),
+        *context.pending_loops[:2],
+        *context.topic_hints[:2],
+    ]
+    return " ".join(part for part in parts if part).strip()
+
+
+def _build_working_context_messages(context) -> tuple[dict[str, str], ...]:
+    rendered: list[dict[str, str]] = []
+    for message in context.working_messages[-6:]:
+        text = " ".join((message.normalized_text or message.raw_text or "").split()).strip()
+        if not text:
+            continue
+        rendered.append(
+            {
+                "direction": message.direction,
+                "text": text,
+            }
+        )
+    return tuple(rendered)
+
+
+def _context_before_blob(value) -> str:
+    if not isinstance(value, list):
+        return ""
+    parts: list[str] = []
+    for item in value:
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+    return " ".join(parts)
+
+
+def _score_outbound_rhythm(text: str) -> float:
+    normalized = " ".join(text.split()).strip()
+    if not normalized:
+        return 0.0
+    punctuation = normalized.count("!") + normalized.count("?")
+    line_like = max(1, normalized.count(".") + punctuation)
+    if len(tokenize_text(normalized)) <= 12:
+        return 0.05
+    if line_like >= 2:
+        return 0.04
+    return 0.0
 
 
 def _empty_result() -> ReplyExamplesRetrievalResult:

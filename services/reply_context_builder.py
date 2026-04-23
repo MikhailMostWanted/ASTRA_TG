@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from models import Chat, Message
@@ -43,16 +44,35 @@ class ReplyContextBuilder:
     message_repository: MessageRepository
     chat_memory_repository: ChatMemoryRepository
     person_memory_repository: PersonMemoryRepository
-    context_limit: int = 40
-    selection_window: int = 16
+    context_limit: int = 80
+    selection_window: int = 20
+    working_window: int = 18
     min_messages: int = 3
 
-    async def build(self, chat: Chat) -> ReplyContext | ReplyContextIssue:
-        recent_desc = await self.message_repository.get_recent_messages(
-            chat_id=chat.id,
-            limit=self.context_limit,
-        )
-        if not recent_desc:
+    async def build(
+        self,
+        chat: Chat,
+        *,
+        recent_messages: Sequence[Message] | None = None,
+    ) -> ReplyContext | ReplyContextIssue:
+        if recent_messages is None:
+            recent_desc = await self.message_repository.get_recent_messages(
+                chat_id=chat.id,
+                limit=self.context_limit,
+            )
+            if not recent_desc:
+                return ReplyContextIssue(
+                    code="not_enough_data",
+                    message=(
+                        "Подсказку пока не собрать: в этом чате ещё нет накопленного локального контекста."
+                    ),
+                )
+            full_recent_messages = tuple(reversed(recent_desc))
+        else:
+            full_recent_messages = tuple(
+                message for message in recent_messages if getattr(message, "chat_id", chat.id) == chat.id
+            )
+        if not full_recent_messages:
             return ReplyContextIssue(
                 code="not_enough_data",
                 message=(
@@ -60,7 +80,9 @@ class ReplyContextBuilder:
                 ),
             )
 
-        recent_messages = tuple(reversed(recent_desc))
+        recent_messages = full_recent_messages[-self.context_limit :]
+        working_messages = recent_messages[-max(10, self.working_window) :]
+        broader_tail_messages = recent_messages[: max(0, len(recent_messages) - len(working_messages))]
         latest_message = recent_messages[-1]
         text_messages = [message for message in recent_messages if _pick_message_text(message)]
         if len(text_messages) < self.min_messages:
@@ -72,7 +94,7 @@ class ReplyContextBuilder:
                 ),
             )
 
-        focus_candidate = self._select_focus_candidate(recent_messages)
+        focus_candidate = self._select_focus_candidate(working_messages)
         if focus_candidate is None:
             return ReplyContextIssue(
                 code="not_enough_data",
@@ -100,10 +122,16 @@ class ReplyContextBuilder:
             )
             if str(item).strip()
         )[:3]
+        unanswered_questions = self._collect_unanswered_questions(
+            recent_messages=recent_messages,
+            target_message=target_message,
+        )
+        pending_promises = self._collect_pending_promises(recent_messages)
+        emotional_signals = self._collect_emotional_signals(working_messages)
         topic_hints = self._collect_topic_hints(
             target_message=target_message,
             chat_memory=chat_memory,
-            recent_messages=recent_messages,
+            recent_messages=working_messages,
         )
         reply_opportunity_mode, reply_opportunity_reason = self._build_reply_opportunity(
             recent_messages=recent_messages,
@@ -116,10 +144,18 @@ class ReplyContextBuilder:
             reply_opportunity_mode=reply_opportunity_mode,
             reply_opportunity_reason=reply_opportunity_reason,
         )
+        local_dynamics = self._build_local_dynamics(
+            recent_messages=working_messages,
+            focus_candidate=focus_candidate,
+            reply_opportunity_mode=reply_opportunity_mode,
+            pending_loops=pending_loops,
+        )
 
         return ReplyContext(
             chat=chat,
             recent_messages=recent_messages,
+            working_messages=working_messages,
+            broader_tail_messages=broader_tail_messages,
             latest_message=latest_message,
             target_message=target_message,
             focus_label=focus_candidate.focus_label,
@@ -131,6 +167,10 @@ class ReplyContextBuilder:
             topic_hints=topic_hints,
             pending_loops=pending_loops,
             recent_conflicts=recent_conflicts,
+            unanswered_questions=unanswered_questions,
+            pending_promises=pending_promises,
+            emotional_signals=emotional_signals,
+            local_dynamics=local_dynamics,
             reply_opportunity_mode=reply_opportunity_mode,
             reply_opportunity_reason=reply_opportunity_reason,
         )
@@ -447,6 +487,79 @@ class ReplyContextBuilder:
             seen.add(lowered)
             unique_hints.append(truncate_text(hint, limit=40))
         return tuple(unique_hints[:3])
+
+    def _collect_unanswered_questions(
+        self,
+        *,
+        recent_messages: tuple[Message, ...],
+        target_message: Message,
+    ) -> tuple[str, ...]:
+        items: list[str] = []
+        for index, message in enumerate(recent_messages):
+            text = _pick_message_text(message)
+            if message.direction != "inbound" or not text or not has_question_signal(text):
+                continue
+            later_outbound_exists = any(
+                later_message.direction == "outbound" and _pick_message_text(later_message)
+                for later_message in recent_messages[index + 1 :]
+            )
+            if later_outbound_exists and message.id != target_message.id:
+                continue
+            items.append(truncate_text(text, limit=90))
+        return tuple(items[-3:])
+
+    def _collect_pending_promises(
+        self,
+        recent_messages: tuple[Message, ...],
+    ) -> tuple[str, ...]:
+        items: list[str] = []
+        resolution_seen = False
+        for message in reversed(recent_messages):
+            text = _pick_message_text(message)
+            if message.direction != "outbound" or not text:
+                continue
+            if has_resolution_signal(text):
+                resolution_seen = True
+                continue
+            if resolution_seen:
+                continue
+            if has_follow_up_commitment_signal(text):
+                items.append(truncate_text(text, limit=90))
+        return tuple(reversed(items[:3]))
+
+    def _collect_emotional_signals(
+        self,
+        recent_messages: tuple[Message, ...],
+    ) -> tuple[str, ...]:
+        items = [
+            truncate_text(_pick_message_text(message), limit=90)
+            for message in recent_messages
+            if message.direction == "inbound" and has_emotional_signal(_pick_message_text(message))
+        ]
+        return tuple(items[-3:])
+
+    def _build_local_dynamics(
+        self,
+        *,
+        recent_messages: tuple[Message, ...],
+        focus_candidate: _ReplyFocusCandidate,
+        reply_opportunity_mode: str,
+        pending_loops: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        inbound_count = len([message for message in recent_messages if message.direction == "inbound"])
+        outbound_count = len(recent_messages) - inbound_count
+        dynamics: list[str] = []
+        if inbound_count > outbound_count:
+            dynamics.append("В последних сообщениях собеседник ведёт темп и ждёт реакции.")
+        elif outbound_count > inbound_count:
+            dynamics.append("В последнем окне уже много твоих сообщений, новый follow-up нужен только при сильном триггере.")
+        if focus_candidate.later_outbound_has_follow_up_commitment:
+            dynamics.append("После выбранного триггера уже был промежуточный апдейт, но тема не закрыта.")
+        if pending_loops:
+            dynamics.append("В памяти чата висит открытый хвост, который усиливает уместность ответа.")
+        if reply_opportunity_mode == "hold":
+            dynamics.append("Сейчас важнее не спамить follow-up без нового сигнала.")
+        return tuple(dynamics[:3])
 
 
 def _pick_message_text(message: Message) -> str:

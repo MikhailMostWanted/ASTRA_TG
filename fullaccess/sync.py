@@ -196,12 +196,12 @@ class FullAccessSyncService:
                 self.setting_repository,
                 "Пользовательская session не авторизована. "
                 "Сначала заверши вход на экране Full-access в Astra Desktop "
-                f"или используй fallback {LOCAL_LOGIN_COMMAND}."
+                f"или используй резервный путь {LOCAL_LOGIN_COMMAND}."
             )
             raise ValueError(
                 "Пользовательская session не авторизована. "
                 "Сначала заверши вход на экране Full-access в Astra Desktop "
-                f"или используй fallback {LOCAL_LOGIN_COMMAND}."
+                f"или используй резервный путь {LOCAL_LOGIN_COMMAND}."
             )
         return config
 

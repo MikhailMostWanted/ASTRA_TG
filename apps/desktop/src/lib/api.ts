@@ -1,7 +1,10 @@
 import type {
   ChatMessagesPayload,
+  ChatAutopilotPayload,
+  ChatSendPayload,
   ChatWorkspacePayload,
   ChatsPayload,
+  AutopilotGlobalPayload,
   DashboardPayload,
   DigestOverviewPayload,
   DigestRunPayload,
@@ -118,6 +121,24 @@ export const api = {
       }),
       { method: "POST" },
     ),
+  sendChatMessage: (
+    chatId: number,
+    payload: { text: string; source_message_id?: number | null; reply_to_source_message_id?: number | null },
+  ) =>
+    request<ChatSendPayload>(`/api/chats/${chatId}/send`, {
+      method: "POST",
+      body: payload,
+    }),
+  updateAutopilotGlobal: (payload: { master_enabled?: boolean; allow_channels?: boolean }) =>
+    request<AutopilotGlobalPayload>("/api/autopilot", {
+      method: "POST",
+      body: payload,
+    }),
+  updateChatAutopilot: (chatId: number, payload: { trusted?: boolean; mode?: string }) =>
+    request<ChatAutopilotPayload>(`/api/chats/${chatId}/autopilot`, {
+      method: "POST",
+      body: payload,
+    }),
   sources: () => request<SourcesPayload>("/api/sources"),
   addSource: (payload: { reference?: string; title?: string; chat_type?: string }) =>
     request<SourceMutationPayload>("/api/sources", {

@@ -230,6 +230,7 @@ def serialize_fullaccess_status(report: FullAccessStatusReport) -> dict[str, Any
         "syncedChatCount": report.synced_chat_count,
         "syncedMessageCount": report.synced_message_count,
         "readyForManualSync": report.ready_for_manual_sync,
+        "readyForManualSend": report.ready_for_manual_send,
         "reason": report.reason,
     }
 
@@ -369,7 +370,7 @@ def _serialize_reply_llm_status(suggestion) -> dict[str, Any]:
     if suggestion.llm_refine_applied:
         return {
             "mode": "llm_refine",
-            "label": "LLM refine",
+            "label": "LLM-улучшение",
             "provider": suggestion.llm_refine_provider,
             "detail": (
                 suggestion.llm_refine_notes[0]
@@ -384,14 +385,14 @@ def _serialize_reply_llm_status(suggestion) -> dict[str, Any]:
     ):
         return {
             "mode": "rejected_by_guardrails",
-            "label": "Rejected by guardrails",
+            "label": "Отклонён guardrails",
             "provider": suggestion.llm_refine_provider,
             "detail": suggestion.llm_refine_decision_reason.detail,
         }
     if suggestion.llm_refine_requested:
         return {
             "mode": "fallback",
-            "label": "Fallback",
+            "label": "Фоллбек",
             "provider": suggestion.llm_refine_provider,
             "detail": (
                 suggestion.llm_refine_decision_reason.detail
@@ -403,7 +404,7 @@ def _serialize_reply_llm_status(suggestion) -> dict[str, Any]:
         }
     return {
         "mode": "deterministic",
-        "label": "Deterministic",
+        "label": "Детерминированный",
         "provider": None,
         "detail": "Ответ собран локальным deterministic pipeline без внешнего refine.",
     }
@@ -422,6 +423,18 @@ def _serialize_llm_decision_reason(value) -> dict[str, Any] | None:
 
 
 def _build_reply_variants(suggestion) -> list[dict[str, Any]]:
+    if getattr(suggestion, "variants", ()):
+        return [
+            {
+                "id": variant.id,
+                "label": variant.label,
+                "description": variant.description,
+                "text": variant.text,
+            }
+            for variant in suggestion.variants
+            if getattr(variant, "text", "").strip()
+        ]
+
     primary_text = suggestion.reply_text.strip() if suggestion.reply_text else ""
     styled_text = "\n".join(item for item in suggestion.reply_messages if item.strip()).strip()
     baseline_text = (suggestion.base_reply_text or "").strip()

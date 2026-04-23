@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from models import Chat
 from core.logging import get_logger, log_event
@@ -14,6 +14,7 @@ from services.reply_examples_retriever import ReplyExamplesRetriever
 from services.reply_classifier import ReplyClassifier
 from services.reply_models import ReplyContextIssue, ReplyResult, ReplySuggestion
 from services.reply_strategy import ReplyStrategyResolver
+from services.reply_variants import ReplyVariantBuilder
 from services.style_adapter import StyleAdapter
 from services.style_selector import StyleSelectorService
 from storage.repositories import (
@@ -45,12 +46,14 @@ class ReplyEngineService:
     reply_examples_retriever: ReplyExamplesRetriever | None = None
     reply_refiner: ReplyLLMRefiner | None = None
     setting_repository: SettingRepository | None = None
+    variant_builder: ReplyVariantBuilder = field(default_factory=ReplyVariantBuilder)
 
     async def build_reply(
         self,
         reference: str,
         *,
         use_provider_refinement: bool | None = None,
+        workspace_messages=None,
     ) -> ReplyResult:
         should_try_provider = await self._should_use_provider_refinement(use_provider_refinement)
         log_event(
@@ -78,7 +81,10 @@ class ReplyEngineService:
                 error_message="Источник не найден. Проверь chat_id или @username.",
             )
 
-        context_or_issue = await self.context_builder.build(chat)
+        context_or_issue = await self.context_builder.build(
+            chat,
+            recent_messages=workspace_messages,
+        )
         if isinstance(context_or_issue, ReplyContextIssue):
             return ReplyResult(
                 kind=context_or_issue.code,
@@ -164,12 +170,15 @@ class ReplyEngineService:
         llm_baseline_messages = final_messages
         llm_raw_candidate: str | None = None
         llm_decision_reason = None
-        if should_try_provider and self.reply_refiner is not None:
+        llm_variants = ()
+        if should_try_provider and self.reply_refiner is not None and classification.should_reply:
             refinement = await self.reply_refiner.refine(
                 context=context_or_issue,
                 style_selection=style_selection,
                 persona_state=persona_state,
                 baseline_messages=llm_baseline_messages,
+                few_shot_support=few_shot_support,
+                classification=classification,
             )
             llm_requested = refinement.requested
             llm_applied = refinement.applied
@@ -180,15 +189,23 @@ class ReplyEngineService:
             llm_raw_candidate = refinement.raw_candidate_text
             llm_decision_reason = refinement.decision_reason
             final_messages = refinement.messages
+            llm_variants = refinement.variants
             if llm_requested and not llm_applied:
                 log_event(
                     LOGGER,
                     30,
                     "reply.provider.fallback",
-                    "Reply provider refine не применён, оставлен deterministic fallback.",
+                    "Улучшение ответа провайдером не применено, оставлена детерминированная база.",
                     reference=reference,
                     provider_name=llm_provider_name,
                 )
+
+        variants = self.variant_builder.build(
+            final_messages=final_messages,
+            baseline_messages=llm_baseline_messages,
+            provider_variants=llm_variants,
+            few_shot_support=few_shot_support,
+        )
 
         log_event(
             LOGGER,
@@ -238,6 +255,7 @@ class ReplyEngineService:
                 llm_refine_baseline_messages=llm_baseline_messages,
                 llm_refine_raw_candidate=llm_raw_candidate,
                 llm_refine_decision_reason=llm_decision_reason,
+                variants=variants,
             ),
             source_sender_name=context_or_issue.target_message.sender_name,
             source_message_preview=draft.source_message_preview,

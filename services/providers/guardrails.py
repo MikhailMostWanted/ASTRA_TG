@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import re
 from typing import Iterable
 
 from services.persona_core import PersonaState
@@ -79,7 +80,7 @@ class ReplyRefinementGuardrails:
                     summary="LLM-кандидат для reply пустой.",
                     detail=(
                         "После нормализации у кандидата не осталось текста, "
-                        "поэтому сохранён deterministic baseline."
+                        "поэтому сохранена детерминированная база."
                     ),
                     flags=flags,
                 ),
@@ -88,8 +89,8 @@ class ReplyRefinementGuardrails:
         flags: list[str] = []
         if _has_forbidden_factual_novelty(normalized, allowed_context, baseline):
             flags.append("новые_факты")
-        if _too_far_from_baseline(normalized, baseline, allowed_context):
-            flags.append("сильное_отклонение_от_baseline")
+        if _has_obvious_topic_drift(normalized, allowed_context, baseline):
+            flags.append("явный_оффтопик")
 
         guardrails = persona_state.guardrails
         if guardrails is not None:
@@ -108,12 +109,12 @@ class ReplyRefinementGuardrails:
         combined_flags = tuple(dict.fromkeys([*flags, *persona_decision.flags]))
         hard_flags = {
             "новые_факты",
-            "сильное_отклонение_от_baseline",
             "слишком_литературно",
             "слишком_ботски",
             "слишком_грубо",
             "анти_паттерн",
             "слишком_длинно",
+            "явный_оффтопик",
         }
         if persona_decision.used_fallback or any(flag in hard_flags for flag in combined_flags):
             return ReplyRefinementDecision(
@@ -125,7 +126,7 @@ class ReplyRefinementGuardrails:
                     summary="LLM-кандидат для reply отклонён guardrails.",
                     detail=_format_guardrail_detail(
                         combined_flags,
-                        fallback_label="deterministic baseline",
+                        fallback_label="детерминированная база",
                     ),
                     flags=combined_flags,
                 ),
@@ -215,7 +216,7 @@ class DigestImprovementGuardrails:
                     summary="LLM-кандидат для digest отклонён guardrails.",
                     detail=_format_guardrail_detail(
                         tuple(dict.fromkeys(flags)),
-                        fallback_label="детерминированный digest",
+                        fallback_label="детерминированный дайджест",
                     ),
                     flags=tuple(dict.fromkeys(flags)),
                 ),
@@ -250,11 +251,13 @@ def _format_guardrail_detail(
     *,
     fallback_label: str,
 ) -> str:
+    saved_label = _format_saved_label(fallback_label)
     if not flags:
-        return f"Сработали guardrails, поэтому сохранён {fallback_label}."
+        return f"Сработали guardrails, поэтому {saved_label}."
+    saved_sentence = saved_label[:1].upper() + saved_label[1:]
     return (
         f"Сработали guardrails: {', '.join(flags)}. "
-        f"Сохранён {fallback_label}."
+        f"{saved_sentence}."
     )
 
 
@@ -278,24 +281,6 @@ def _normalize_text(value: object) -> str:
     return " ".join(str(value).split()).strip()
 
 
-def _too_far_from_baseline(
-    candidate_messages: tuple[str, ...],
-    baseline_messages: tuple[str, ...],
-    allowed_context: tuple[str, ...],
-) -> bool:
-    baseline_words = _meaningful_words("\n".join(baseline_messages))
-    candidate_words = _meaningful_words("\n".join(candidate_messages))
-    if not baseline_words or not candidate_words:
-        return False
-    if len(baseline_words) < 2:
-        return False
-
-    baseline_overlap = len(baseline_words & candidate_words) / max(1, len(candidate_words))
-    context_words = _meaningful_words("\n".join(allowed_context))
-    context_overlap = len(context_words & candidate_words) / max(1, len(candidate_words))
-    return baseline_overlap < 0.2 and context_overlap < 0.24
-
-
 def _has_forbidden_factual_novelty(
     candidate_messages: tuple[str, ...],
     allowed_context: tuple[str, ...],
@@ -311,22 +296,67 @@ def _has_forbidden_factual_novelty(
     return False
 
 
+def _has_obvious_topic_drift(
+    candidate_messages: tuple[str, ...],
+    allowed_context: tuple[str, ...],
+    baseline_messages: tuple[str, ...],
+) -> bool:
+    allowed_tokens = _salient_tokens((*allowed_context, *baseline_messages))
+    candidate_tokens = _salient_tokens(candidate_messages)
+    if len(candidate_tokens) < 4 or not allowed_tokens:
+        return False
+    overlap = candidate_tokens & allowed_tokens
+    novel_tokens = candidate_tokens - allowed_tokens
+    overlap_ratio = len(overlap) / max(1, len(candidate_tokens))
+    return len(novel_tokens) >= 3 and overlap_ratio < 0.25
+
+
 def _has_new_numeric_facts(candidate_blob: str, allowed_blob: str) -> bool:
     candidate_numbers = {token for token in candidate_blob.split() if any(symbol.isdigit() for symbol in token)}
     allowed_numbers = {token for token in allowed_blob.split() if any(symbol.isdigit() for symbol in token)}
     return not candidate_numbers.issubset(allowed_numbers)
 
 
-def _meaningful_words(text: str) -> set[str]:
-    words = {
-        chunk.casefold().strip(".,!?;:-()[]{}\"'")
-        for chunk in text.split()
+def _salient_tokens(lines: Iterable[str]) -> set[str]:
+    ignored = {
+        *GENERIC_REPLY_WORDS,
+        "понял",
+        "поняла",
+        "гляну",
+        "будет",
+        "буду",
+        "можно",
+        "нужно",
+        "пока",
+        "там",
+        "тут",
+        "этот",
+        "этим",
+        "этой",
+        "этого",
+        "через",
+        "после",
+        "перед",
+        "очень",
+        "тоже",
+        "уже",
+        "еще",
+        "ещё",
+        "привет",
     }
-    return {
-        word
-        for word in words
-        if len(word) >= 4 and word not in GENERIC_REPLY_WORDS
-    }
+    tokens: set[str] = set()
+    for line in lines:
+        for token in re.findall(r"[0-9a-zа-яё@._-]+", line.casefold()):
+            if len(token) < 4 or token in ignored or any(symbol.isdigit() for symbol in token):
+                continue
+            tokens.add(token)
+    return tokens
+
+
+def _format_saved_label(fallback_label: str) -> str:
+    if fallback_label.endswith("ая база"):
+        return f"сохранена {fallback_label}"
+    return f"сохранён {fallback_label}"
 
 
 def _build_reply_guardrail_config(

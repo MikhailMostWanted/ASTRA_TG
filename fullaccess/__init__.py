@@ -1,1 +1,1 @@
-"""Experimental read-only full-access layer."""
+"""Экспериментальный full-access слой для чтения истории и явной отправки."""

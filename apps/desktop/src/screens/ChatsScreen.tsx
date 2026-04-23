@@ -82,6 +82,7 @@ export function ChatsScreen() {
   const selectedChat = chatItems.find((item) => item.id === selectedChatId) || null;
   const selectedChatWorkspace = selectedChatId !== null ? chatWorkspace[selectedChatId] || null : null;
   const fullaccessReady = Boolean(fullaccessQuery.data?.status.readyForManualSync);
+  const fullaccessWriteReady = Boolean(fullaccessQuery.data?.status.readyForManualSend);
 
   const workspaceQuery = useQuery({
     queryKey: ["chat-workspace", selectedChatId],
@@ -122,8 +123,67 @@ export function ChatsScreen() {
       }
     },
   });
+  const sendMessageMutation = useMutation({
+    mutationFn: ({
+      chatId,
+      text,
+      sourceMessageId,
+    }: {
+      chatId: number;
+      text: string;
+      sourceMessageId: number | null;
+    }) =>
+      api.sendChatMessage(chatId, {
+        text,
+        source_message_id: sourceMessageId,
+        reply_to_source_message_id: sourceMessageId,
+      }),
+    onSuccess: async (payload, variables) => {
+      queryClient.setQueryData(["chat-workspace", variables.chatId], payload.workspace);
+      markReplySent(variables.chatId, variables.sourceMessageId);
+      clearReplyDraft(variables.chatId);
+      toast.success("Сообщение отправлено через Desktop.");
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["fullaccess"], type: "active" }),
+      ]);
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось отправить сообщение.");
+    },
+  });
+  const autopilotGlobalMutation = useMutation({
+    mutationFn: (enabled: boolean) => api.updateAutopilotGlobal({ master_enabled: enabled }),
+    onSuccess: async () => {
+      toast.success("Глобальный режим автопилота обновлён.");
+      await queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedChatId], exact: true });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось обновить master switch.");
+    },
+  });
+  const autopilotChatMutation = useMutation({
+    mutationFn: ({
+      chatId,
+      payload,
+    }: {
+      chatId: number;
+      payload: { trusted?: boolean; mode?: string };
+    }) => api.updateChatAutopilot(chatId, payload),
+    onSuccess: async (_payload, variables) => {
+      toast.success("Настройки автопилота для чата обновлены.");
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatId], exact: true }),
+        queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
+      ]);
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось обновить автопилот чата.");
+    },
+  });
   const messageItems = safeArray(workspaceQuery.data?.messages);
   const replyPayload = workspaceQuery.data?.reply ?? null;
+  const autopilotPayload = workspaceQuery.data?.autopilot ?? null;
   const freshness = workspaceQuery.data?.freshness ?? null;
 
   useEffect(() => {
@@ -256,10 +316,13 @@ export function ChatsScreen() {
 
       <ReplyPanel
         reply={replyPayload}
+        autopilot={autopilotPayload}
         freshness={freshness}
         workflowState={selectedChatWorkspace}
         loading={workspaceQuery.isLoading}
         refreshing={workspaceQuery.isFetching || syncChatMutation.isPending}
+        sending={sendMessageMutation.isPending}
+        autopilotUpdating={autopilotGlobalMutation.isPending || autopilotChatMutation.isPending}
         errorMessage={
           workspaceQuery.isError
             ? extractErrorMessage(workspaceQuery.error, "Не удалось собрать reply preview.")
@@ -285,6 +348,20 @@ export function ChatsScreen() {
           });
           toast.success("Черновик сохранён локально.");
         }}
+        onSend={(text, sourceMessageId) => {
+          if (selectedChatId === null) {
+            return;
+          }
+          if (!fullaccessWriteReady) {
+            toast.error("Режим записи выключен. Включи FULLACCESS_READONLY=false и авторизуй full-access.");
+            return;
+          }
+          sendMessageMutation.mutate({
+            chatId: selectedChatId,
+            text,
+            sourceMessageId,
+          });
+        }}
         onMarkSent={(sourceMessageId) => {
           if (selectedChatId === null) {
             return;
@@ -299,6 +376,15 @@ export function ChatsScreen() {
           }
           clearReplyDraft(selectedChatId);
           toast.success("Черновик очищен.");
+        }}
+        onUpdateAutopilotGlobal={(enabled) => {
+          autopilotGlobalMutation.mutate(enabled);
+        }}
+        onUpdateChatAutopilot={(payload) => {
+          if (selectedChatId === null) {
+            return;
+          }
+          autopilotChatMutation.mutate({ chatId: selectedChatId, payload });
         }}
       />
     </div>

@@ -130,12 +130,12 @@ class StartupValidationService:
                         title="provider layer",
                         ready=(not provider_status.enabled) or provider_status.configured,
                         detail=(
-                            "Provider layer выключен."
+                            "Слой провайдера выключен."
                             if not provider_status.enabled
                             else (
-                                f"Provider layer готов: {provider_status.provider_name or 'provider'}."
+                                f"Слой провайдера готов: {provider_status.provider_name or 'провайдер'}."
                                 if provider_status.configured
-                                else f"Provider layer не готов: {provider_status.reason}"
+                                else f"Слой провайдера не готов: {provider_status.reason}"
                             )
                         ),
                     )

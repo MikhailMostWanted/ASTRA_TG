@@ -62,7 +62,7 @@ class ProviderManager:
                     await self._record_provider_error(reason, stage="healthcheck")
             else:
                 available = True
-                reason = "Провайдер сконфигурирован, deterministic fallback остаётся активным."
+                reason = "Провайдер сконфигурирован, детерминированная база остаётся активной."
 
         reply_refine_enabled = bool(self.settings.llm_refine_reply_enabled)
         digest_refine_enabled = bool(self.settings.llm_refine_digest_enabled)
@@ -92,7 +92,7 @@ class ProviderManager:
         status = await self.get_status()
         if not self.settings.llm_refine_reply_enabled:
             return ProviderExecutionResult.failure(
-                "LLM refine для reply выключен.",
+                "LLM-улучшение ответов выключено.",
                 provider_name=status.provider_name,
             )
         if not status.enabled or not status.configured or self.provider is None:
@@ -109,7 +109,7 @@ class ProviderManager:
                 LOGGER,
                 30,
                 "provider.reply.failure",
-                "Provider rewrite_reply завершился с fallback.",
+                "Провайдер rewrite_reply завершился с откатом к базовому варианту.",
                 provider_name=status.provider_name,
                 reason=reason,
             )
@@ -129,7 +129,7 @@ class ProviderManager:
         status = await self.get_status()
         if not self.settings.llm_refine_digest_enabled:
             return ProviderExecutionResult.failure(
-                "LLM refine для digest выключен.",
+                "LLM-улучшение дайджеста выключено.",
                 provider_name=status.provider_name,
             )
         if not status.enabled or not status.configured or self.provider is None:
@@ -146,7 +146,7 @@ class ProviderManager:
                 LOGGER,
                 30,
                 "provider.digest.failure",
-                "Provider improve_digest завершился с fallback.",
+                "Провайдер improve_digest завершился с откатом к базовому дайджесту.",
                 provider_name=status.provider_name,
                 reason=reason,
             )
@@ -161,7 +161,7 @@ class ProviderManager:
 
     def _configuration_state(self) -> tuple[bool, str]:
         if not self.settings.llm_enabled:
-            return False, "Provider layer выключен через LLM_ENABLED=false."
+            return False, "Слой провайдера выключен через LLM_ENABLED=false."
         provider_name = _normalize(self.settings.llm_provider)
         if provider_name is None:
             return False, "LLM_PROVIDER не задан."

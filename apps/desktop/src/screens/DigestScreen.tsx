@@ -104,12 +104,12 @@ export function DigestScreen() {
               ? "fallback"
               : "deterministic"),
         label: lastRun.llmRefineApplied
-          ? "LLM refine"
+          ? "LLM-улучшение"
           : lastRun.llmDebug?.mode === "rejected_by_guardrails"
-            ? "Rejected by guardrails"
+            ? "Отклонён guardrails"
           : lastRun.llmRefineRequested
-            ? "Fallback"
-            : "Deterministic",
+            ? "Откат"
+            : "Детерминированный",
         provider: lastRun.llmRefineProvider,
         notes: lastRun.llmRefineNotes,
         debug: lastRun.llmDebug,

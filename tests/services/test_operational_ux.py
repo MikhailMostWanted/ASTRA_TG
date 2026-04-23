@@ -72,12 +72,12 @@ def test_help_message_groups_commands_by_section() -> None:
 
     assert "Настройка" in message
     assert "Источники" in message
-    assert "Digest" in message
+    assert "Дайджест" in message
     assert "Память" in message
     assert "Ответы" in message
     assert "Напоминания" in message
     assert "Провайдер" in message
-    assert "Full-access experimental" in message
+    assert "Full-access" in message
     assert "Диагностика" in message
     assert "/setup" in message
     assert "/onboarding" in message

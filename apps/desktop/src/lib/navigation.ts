@@ -29,19 +29,19 @@ export const navigationItems: NavigationItem[] = [
   {
     id: "chats",
     label: "Чаты",
-    description: "Основной рабочий экран с контекстом и reply preview.",
+    description: "Основной рабочий экран с контекстом, вариантами ответа и отправкой.",
     icon: MessageSquareText,
   },
   {
     id: "sources",
     label: "Источники",
-    description: "Локальные источники, sync и ручное добавление.",
+    description: "Локальные источники, синхронизация и ручное добавление.",
     icon: Waypoints,
   },
   {
     id: "fullaccess",
     label: "Full-access",
-    description: "Локальный read-only вход и ручная синхронизация истории.",
+    description: "Локальный вход, синхронизация истории и явная отправка.",
     icon: ShieldEllipsis,
   },
   {
@@ -53,13 +53,13 @@ export const navigationItems: NavigationItem[] = [
   {
     id: "digest",
     label: "Дайджест",
-    description: "Запуски digest и текущая точка доставки.",
+    description: "Запуски дайджеста и текущая точка доставки.",
     icon: Activity,
   },
   {
     id: "reminders",
     label: "Напоминания",
-    description: "Задачи, кандидаты и delivery pipeline.",
+    description: "Задачи, кандидаты и контур доставки.",
     icon: ListTodo,
   },
   {

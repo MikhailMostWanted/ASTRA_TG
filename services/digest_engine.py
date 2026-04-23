@@ -165,7 +165,7 @@ class DigestEngineService:
                     LOGGER,
                     30,
                     "digest.provider.fallback",
-                    "Digest provider improve не применён, оставлен deterministic digest.",
+                    "Улучшение дайджеста провайдером не применено, оставлен детерминированный дайджест.",
                     provider_name=llm_provider_name,
                 )
         rendered = self.formatter.format(build_result)
@@ -254,13 +254,13 @@ class DigestEngineService:
         label = "Детерминированный"
         if llm_applied:
             mode = "llm_refine"
-            label = "LLM refine"
+            label = "LLM-улучшение"
         elif llm_requested and llm_decision_reason is not None and llm_decision_reason.source == "guardrails":
             mode = "rejected_by_guardrails"
-            label = "Rejected by guardrails"
+            label = "Отклонён guardrails"
         elif llm_requested:
             mode = "fallback"
-            label = "Fallback на deterministic"
+            label = "Откат к детерминированному"
 
         await self.setting_repository.set_value(
             key="digest.last_run_meta",

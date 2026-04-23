@@ -26,7 +26,7 @@ class FullAccessFormatter:
         lines = [
             "🧪 Full-access",
             "",
-            "Экспериментальный read-only слой для ручной синхронизации.",
+            "Локальный слой для чтения истории и явной ручной отправки.",
             (
                 "Статус: авторизован."
                 if report.authorized
@@ -34,6 +34,7 @@ class FullAccessFormatter:
             ),
             f"Сессия: {'есть' if report.session_exists else 'нет'}.",
             f"Ручная синхронизация: {'готова' if report.ready_for_manual_sync else 'пока не готова'}.",
+            f"Ручная отправка: {'готова' if report.ready_for_manual_send else 'выключена или не готова'}.",
             "",
             "Следующий шаг",
             _next_step(report),
@@ -60,9 +61,9 @@ class FullAccessFormatter:
                 "да" if report.authorized else "нет",
             ),
             format_status_line(
-                _marker(report.enabled, report.effective_readonly),
-                "Read-only",
-                "активен" if report.effective_readonly else "не активен",
+                _marker(report.enabled, not report.effective_readonly),
+                "Режим записи",
+                "доступен" if not report.effective_readonly else "выключен",
             ),
             format_status_line(MARKER_OK, "Лимит синхронизации", str(report.sync_limit)),
             format_status_line(
@@ -102,7 +103,7 @@ class FullAccessFormatter:
             "",
             f"{marker} {headers.get(result.kind, 'Операция завершена.').rstrip('.')}",
             "Код в бот отправлять не нужно.",
-            "Авторизация нужна только для ручной read-only синхронизации.",
+            "Авторизация нужна только для локального full-access чтения и явной отправки.",
         ]
         if result.phone:
             lines.extend(
@@ -122,7 +123,7 @@ class FullAccessFormatter:
                 *state_shell_lines(
                     marker=MARKER_OK,
                     status="Локальный logout завершён",
-                    meaning="User-session очищена только локально.",
+                    meaning="Пользовательская сессия очищена только локально.",
                     next_step="Открой Full-access и нажми «Обновить».",
                 ),
                 "",
@@ -182,7 +183,7 @@ class FullAccessFormatter:
     def format_sync_result(self, result: FullAccessSyncResult) -> str:
         return "\n".join(
             [
-                "🧪 Sync завершён",
+                "🧪 Синхронизация завершена",
                 "",
                 "История подтянута локально и безопасно.",
                 f"Новых сообщений: {result.created_count}.",

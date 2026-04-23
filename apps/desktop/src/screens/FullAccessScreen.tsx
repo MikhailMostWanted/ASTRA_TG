@@ -49,6 +49,7 @@ export function FullAccessScreen() {
     syncedChatCount: 0,
     syncedMessageCount: 0,
     readyForManualSync: false,
+    readyForManualSend: false,
     reason: "Статус full-access пока недоступен.",
     sessionPath: "—",
   };
@@ -95,7 +96,7 @@ export function FullAccessScreen() {
   const logoutMutation = useMutation({
     mutationFn: api.logoutFullaccess,
     onSuccess: async () => {
-      toast.success("Локальная full-access session очищена.");
+      toast.success("Локальная full-access сессия очищена.");
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["fullaccess"] }),
         queryClient.invalidateQueries({ queryKey: ["fullaccess-chats"] }),
@@ -172,10 +173,10 @@ export function FullAccessScreen() {
         <div className="border-b border-white/7 px-4 py-4">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Desktop auth</div>
+              <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Локальный вход</div>
               <div className="text-base font-semibold text-white">Full-access без терминала</div>
               <div className="mt-1 text-sm leading-6 text-slate-400">
-                {overview.onboarding || "Desktop-path для full-access авторизации и sync."}
+                {overview.onboarding || "Путь через Desktop для full-access авторизации и синхронизации."}
               </div>
             </div>
 
@@ -190,7 +191,7 @@ export function FullAccessScreen() {
                 disabled={!status?.sessionExists || logoutMutation.isPending}
               >
                 {logoutMutation.isPending ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <LogOut data-icon="inline-start" />}
-                Logout
+                Выйти
               </Button>
             </div>
           </div>
@@ -206,9 +207,9 @@ export function FullAccessScreen() {
                 icon={<ShieldCheck className="size-4" />}
               />
               <StatusMetric
-                label="Read-only"
-                value={status?.effectiveReadonly ? "да" : "нет"}
-                note={`Sync limit: ${status?.syncLimit || 0}`}
+                label="Режим записи"
+                value={status?.effectiveReadonly ? "выключен" : "доступен"}
+                note={`Лимит синхронизации: ${status?.syncLimit || 0}`}
                 icon={<Sparkles className="size-4" />}
               />
               <StatusMetric
@@ -218,7 +219,7 @@ export function FullAccessScreen() {
                 icon={<MessageSquareText className="size-4" />}
               />
               <StatusMetric
-                label="Session"
+                label="Сессия"
                 value={status?.sessionExists ? "найдена" : "нет"}
                 note={status?.sessionPath || "—"}
                 icon={<KeyRound className="size-4" />}
@@ -228,7 +229,7 @@ export function FullAccessScreen() {
             <div className="rounded-[24px] border border-white/7 bg-black/16 p-4">
               <div className="text-sm font-medium text-white">Шаг 1. Запросить код</div>
               <div className="mt-1 text-sm leading-6 text-slate-400">
-                Если `FULLACCESS_PHONE` и API credentials настроены, код прилетит в Telegram и останется внутри desktop flow.
+                Если `FULLACCESS_PHONE` и ключи API настроены, код придёт в Telegram и останется внутри desktop-потока.
               </div>
               <div className="mt-4">
                 <Button
@@ -271,8 +272,8 @@ export function FullAccessScreen() {
             </div>
 
             <div className="rounded-[24px] border border-amber-300/12 bg-amber-300/8 p-4 text-sm leading-6 text-amber-50">
-              <div className="font-medium">CLI fallback остаётся резервным</div>
-              <div className="mt-1">{instructions.join(" ") || "Если UI-path недоступен, можно использовать CLI fallback."}</div>
+              <div className="font-medium">CLI остаётся резервным путём</div>
+              <div className="mt-1">{instructions.join(" ") || "Если путь через интерфейс недоступен, можно использовать CLI."}</div>
               <div className="mt-2 rounded-[18px] border border-white/8 bg-black/18 px-3 py-2 font-mono text-xs text-slate-100">
                 {overview.localLoginCommand}
               </div>
@@ -285,21 +286,21 @@ export function FullAccessScreen() {
         <div className="border-b border-white/7 px-4 py-4">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Sync roster</div>
+              <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Список синхронизации</div>
               <div className="text-base font-semibold text-white">Чаты для синхронизации</div>
               <div className="mt-1 text-sm leading-6 text-slate-400">
-                После авторизации здесь доступны ручной sync по chat list или по точному reference.
+                После авторизации здесь доступны ручная синхронизация по списку чатов или по точной ссылке.
               </div>
             </div>
             <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-              lim {status?.syncLimit}
+              лимит {status?.syncLimit}
             </Badge>
           </div>
 
           <div className="mt-4">
             <Input
               className="border-white/8 bg-black/18 text-slate-100 placeholder:text-slate-500"
-              placeholder="Поиск по имени, reference или типу"
+              placeholder="Поиск по имени, ссылке или типу"
               value={chatSearch}
               onChange={(event) => setChatSearch(event.currentTarget.value)}
               disabled={!status?.readyForManualSync}
@@ -312,7 +313,7 @@ export function FullAccessScreen() {
             {!status?.readyForManualSync ? (
               <EmptyState
                 title="Сначала заверши вход"
-                description={status?.reason || "Desktop ждёт авторизацию, прежде чем показывать чат-лист."}
+                description={status?.reason || "Desktop ждёт авторизацию, прежде чем показывать список чатов."}
               />
             ) : null}
 
@@ -353,7 +354,7 @@ export function FullAccessScreen() {
                     onClick={() => syncMutation.mutate(item.reference)}
                     disabled={syncMutation.isPending}
                   >
-                    Sync
+                    Синхронизировать
                   </Button>
                 </div>
               </div>
@@ -362,7 +363,7 @@ export function FullAccessScreen() {
         </ScrollArea>
 
         <div className="border-t border-white/7 px-4 py-4">
-          <div className="text-sm font-medium text-white">Точный sync по reference</div>
+          <div className="text-sm font-medium text-white">Точная синхронизация по ссылке</div>
           <div className="mt-1 text-sm leading-6 text-slate-400">
             Если нужный чат не попал в видимый список, укажи `@username` или `chat_id` вручную.
           </div>

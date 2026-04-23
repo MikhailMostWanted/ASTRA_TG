@@ -19,16 +19,30 @@ def build_reply_refine_request(
     baseline_messages: tuple[str, ...],
     style_selection,
     persona_state: PersonaState,
+    few_shot_support=None,
+    classification=None,
 ) -> RewriteReplyRequest:
-    recent_messages = tuple(context.recent_messages[-MAX_CONTEXT_MESSAGES:])
+    recent_messages = tuple(context.working_messages[-MAX_CONTEXT_MESSAGES:])
     context_lines = [
         f"Чат: {context.chat.title}",
+        f"Фокус: {context.focus_label}",
         f"Последнее входящее: {context.target_message.sender_name or 'собеседник'}: {context.target_message.normalized_text or context.target_message.raw_text}",
+        f"Почему сейчас: {context.reply_opportunity_reason}",
     ]
+    if classification is not None:
+        context_lines.append(f"Ситуация: {classification.situation}")
     if context.chat_memory and context.chat_memory.current_state:
         context_lines.append(f"Текущее состояние: {context.chat_memory.current_state}")
     if context.pending_loops:
         context_lines.append("Открытые хвосты: " + "; ".join(context.pending_loops[:2]))
+    if context.unanswered_questions:
+        context_lines.append("Незакрытые вопросы: " + "; ".join(context.unanswered_questions[:2]))
+    if context.pending_promises:
+        context_lines.append("Твои обещания/апдейты: " + "; ".join(context.pending_promises[:2]))
+    if context.emotional_signals:
+        context_lines.append("Эмоциональные сигналы: " + "; ".join(context.emotional_signals[:2]))
+    if context.local_dynamics:
+        context_lines.append("Динамика: " + "; ".join(context.local_dynamics[:2]))
     if context.person_memory and context.person_memory.interaction_pattern:
         context_lines.append(
             "Паттерн контакта: " + context.person_memory.interaction_pattern
@@ -40,6 +54,7 @@ def build_reply_refine_request(
         if (message.normalized_text or message.raw_text)
     ]
     baseline_lines = [f"- {message}" for message in baseline_messages]
+    retrieval_lines = _collect_reply_examples(few_shot_support)
     persona_constraints = _collect_persona_constraints(persona_state)
     style_constraints = _collect_style_constraints(style_selection.profile)
 
@@ -51,10 +66,13 @@ def build_reply_refine_request(
             "Последние сообщения:",
             *(recent_lines or ["- нет"]),
             "",
-            "Baseline reply:",
+            "Базовый вариант:",
             *baseline_lines,
             "",
-            "Style constraints:",
+            "Похожие реальные ответы:",
+            *(retrieval_lines or ["- нет"]),
+            "",
+            "Ограничения стиля:",
             *style_constraints,
             "",
             "Persona constraints:",
@@ -62,10 +80,15 @@ def build_reply_refine_request(
         ]
     )
     system_instructions = (
-        "Ты только слегка refine-ишь уже готовый Telegram baseline reply. "
-        "Не меняй смысл, не придумывай факты, числа, сроки, имена или обещания. "
-        "Сохрани Telegram-ритм: 1-4 коротких сообщения, lower-case, без литературщины и канцелярита. "
-        "Ответь только финальной серией сообщений, каждое с новой строки."
+        "Ты пишешь живой ответ в обычном Telegram-чате от лица владельца аккаунта. "
+        "Не играй ассистента. Никакого канцелярита, литературщины, markdown и пояснений. "
+        "Опирайся только на контекст, открытые хвосты и стиль из примеров. "
+        "Не придумывай новые факты, сроки, числа, имена, обещания, ссылки или @username. "
+        "Верни только JSON-объект вида "
+        "{\"primary\": [str], \"short\": [str], \"soft\": [str], \"style\": [str]}. "
+        "В каждом поле 1-4 коротких телеграм-сообщения. "
+        "\"primary\" — лучший вариант, \"short\" — заметно короче, \"soft\" — мягче, "
+        "\"style\" — в более разговорной и каскадной манере владельца."
     )
     allowed_context = tuple(context_lines + recent_lines + baseline_lines)
     return RewriteReplyRequest(
@@ -73,7 +96,7 @@ def build_reply_refine_request(
             task=ProviderTask.REWRITE_REPLY,
             system_instructions=system_instructions,
             user_input=user_input,
-            response_format="text",
+            response_format="json",
         ),
         baseline_messages=baseline_messages,
         allowed_context=allowed_context,
@@ -85,7 +108,7 @@ def build_digest_improve_request(
     build_result: DigestBuildResult,
 ) -> DigestImproveRequest:
     summary_lines = [
-        "Текущий deterministic digest:",
+        "Текущий детерминированный дайджест:",
         f"summary_short: {build_result.summary_short}",
         "",
         "overview_lines:",
@@ -98,7 +121,7 @@ def build_digest_improve_request(
         *[f"- {source.display_title}" for source in build_result.source_summaries],
     ]
     system_instructions = (
-        "Ты улучшаешь wording deterministic digest, но не меняешь факты. "
+        "Ты улучшаешь формулировки детерминированного дайджеста, но не меняешь факты. "
         "Нельзя придумывать новые события, числа, сроки, источники или выводы. "
         "Сохрани source titles буквально. "
         "Верни только JSON-объект вида "
@@ -155,3 +178,14 @@ def _collect_persona_constraints(persona_state: PersonaState) -> tuple[str, ...]
             else "- rewrite_constraints: нет"
         ),
     )
+
+
+def _collect_reply_examples(few_shot_support) -> tuple[str, ...]:
+    if few_shot_support is None or not few_shot_support.support_used:
+        return ()
+    lines: list[str] = []
+    for index, match in enumerate(few_shot_support.matches[:3], start=1):
+        lines.append(
+            f"- пример {index}: входящее={match.inbound_text} | реальный ответ={match.outbound_text}"
+        )
+    return tuple(lines)

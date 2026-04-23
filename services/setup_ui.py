@@ -703,9 +703,9 @@ class SetupUIService:
     async def _build_fullaccess_card(self) -> RenderedCard:
         status = await self.fullaccess_auth_service.build_status_report()
         summary_lines = [
-            "🧪 Экспериментальный read-only слой для ручной синхронизации.",
+            "🧪 Локальный слой для чтения истории и явной ручной отправки.",
             f"Статус: {'авторизован' if status.authorized else 'не авторизован'}.",
-            f"Session: {'есть' if status.session_exists else 'нет'}.",
+            f"Сессия: {'есть' if status.session_exists else 'нет'}.",
             f"Синхронизировано: {status.synced_chat_count} чатов, {status.synced_message_count} сообщений.",
         ]
         detail_lines = [
@@ -716,13 +716,13 @@ class SetupUIService:
                 "авторизован" if status.authorized else "не авторизован",
             ),
             _line(
-                _fullaccess_detail_marker(status.enabled, status.effective_readonly),
-                "Read-only барьер",
-                "активен" if status.effective_readonly else "не активен",
+                _fullaccess_detail_marker(status.enabled, not status.effective_readonly),
+                "Режим записи",
+                "доступен" if not status.effective_readonly else "выключен",
             ),
             _line(
                 _fullaccess_detail_marker(status.enabled, status.session_exists),
-                "Session",
+                "Сессия",
                 "есть" if status.session_exists else "нет",
             ),
             _line(
@@ -1109,7 +1109,7 @@ class SetupUIService:
 
     async def sync_fullaccess_chat(self, *, reference: str) -> RenderedCard:
         formatter = FullAccessFormatter()
-        title = "🧪 Sync завершён"
+        title = "🧪 Синхронизация завершена"
         try:
             result = await self._build_fullaccess_sync_service().sync_chat(reference)
             lines = _body_lines(formatter.format_sync_result(result), title=title)

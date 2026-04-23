@@ -30,7 +30,7 @@ class FullAccessConfig:
             session_string=settings.fullaccess_session_string,
             phone=settings.fullaccess_phone,
             requested_readonly=settings.fullaccess_readonly,
-            effective_readonly=True,
+            effective_readonly=bool(settings.fullaccess_readonly),
             sync_limit=max(1, int(settings.fullaccess_sync_limit)),
         )
 
@@ -45,6 +45,10 @@ class FullAccessConfig:
     @property
     def uses_session_string(self) -> bool:
         return bool(self.session_string and self.session_string.strip())
+
+    @property
+    def write_enabled(self) -> bool:
+        return self.enabled and not self.effective_readonly
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +74,7 @@ class FullAccessStatusReport:
     synced_chat_count: int
     synced_message_count: int
     ready_for_manual_sync: bool
+    ready_for_manual_send: bool
     reason: str
 
 
@@ -122,6 +127,12 @@ class FullAccessRemoteMessage:
     media_type: str | None
     entities_json: list[dict[str, Any]] | dict[str, Any] | None
     source_type: str
+
+
+@dataclass(frozen=True, slots=True)
+class FullAccessSendResult:
+    chat: FullAccessChatSummary
+    message: FullAccessRemoteMessage
 
 
 @dataclass(frozen=True, slots=True)

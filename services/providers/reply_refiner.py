@@ -6,6 +6,7 @@ from services.providers.guardrails import ReplyRefinementGuardrails
 from services.providers.manager import ProviderManager
 from services.providers.models import LLMDecisionReason, ReplyRefinementCandidate
 from services.providers.prompts import build_reply_refine_request
+from services.reply_models import ReplyVariant
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +20,7 @@ class ReplyRefinementOutcome:
     baseline_messages: tuple[str, ...] = ()
     raw_candidate_text: str | None = None
     decision_reason: LLMDecisionReason | None = None
+    variants: tuple[ReplyVariant, ...] = ()
 
 
 @dataclass(slots=True)
@@ -33,12 +35,16 @@ class ReplyLLMRefiner:
         style_selection,
         persona_state,
         baseline_messages: tuple[str, ...],
+        few_shot_support=None,
+        classification=None,
     ) -> ReplyRefinementOutcome:
         request = build_reply_refine_request(
             context=context,
             baseline_messages=baseline_messages,
             style_selection=style_selection,
             persona_state=persona_state,
+            few_shot_support=few_shot_support,
+            classification=classification,
         )
         execution = await self.provider_manager.rewrite_reply(request)
         provider_name = execution.provider_name
@@ -58,7 +64,7 @@ class ReplyLLMRefiner:
                 decision_reason=LLMDecisionReason(
                     source="provider",
                     code="provider_fallback",
-                    summary="LLM refine не применён.",
+                    summary="LLM-улучшение не применено.",
                     detail=detail,
                 ),
             )
@@ -83,6 +89,7 @@ class ReplyLLMRefiner:
                 baseline_messages=baseline_messages,
                 raw_candidate_text=execution.value.raw_text,
                 decision_reason=decision.rejection,
+                variants=_convert_variants(execution.value),
             )
         return ReplyRefinementOutcome(
             requested=True,
@@ -93,4 +100,29 @@ class ReplyLLMRefiner:
             provider_name=provider_name,
             baseline_messages=baseline_messages,
             raw_candidate_text=execution.value.raw_text,
+            variants=_convert_variants(execution.value),
         )
+
+
+def _convert_variants(candidate: ReplyRefinementCandidate) -> tuple[ReplyVariant, ...]:
+    labels = {
+        "primary": ("Основной", "Главный живой вариант для отправки."),
+        "short": ("Короче", "Более короткая версия без воды."),
+        "soft": ("Мягче", "Более мягкая и аккуратная подача."),
+        "style": ("В моём стиле", "Более разговорный и каскадный ритм."),
+    }
+    variants: list[ReplyVariant] = []
+    for item in candidate.variants:
+        cleaned = "\n".join(line.strip() for line in item.text.splitlines() if line.strip()).strip()
+        if not cleaned:
+            continue
+        label, description = labels.get(item.id, ("Вариант", "Рабочая версия ответа."))
+        variants.append(
+            ReplyVariant(
+                id=item.id,
+                label=label,
+                description=description,
+                text=cleaned,
+            )
+        )
+    return tuple(variants)

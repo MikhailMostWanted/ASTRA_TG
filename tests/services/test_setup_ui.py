@@ -438,8 +438,8 @@ def test_stage2_optional_overview_screens_render_provider_fullaccess_and_ops(
             )
 
             assert "🧪 Full-access" in fullaccess_card.text
-            assert "Read-only барьер: активен" in fullaccess_card.text
-            assert "Session: есть" in fullaccess_card.text
+            assert "Режим записи: выключен" in fullaccess_card.text
+            assert "Сессия: есть" in fullaccess_card.text
             assert {"Статус", "Локальный вход", "Чаты", "Синхронизировать", "Домой", "Обновить"}.issubset(
                 set(_keyboard_texts(fullaccess_card.reply_markup))
             )

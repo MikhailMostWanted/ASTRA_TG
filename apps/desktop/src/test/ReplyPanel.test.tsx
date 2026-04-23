@@ -62,6 +62,7 @@ describe("ReplyPanel", () => {
               copy: true,
               refresh: true,
               pasteToTelegram: false,
+              send: false,
               markSent: false,
               variants: {},
               disabledReason: null,
@@ -100,9 +101,9 @@ describe("ReplyPanel", () => {
               llmRefineGuardrailFlags: ["слишком_литературно"],
               llmStatus: {
                 mode: "rejected_by_guardrails",
-                label: "Rejected by guardrails",
+                label: "Отклонён guardrails",
                 provider: "openai_compatible",
-                detail: "Сработали guardrails: слишком_литературно. Сохранён deterministic baseline.",
+                detail: "Сработали guardrails: слишком_литературно. Сохранена детерминированная база.",
               },
               llmDebug: {
                 mode: "rejected_by_guardrails",
@@ -113,7 +114,7 @@ describe("ReplyPanel", () => {
                   source: "guardrails",
                   code: "guardrails_rejected",
                   summary: "LLM-кандидат для reply отклонён guardrails.",
-                  detail: "Сработали guardrails: слишком_литературно. Сохранён deterministic baseline.",
+                  detail: "Сработали guardrails: слишком_литературно. Сохранена детерминированная база.",
                   flags: ["слишком_литературно"],
                 },
               },
@@ -137,14 +138,14 @@ describe("ReplyPanel", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByText("Debug / details")).toBeInTheDocument();
-    expect(screen.queryByText("Raw LLM candidate")).not.toBeInTheDocument();
+    expect(screen.getByText("Отладка / детали")).toBeInTheDocument();
+    expect(screen.queryByText("Сырой LLM-кандидат")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /Debug \/ details/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Отладка \/ детали/i }));
 
-    expect(screen.getByText("Raw LLM candidate")).toBeInTheDocument();
+    expect(screen.getByText("Сырой LLM-кандидат")).toBeInTheDocument();
     expect(screen.getAllByText(/слишком_литературно/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/deterministic baseline/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/детерминированная база/i).length).toBeGreaterThan(0);
   });
 
   it("deduplicates sender prefix in trigger preview", () => {
@@ -163,6 +164,7 @@ describe("ReplyPanel", () => {
               copy: true,
               refresh: true,
               pasteToTelegram: false,
+              send: false,
               markSent: false,
               variants: {},
               disabledReason: null,
@@ -234,6 +236,7 @@ describe("ReplyPanel", () => {
               copy: true,
               refresh: true,
               pasteToTelegram: false,
+              send: false,
               markSent: false,
               variants: {},
               disabledReason: null,
