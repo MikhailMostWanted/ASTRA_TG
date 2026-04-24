@@ -13,7 +13,7 @@ import {
   normalizeWorkspaceStatusPayload,
   safeArray,
 } from "@/lib/runtime-guards";
-import type { ChatSendPayload, MessageItem } from "@/lib/types";
+import type { ChatSendPayload, ChatWorkspacePayload, MessageItem } from "@/lib/types";
 import { useAppStore } from "@/stores/app-store";
 
 const CHAT_POLL_MS = 6_000;
@@ -58,9 +58,11 @@ export function ChatsScreen() {
     timestamp: string;
     tone: "success" | "error" | "pending" | "warning";
   } | null>(null);
+  const rosterQueryKey = ["chats", deferredSearch, filter, sort] as const;
+  const workspaceQueryKey = ["chat-workspace", selectedChatKey] as const;
 
   const chatsQuery = useQuery({
-    queryKey: ["chats", deferredSearch, filter, sort],
+    queryKey: rosterQueryKey,
     queryFn: () =>
       api.chats({
         search: deferredSearch,
@@ -105,7 +107,7 @@ export function ChatsScreen() {
   const fullaccessReady = Boolean(fullaccessQuery.data?.status.readyForManualSync);
 
   const workspaceQuery = useQuery({
-    queryKey: ["chat-workspace", selectedChat?.chatKey],
+    queryKey: workspaceQueryKey,
     queryFn: () => {
       if (!selectedChat) {
         throw new Error("Активный чат не выбран.");
@@ -113,10 +115,61 @@ export function ChatsScreen() {
       return api.chatWorkspace(selectedChat.id, 60);
     },
     enabled: selectedChat !== null,
-    refetchInterval:
-      selectedChat?.syncStatus === "fullaccess"
+    refetchInterval: (query) => {
+      const data = query.state.data as ChatWorkspacePayload | undefined;
+      if (data?.live?.paused) {
+        return false;
+      }
+      return selectedChat?.syncStatus === "fullaccess"
         ? FULLACCESS_WORKSPACE_POLL_MS
-        : LOCAL_WORKSPACE_POLL_MS,
+        : LOCAL_WORKSPACE_POLL_MS;
+    },
+  });
+
+  const refreshRosterMutation = useMutation({
+    mutationFn: () => api.refreshLiveRoster({ search: deferredSearch, filter, sort }),
+    onSuccess: (payload) => {
+      queryClient.setQueryData(rosterQueryKey, payload);
+      toast.success("Roster обновлён.");
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось обновить roster.");
+    },
+  });
+
+  const refreshLiveWorkspaceMutation = useMutation({
+    mutationFn: ({ chatId }: { chatId: number; chatKey: string }) =>
+      api.refreshLiveChatWorkspace(chatId, 60),
+    onSuccess: (payload, variables) => {
+      queryClient.setQueryData(["chat-workspace", variables.chatKey], payload);
+      toast.success("Активный чат обновлён.");
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось обновить активный чат.");
+    },
+  });
+
+  const pauseLiveMutation = useMutation({
+    mutationFn: ({ chatId, paused }: { chatId: number; chatKey: string; paused: boolean }) =>
+      api.pauseLiveChat(chatId, paused),
+    onSuccess: async (_payload, variables) => {
+      toast.success(variables.paused ? "Live активного чата на паузе." : "Live активного чата включён.");
+      await queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось переключить live.");
+    },
+  });
+
+  const clearLiveErrorMutation = useMutation({
+    mutationFn: ({ chatId }: { chatId: number; chatKey: string }) => api.clearLiveChatError(chatId),
+    onSuccess: async (_payload, variables) => {
+      toast.success("Live error очищен.");
+      await queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось очистить live error.");
+    },
   });
 
   const syncChatMutation = useMutation({
@@ -139,7 +192,7 @@ export function ChatsScreen() {
         );
       }
       await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: rosterQueryKey, exact: true }),
         queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
         queryClient.refetchQueries({ queryKey: ["fullaccess"], type: "active" }),
       ]);
@@ -195,7 +248,7 @@ export function ChatsScreen() {
       setManualSendStatus(buildManualSendStatus(payload));
       toast.success(payload.fallback.used ? "Сообщение отправлено через fallback." : "Сообщение отправлено через Desktop.");
       await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: rosterQueryKey, exact: true }),
         queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
         queryClient.refetchQueries({ queryKey: ["fullaccess"], type: "active" }),
       ]);
@@ -249,7 +302,7 @@ export function ChatsScreen() {
       toast.success("Настройки автопилота для чата обновлены.");
       await Promise.all([
         queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
-        queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: rosterQueryKey, exact: true }),
       ]);
     },
     onError: (error) => {
@@ -281,7 +334,7 @@ export function ChatsScreen() {
       setOlderMessages([]);
       toast.success("Полуавтомат отправил сообщение после confirm.");
       await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: rosterQueryKey, exact: true }),
         queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
       ]);
     },
@@ -296,6 +349,8 @@ export function ChatsScreen() {
   const autopilotPayload = workspaceQuery.data?.autopilot ?? null;
   const freshness = workspaceQuery.data?.freshness ?? null;
   const workspaceStatus = normalizeWorkspaceStatusPayload(workspaceQuery.data?.status);
+  const liveState = workspaceQuery.data?.live ?? workspaceStatus?.live ?? null;
+  const rosterLiveState = chatsQuery.data?.live ?? rosterState?.live ?? null;
   const activeChat =
     selectedChat && workspaceQuery.data?.chat
       ? {
@@ -341,7 +396,7 @@ export function ChatsScreen() {
       return;
     }
     lastWorkspaceSyncAtRef.current = nextSyncAt;
-    void queryClient.refetchQueries({ queryKey: ["chats"], type: "active" });
+    void queryClient.refetchQueries({ queryKey: rosterQueryKey, exact: true });
   }, [freshness?.lastSyncAt, queryClient, selectedChat]);
 
   const loadOlderMessages = async () => {
@@ -389,11 +444,16 @@ export function ChatsScreen() {
       }
     }
 
-    await Promise.all([
-      queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
-      queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedChat?.chatKey], exact: true }),
-    ]);
-    toast.success("Контекст обновлён.");
+    if (selectedChat) {
+      await refreshLiveWorkspaceMutation.mutateAsync({
+        chatId: selectedChat.id,
+        chatKey: selectedChat.chatKey,
+      });
+    }
+  };
+
+  const refreshRoster = async () => {
+    await refreshRosterMutation.mutateAsync();
   };
 
   const syncIndicator =
@@ -448,17 +508,18 @@ export function ChatsScreen() {
         favorites={favoriteChatIds}
         workspaceStateByChat={chatWorkspace}
         loading={chatsQuery.isLoading}
-        refreshing={chatsQuery.isFetching || syncChatMutation.isPending}
+        refreshing={chatsQuery.isFetching || syncChatMutation.isPending || refreshRosterMutation.isPending}
         refreshedAt={chatsQuery.data?.refreshedAt || null}
         syncIndicator={syncIndicator}
         roster={rosterState}
+        live={rosterLiveState}
         onSearchChange={setSearch}
         onFilterChange={setFilter}
         onSortChange={setSort}
         onSelectChat={setSelectedChatKey}
         onToggleFavorite={toggleFavoriteChat}
         onRefresh={() => {
-          void refreshWorkspace();
+          void refreshRoster();
         }}
       />
 
@@ -466,13 +527,14 @@ export function ChatsScreen() {
         chat={activeChat}
         messages={messageItems}
         loading={workspaceQuery.isLoading}
-        refreshing={workspaceQuery.isFetching || syncChatMutation.isPending}
+        refreshing={workspaceQuery.isFetching || syncChatMutation.isPending || refreshLiveWorkspaceMutation.isPending}
         fullaccessReady={fullaccessReady}
         workspaceStatus={workspaceStatus}
         canLoadOlder={Boolean(workspaceStatus?.availability.canLoadOlder)}
         loadingOlder={loadingOlder}
         lastUpdatedAt={workspaceQuery.data?.refreshedAt || chatsQuery.data?.refreshedAt || null}
         freshness={freshness}
+        live={liveState}
         errorMessage={
           workspaceQuery.isError
             ? extractErrorMessage(workspaceQuery.error, "Не удалось загрузить рабочий контекст чата.")
@@ -483,6 +545,25 @@ export function ChatsScreen() {
         }}
         onRefresh={() => {
           void refreshWorkspace();
+        }}
+        onToggleLivePause={() => {
+          if (!selectedChat) {
+            return;
+          }
+          pauseLiveMutation.mutate({
+            chatId: selectedChat.id,
+            chatKey: selectedChat.chatKey,
+            paused: !liveState?.paused,
+          });
+        }}
+        onClearLiveError={() => {
+          if (!selectedChat) {
+            return;
+          }
+          clearLiveErrorMutation.mutate({
+            chatId: selectedChat.id,
+            chatKey: selectedChat.chatKey,
+          });
         }}
         onSyncChat={() => {
           if (!selectedChat) {
@@ -506,10 +587,11 @@ export function ChatsScreen() {
         replyContext={replyContext}
         autopilot={autopilotPayload}
         freshness={freshness}
+        live={liveState}
         workspaceStatus={workspaceStatus}
         workflowState={selectedChatWorkspace}
         loading={workspaceQuery.isLoading}
-        refreshing={workspaceQuery.isFetching || syncChatMutation.isPending}
+        refreshing={workspaceQuery.isFetching || syncChatMutation.isPending || refreshLiveWorkspaceMutation.isPending}
         sending={sendMessageMutation.isPending}
         sendStatus={manualSendStatus}
         autopilotUpdating={autopilotGlobalMutation.isPending || autopilotChatMutation.isPending || autopilotConfirmMutation.isPending}

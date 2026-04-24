@@ -124,6 +124,12 @@ describe("ChatList", () => {
             reason: "legacy remains effective",
           },
         }}
+        live={{
+          scope: "roster",
+          status: "refreshed",
+          degraded: false,
+          changedItemCount: 2,
+        }}
         onSearchChange={vi.fn()}
         onFilterChange={vi.fn()}
         onSortChange={vi.fn()}
@@ -135,6 +141,7 @@ describe("ChatList", () => {
 
     expect(screen.getByText("fallback на legacy")).toBeInTheDocument();
     expect(screen.getByText("fallback")).toBeInTheDocument();
+    expect(screen.getByText("roster live +2")).toBeInTheDocument();
     expect(screen.getByText("Новый runtime временно деградировал, поэтому roster обслуживается legacy.")).toBeInTheDocument();
     expect(screen.getByText("3 непрочит.")).toBeInTheDocument();
   });

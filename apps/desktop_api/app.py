@@ -101,6 +101,10 @@ class AutopilotPauseRequest(BaseModel):
     paused: bool = True
 
 
+class LivePauseRequest(BaseModel):
+    paused: bool = True
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -246,6 +250,44 @@ def create_app(
             ),
         )
 
+    @app.get("/api/live/roster")
+    async def live_roster(
+        search: str | None = None,
+        filter_key: str = Query(default="all", alias="filter"),
+        sort_key: str = Query(default="activity", alias="sort"),
+    ) -> dict[str, Any]:
+        return await _call_with_value_error(
+            app,
+            lambda: _bridge(app).get_live_roster(
+                search=search,
+                filter_key=filter_key,
+                sort_key=sort_key,
+            ),
+        )
+
+    @app.post("/api/live/roster/refresh")
+    async def live_roster_refresh(
+        search: str | None = None,
+        filter_key: str = Query(default="all", alias="filter"),
+        sort_key: str = Query(default="activity", alias="sort"),
+    ) -> dict[str, Any]:
+        return await _call_with_value_error(
+            app,
+            lambda: _bridge(app).refresh_live_roster(
+                search=search,
+                filter_key=filter_key,
+                sort_key=sort_key,
+            ),
+        )
+
+    @app.get("/api/live/activity")
+    async def live_activity(limit: int = Query(default=12, ge=1, le=80)) -> dict[str, Any]:
+        return await _bridge(app).list_live_activity(limit=limit)
+
+    @app.post("/api/live/errors/clear")
+    async def live_errors_clear() -> dict[str, Any]:
+        return await _bridge(app).clear_live_errors()
+
     @app.get("/api/chats/{chat_id}/messages")
     async def chat_messages(
         chat_id: int,
@@ -267,6 +309,31 @@ def create_app(
         limit: int = Query(default=80, ge=10, le=200),
     ) -> dict[str, Any]:
         return await _call_with_lookup(app, lambda: _bridge(app).get_chat_workspace(chat_id, limit=limit))
+
+    @app.get("/api/live/chats/{chat_id}/workspace")
+    async def live_chat_workspace(
+        chat_id: int,
+        limit: int = Query(default=80, ge=10, le=200),
+    ) -> dict[str, Any]:
+        return await _call_with_lookup(app, lambda: _bridge(app).get_live_chat_workspace(chat_id, limit=limit))
+
+    @app.post("/api/live/chats/{chat_id}/refresh")
+    async def live_chat_workspace_refresh(
+        chat_id: int,
+        limit: int = Query(default=80, ge=10, le=200),
+    ) -> dict[str, Any]:
+        return await _call_with_lookup(app, lambda: _bridge(app).refresh_live_chat_workspace(chat_id, limit=limit))
+
+    @app.post("/api/live/chats/{chat_id}/pause")
+    async def live_chat_pause(chat_id: int, payload: LivePauseRequest) -> dict[str, Any]:
+        return await _call_with_lookup(
+            app,
+            lambda: _bridge(app).pause_live_active_chat(chat_id, paused=payload.paused),
+        )
+
+    @app.post("/api/live/chats/{chat_id}/errors/clear")
+    async def live_chat_errors_clear(chat_id: int) -> dict[str, Any]:
+        return await _call_with_lookup(app, lambda: _bridge(app).clear_live_errors(chat_id=chat_id))
 
     @app.post("/api/chats/{chat_id}/reply-preview")
     async def reply_preview(

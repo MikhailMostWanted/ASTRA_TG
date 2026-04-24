@@ -27,6 +27,7 @@ import { normalizeAutopilotPayload, normalizeReplyPreviewPayload } from "@/lib/r
 import type {
   AutopilotPayload,
   ChatFreshnessPayload,
+  LiveStatusPayload,
   ReplyContextPayload,
   ReplyPreviewPayload,
   ReplyRetrievalPayload,
@@ -44,6 +45,7 @@ interface ReplyPanelProps {
   replyContext?: ReplyContextPayload | null;
   autopilot?: AutopilotPayload | null;
   freshness?: ChatFreshnessPayload | null;
+  live?: LiveStatusPayload | null;
   workspaceStatus?: WorkspaceStatusPayload | null;
   workflowState: ChatWorkspaceState | null;
   loading?: boolean;
@@ -86,6 +88,7 @@ export function ReplyPanel({
   replyContext = null,
   autopilot = null,
   freshness = null,
+  live = null,
   workspaceStatus = null,
   workflowState,
   loading = false,
@@ -498,6 +501,23 @@ export function ReplyPanel({
           >
             LLM {llmStatusLabel}
           </Badge>
+          {live ? (
+            <Badge
+              variant="outline"
+              className={cn(
+                "border-0 ring-1",
+                live.pendingConfirmation
+                  ? "bg-amber-300/12 text-amber-100 ring-amber-300/15"
+                  : live.degraded
+                    ? "bg-rose-400/12 text-rose-100 ring-rose-300/15"
+                    : live.replyAction === "started"
+                      ? "bg-emerald-300/12 text-emerald-100 ring-emerald-300/15"
+                      : "bg-white/7 text-slate-200 ring-white/10",
+              )}
+            >
+              live {formatLiveReplyStatus(live)}
+            </Badge>
+          ) : null}
         </div>
       </div>
 
@@ -561,6 +581,42 @@ export function ReplyPanel({
                   {workspaceStatus.degradedReason || workspaceStatus.syncError}
                 </div>
               ) : null}
+            </div>
+          ) : null}
+
+          {live ? (
+            <div className="rounded-[22px] border border-white/8 bg-black/16 p-4">
+              <div className="mb-2 flex items-center gap-2 text-sm font-medium text-white">
+                <DatabaseZap />
+                Live loop
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
+                  {live.paused ? "paused" : live.status}
+                </Badge>
+                <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
+                  {live.reasonCode || "no_reason"}
+                </Badge>
+                {live.decisionStatus ? (
+                  <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
+                    decision {live.decisionStatus}
+                  </Badge>
+                ) : null}
+                {live.pendingConfirmation ? (
+                  <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
+                    pending confirm
+                  </Badge>
+                ) : null}
+              </div>
+              <div className="mt-3 text-sm leading-6 text-slate-300">
+                {live.lastAction
+                  || live.lastError
+                  || (live.replyAction === "started"
+                    ? "Новый meaningful signal запустил reply decision loop."
+                    : live.replySkippedReason === "no_new_signal"
+                      ? "Новые сообщения не изменили reply focus, decision loop пропущен."
+                      : "Live loop держит tail и reply panel на одном snapshot.")}
+              </div>
             </div>
           ) : null}
 
@@ -1248,6 +1304,28 @@ function formatAutopilotMode(mode: string | null | undefined): string {
     return "Автопилот";
   }
   return "Выключен";
+}
+
+function formatLiveReplyStatus(live: LiveStatusPayload): string {
+  if (live.paused) {
+    return "paused";
+  }
+  if (live.degraded) {
+    return "error";
+  }
+  if (live.pendingConfirmation) {
+    return "pending";
+  }
+  if (live.decisionStatus) {
+    return live.decisionStatus;
+  }
+  if (live.replyAction === "started") {
+    return "decision";
+  }
+  if (live.replySkippedReason) {
+    return "skipped";
+  }
+  return "fresh";
 }
 
 function buildTriggerPreview(senderName: string | null, preview: string | null): string | null {

@@ -183,6 +183,10 @@ class ReplyExecutionContext:
     chat_type: str | None
     source_backend: str | None
     workspace_source: str | None
+    freshness_mode: str | None
+    freshness_sync_trigger: str | None
+    live_source: str | None
+    live_new_message_count: int
     workspace_degraded: bool
     send_available: bool
     send_effective_backend: str | None
@@ -226,6 +230,12 @@ class ReplyExecutionDecision:
     draft_scope_key: str | None
     execution_id: str | None
     execution_key: str | None
+    source_backend: str | None = None
+    workspace_source: str | None = None
+    freshness_mode: str | None = None
+    freshness_sync_trigger: str | None = None
+    live_source: str | None = None
+    live_new_message_count: int = 0
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -249,6 +259,12 @@ class ReplyExecutionDecision:
             "pendingDraftStatus": "awaiting_confirmation" if self.status == "awaiting_confirmation" else "draft" if self.status == "suggestion_ready" else None,
             "executionId": self.execution_id,
             "executionKey": self.execution_key,
+            "sourceBackend": self.source_backend,
+            "workspaceSource": self.workspace_source,
+            "freshnessMode": self.freshness_mode,
+            "freshnessSyncTrigger": self.freshness_sync_trigger,
+            "liveSource": self.live_source,
+            "liveNewMessageCount": self.live_new_message_count,
         }
 
 
@@ -368,6 +384,12 @@ class ReplyExecutionStateMachine:
             "draft_scope_key": context.draft_scope_key,
             "execution_id": execution_id,
             "execution_key": execution_key,
+            "source_backend": context.source_backend,
+            "workspace_source": context.workspace_source,
+            "freshness_mode": context.freshness_mode,
+            "freshness_sync_trigger": context.freshness_sync_trigger,
+            "live_source": context.live_source,
+            "live_new_message_count": context.live_new_message_count,
         }
 
         if global_policy.emergency_stop:
@@ -460,6 +482,12 @@ class ReplyExecutionStateMachine:
         draft_scope_key: str | None,
         execution_id: str | None,
         execution_key: str | None,
+        source_backend: str | None = None,
+        workspace_source: str | None = None,
+        freshness_mode: str | None = None,
+        freshness_sync_trigger: str | None = None,
+        live_source: str | None = None,
+        live_new_message_count: int = 0,
     ) -> ReplyExecutionDecision:
         return ReplyExecutionDecision(
             mode=mode,
@@ -480,6 +508,12 @@ class ReplyExecutionStateMachine:
             draft_scope_key=draft_scope_key,
             execution_id=execution_id,
             execution_key=execution_key,
+            source_backend=source_backend,
+            workspace_source=workspace_source,
+            freshness_mode=freshness_mode,
+            freshness_sync_trigger=freshness_sync_trigger,
+            live_source=live_source,
+            live_new_message_count=live_new_message_count,
         )
 
 
@@ -796,7 +830,6 @@ class ReplyExecutionService:
             }
         )
         state["status"] = self.machine.next_status(state.get("status"), "cooldown_start")
-        await self._save_state(chat_policy.chat_key, state)
         decision = _decision_from_pending(
             pending,
             chat_policy=chat_policy,
@@ -806,6 +839,8 @@ class ReplyExecutionService:
             allowed=True,
             reason_code="sent",
         )
+        state["last_decision_payload"] = decision.to_payload()
+        await self._save_state(chat_policy.chat_key, state)
         await self._append_journal(
             chat_policy=chat_policy,
             decision=decision,
@@ -837,7 +872,6 @@ class ReplyExecutionService:
         state["last_error"] = error
         state["last_reason_code"] = "send_failed"
         state["updated_at"] = _now_iso()
-        await self._save_state(chat_policy.chat_key, state)
         global_policy = await self.get_global_policy()
         decision = _decision_from_pending(
             pending,
@@ -848,6 +882,8 @@ class ReplyExecutionService:
             allowed=False,
             reason_code="send_failed",
         )
+        state["last_decision_payload"] = decision.to_payload()
+        await self._save_state(chat_policy.chat_key, state)
         await self._append_journal(
             chat_policy=chat_policy,
             decision=decision,
@@ -905,6 +941,7 @@ class ReplyExecutionService:
         state["last_reason_code"] = decision.reason_code
         state["last_reason"] = decision.reason
         state["last_decision_at"] = _now_iso()
+        state["last_decision_payload"] = decision.to_payload()
         state["updated_at"] = _now_iso()
         if decision.execution_key:
             state["last_execution_key"] = decision.execution_key
@@ -1222,6 +1259,8 @@ def build_reply_execution_context(
     reply = workspace_payload.get("reply") if isinstance(workspace_payload.get("reply"), dict) else {}
     reply_context = workspace_payload.get("replyContext") if isinstance(workspace_payload.get("replyContext"), dict) else {}
     status = workspace_payload.get("status") if isinstance(workspace_payload.get("status"), dict) else {}
+    freshness = workspace_payload.get("freshness") if isinstance(workspace_payload.get("freshness"), dict) else {}
+    live = workspace_payload.get("live") if isinstance(workspace_payload.get("live"), dict) else {}
     availability = status.get("availability") if isinstance(status.get("availability"), dict) else {}
     send_path = status.get("sendPath") if isinstance(status.get("sendPath"), dict) else {}
     messages = workspace_payload.get("messages") if isinstance(workspace_payload.get("messages"), list) else []
@@ -1259,6 +1298,10 @@ def build_reply_execution_context(
             or _pick_str(status.get("messageSource") if isinstance(status.get("messageSource"), dict) else {}, "backend")
         ),
         workspace_source=_pick_str(status, "source"),
+        freshness_mode=_pick_str(freshness, "mode"),
+        freshness_sync_trigger=_pick_str(freshness, "syncTrigger") or _pick_str(status, "syncTrigger"),
+        live_source=_pick_str(live, "source"),
+        live_new_message_count=_pick_int(live, "newMessageCount") or 0,
         workspace_degraded=bool(status.get("degraded")),
         send_available=bool(availability.get("sendAvailable")),
         send_effective_backend=_pick_str(send_path, "effective") or _pick_str(status, "effectiveBackend"),
@@ -1369,6 +1412,16 @@ def _build_pending_action(
         "source_message_preview": context.source_message_preview,
         "sourceBackend": context.source_backend,
         "source_backend": context.source_backend,
+        "workspaceSource": context.workspace_source,
+        "workspace_source": context.workspace_source,
+        "freshnessMode": context.freshness_mode,
+        "freshness_mode": context.freshness_mode,
+        "freshnessSyncTrigger": context.freshness_sync_trigger,
+        "freshness_sync_trigger": context.freshness_sync_trigger,
+        "liveSource": context.live_source,
+        "live_source": context.live_source,
+        "liveNewMessageCount": context.live_new_message_count,
+        "live_new_message_count": context.live_new_message_count,
         "backend": "new" if decision.action == "send" else context.source_backend,
     }
 
@@ -1456,6 +1509,7 @@ def _state_decision_fallback(
     state: dict[str, Any],
 ) -> ReplyExecutionDecision:
     reason_code = str(state.get("last_reason_code") or "off_noop")
+    last_decision = state.get("last_decision_payload") if isinstance(state.get("last_decision_payload"), dict) else {}
     return ReplyExecutionDecision(
         mode=chat_policy.mode,
         effective_mode=chat_policy.effective_mode(global_policy),
@@ -1464,17 +1518,23 @@ def _state_decision_fallback(
         allowed=False,
         reason_code=reason_code,
         reason=REASON_MESSAGES.get(reason_code, reason_code),
-        confidence=None,
-        trigger=None,
-        focus=None,
-        opportunity=None,
-        source_message_id=None,
-        source_message_key=None,
-        source_runtime_message_id=None,
-        reply_text=None,
-        draft_scope_key=None,
-        execution_id=None,
-        execution_key=None,
+        confidence=_pick_float_or_none(last_decision, "confidence"),
+        trigger=_pick_str(last_decision, "trigger"),
+        focus=_pick_str(last_decision, "focus"),
+        opportunity=_pick_str(last_decision, "opportunity"),
+        source_message_id=_pick_int(last_decision, "sourceMessageId"),
+        source_message_key=_pick_str(last_decision, "sourceMessageKey"),
+        source_runtime_message_id=_pick_int(last_decision, "sourceRuntimeMessageId"),
+        reply_text=_pick_str(last_decision, "replyText"),
+        draft_scope_key=_pick_str(last_decision, "draftScopeKey"),
+        execution_id=_pick_str(last_decision, "executionId"),
+        execution_key=_pick_str(last_decision, "executionKey"),
+        source_backend=_pick_str(last_decision, "sourceBackend"),
+        workspace_source=_pick_str(last_decision, "workspaceSource"),
+        freshness_mode=_pick_str(last_decision, "freshnessMode"),
+        freshness_sync_trigger=_pick_str(last_decision, "freshnessSyncTrigger"),
+        live_source=_pick_str(last_decision, "liveSource"),
+        live_new_message_count=_pick_int(last_decision, "liveNewMessageCount") or 0,
     )
 
 
@@ -1527,6 +1587,12 @@ def _decision_from_pending(
         draft_scope_key=_pick_str(pending, "draftScopeKey") or _pick_str(pending, "draft_scope_key"),
         execution_id=_pick_str(pending, "executionId") or _pick_str(pending, "execution_id"),
         execution_key=_pick_str(pending, "executionKey") or _pick_str(pending, "execution_key"),
+        source_backend=_pick_str(pending, "sourceBackend") or _pick_str(pending, "source_backend") or _pick_str(pending, "backend"),
+        workspace_source=_pick_str(pending, "workspaceSource") or _pick_str(pending, "workspace_source"),
+        freshness_mode=_pick_str(pending, "freshnessMode") or _pick_str(pending, "freshness_mode"),
+        freshness_sync_trigger=_pick_str(pending, "freshnessSyncTrigger") or _pick_str(pending, "freshness_sync_trigger"),
+        live_source=_pick_str(pending, "liveSource") or _pick_str(pending, "live_source"),
+        live_new_message_count=_pick_int(pending, "liveNewMessageCount") or _pick_int(pending, "live_new_message_count") or 0,
     )
 
 

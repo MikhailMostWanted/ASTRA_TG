@@ -2,8 +2,11 @@ import { useEffect, useRef } from "react";
 import {
   ArrowDownLeft,
   ArrowUpRight,
+  AlertCircle,
   ImageIcon,
   LoaderCircle,
+  Pause,
+  Play,
   RefreshCcw,
   Sparkles,
 } from "lucide-react";
@@ -15,7 +18,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDateTime, formatRelativeTime, initials } from "@/lib/format";
 import { safeArray } from "@/lib/runtime-guards";
-import type { ChatFreshnessPayload, ChatItem, MessageItem, WorkspaceStatusPayload } from "@/lib/types";
+import type { ChatFreshnessPayload, ChatItem, LiveStatusPayload, MessageItem, WorkspaceStatusPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { EmptyState } from "./EmptyState";
@@ -32,9 +35,12 @@ interface MessageListProps {
   loadingOlder?: boolean;
   lastUpdatedAt?: string | null;
   freshness?: ChatFreshnessPayload | null;
+  live?: LiveStatusPayload | null;
   errorMessage?: string | null;
   onLoadOlder: () => void;
   onRefresh: () => void;
+  onToggleLivePause: () => void;
+  onClearLiveError: () => void;
   onSyncChat: () => void;
 }
 
@@ -49,13 +55,21 @@ export function MessageList({
   loadingOlder = false,
   lastUpdatedAt = null,
   freshness = null,
+  live = null,
   errorMessage = null,
   onLoadOlder,
   onRefresh,
+  onToggleLivePause,
+  onClearLiveError,
   onSyncChat,
 }: MessageListProps) {
   const endRef = useRef<HTMLDivElement | null>(null);
+  const lastScrollTargetRef = useRef<{ chatKey: string | null; messageKey: string | null }>({
+    chatKey: null,
+    messageKey: null,
+  });
   const safeMessages = safeArray(messages);
+  const latestMessageKey = safeMessages.length > 0 ? safeMessages[safeMessages.length - 1]?.messageKey ?? null : null;
   const displayActivityAt = chat?.rosterLastActivityAt || chat?.lastMessageAt || null;
   const workspaceReadable = Boolean(workspaceStatus?.availability.workspaceAvailable);
   const historyReadable = Boolean(workspaceStatus?.availability.historyReadable);
@@ -67,8 +81,18 @@ export function MessageList({
         : "legacy workspace";
 
   useEffect(() => {
+    const previous = lastScrollTargetRef.current;
+    const chatChanged = previous.chatKey !== (chat?.chatKey ?? null);
+    const latestChanged = previous.messageKey !== latestMessageKey;
+    lastScrollTargetRef.current = {
+      chatKey: chat?.chatKey ?? null,
+      messageKey: latestMessageKey,
+    };
+    if (loadingOlder || (!chatChanged && !latestChanged)) {
+      return;
+    }
     endRef.current?.scrollIntoView({ block: "end" });
-  }, [chat?.chatKey, safeMessages.length]);
+  }, [chat?.chatKey, latestMessageKey, loadingOlder]);
 
   if (!chat) {
     return (
@@ -128,6 +152,21 @@ export function MessageList({
                   degraded
                 </Badge>
               ) : null}
+              {live ? (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "border-0 ring-1",
+                    live.paused
+                      ? "bg-amber-300/12 text-amber-100 ring-amber-300/15"
+                      : live.degraded
+                        ? "bg-rose-400/12 text-rose-100 ring-rose-300/15"
+                        : "bg-emerald-300/12 text-emerald-100 ring-emerald-300/15",
+                  )}
+                >
+                  {live.paused ? "live paused" : live.degraded ? "live degraded" : "live"}
+                </Badge>
+              ) : null}
               {chat.unreadCount > 0 ? (
                 <Badge variant="outline" className="border-0 bg-cyan-400/12 text-cyan-100 ring-1 ring-cyan-300/15">
                   {chat.unreadCount} непрочит.
@@ -148,6 +187,17 @@ export function MessageList({
                 <span>источник {workspaceStatus.messageSource.backend}</span>
               ) : null}
               {freshness ? <span>{freshness.label}</span> : null}
+              {live ? (
+                <span>
+                  live {live.syncing ? "syncing" : live.paused ? "paused" : "ready"}
+                  {typeof live.newMessageCount === "number" && live.newMessageCount > 0
+                    ? ` • +${live.newMessageCount} новых`
+                    : ""}
+                  {typeof live.meaningfulMessageCount === "number" && live.meaningfulMessageCount > 0
+                    ? ` • ${live.meaningfulMessageCount} meaningful`
+                    : ""}
+                </span>
+              ) : null}
               {workspaceStatus?.syncTrigger ? (
                 <span>{workspaceStatus.syncTrigger === "auto" ? "auto-sync" : workspaceStatus.syncTrigger}</span>
               ) : null}
@@ -156,10 +206,19 @@ export function MessageList({
               {workspaceStatus?.degradedReason ? (
                 <span className="text-amber-100">{workspaceStatus.degradedReason}</span>
               ) : null}
+              {live?.lastError ? <span className="text-rose-200">{live.lastError}</span> : null}
             </div>
           </div>
 
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <Button
+              variant="outline"
+              className="border-white/8 bg-black/18 text-slate-100"
+              onClick={onToggleLivePause}
+            >
+              {live?.paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
+              {live?.paused ? "Live" : "Пауза"}
+            </Button>
             <Button
               variant="outline"
               className="border-white/8 bg-black/18 text-slate-100"
@@ -178,6 +237,16 @@ export function MessageList({
               <Sparkles data-icon="inline-start" />
               Синхронизировать чат
             </Button>
+            {live?.lastError ? (
+              <Button
+                variant="outline"
+                className="border-rose-300/14 bg-rose-400/8 text-rose-50"
+                onClick={onClearLiveError}
+              >
+                <AlertCircle data-icon="inline-start" />
+                Retry
+              </Button>
+            ) : null}
           </div>
         </div>
       </div>

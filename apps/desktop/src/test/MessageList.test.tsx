@@ -115,14 +115,28 @@ describe("MessageList", () => {
         loadingOlder={false}
         lastUpdatedAt="2026-04-22T11:01:00.000Z"
         freshness={null}
+        live={{
+          scope: "active_chat",
+          status: "paused",
+          paused: true,
+          degraded: true,
+          newMessageCount: 2,
+          meaningfulMessageCount: 1,
+          lastError: "runtime timeout",
+        }}
         errorMessage={null}
         onLoadOlder={vi.fn()}
         onRefresh={vi.fn()}
+        onToggleLivePause={vi.fn()}
+        onClearLiveError={vi.fn()}
         onSyncChat={vi.fn()}
       />,
     );
 
     expect(screen.getByText("new workspace")).toBeInTheDocument();
+    expect(screen.getByText("live paused")).toBeInTheDocument();
+    expect(screen.getByText("runtime timeout")).toBeInTheDocument();
+    expect(screen.getByText("Retry")).toBeInTheDocument();
     expect(screen.getByText("2 непрочит.")).toBeInTheDocument();
     expect(screen.getByText("Workspace для чтения пока недоступен")).toBeInTheDocument();
   });

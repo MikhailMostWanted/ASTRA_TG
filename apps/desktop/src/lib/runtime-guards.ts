@@ -1,6 +1,7 @@
 import type {
   AutopilotPayload,
   ChatFreshnessPayload,
+  LiveStatusPayload,
   ReplyContextPayload,
   ReplyPreviewPayload,
   ReplySuggestion,
@@ -511,5 +512,51 @@ export function normalizeWorkspaceStatusPayload(value: unknown): WorkspaceStatus
     route: isPlainObject(value.route) ? value.route : {},
     sendPath: isPlainObject(value.sendPath) ? value.sendPath : {},
     sendDisabledReason: safeStringOrNull(value.sendDisabledReason),
+    live: normalizeLiveStatusPayload(value.live),
+  };
+}
+
+export function normalizeLiveStatusPayload(value: unknown): LiveStatusPayload | null {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+  const activity = Array.isArray(value.activity)
+    ? value.activity.map(normalizeLiveStatusPayload).filter((item): item is LiveStatusPayload => Boolean(item))
+    : undefined;
+  return {
+    scope: safeString(value.scope, "unknown"),
+    source: safeStringOrNull(value.source),
+    status: safeString(value.status, "unknown"),
+    active: typeof value.active === "boolean" ? value.active : undefined,
+    paused: typeof value.paused === "boolean" ? value.paused : undefined,
+    reason: safeStringOrNull(value.reason),
+    reasonCode: safeStringOrNull(value.reasonCode),
+    chatId: safeNumberOrNull(value.chatId),
+    newMessageCount: safeNumberOrNull(value.newMessageCount) ?? undefined,
+    meaningfulMessageCount: safeNumberOrNull(value.meaningfulMessageCount) ?? undefined,
+    totalNewMessageCount: safeNumberOrNull(value.totalNewMessageCount) ?? undefined,
+    totalMeaningfulMessageCount: safeNumberOrNull(value.totalMeaningfulMessageCount) ?? undefined,
+    changedItemCount: safeNumberOrNull(value.changedItemCount) ?? undefined,
+    replyAction: safeStringOrNull(value.replyAction),
+    replySkippedReason: safeStringOrNull(value.replySkippedReason),
+    refreshSource: safeStringOrNull(value.refreshSource),
+    syncing: typeof value.syncing === "boolean" ? value.syncing : undefined,
+    lastUpdatedAt: safeStringOrNull(value.lastUpdatedAt),
+    lastSuccessAt: safeStringOrNull(value.lastSuccessAt),
+    lastError: safeStringOrNull(value.lastError),
+    lastErrorAt: safeStringOrNull(value.lastErrorAt),
+    degraded: typeof value.degraded === "boolean" ? value.degraded : undefined,
+    degradedUntil: safeStringOrNull(value.degradedUntil),
+    nextRefreshAfter: safeStringOrNull(value.nextRefreshAfter),
+    intervalSeconds: safeNumberOrNull(value.intervalSeconds) ?? undefined,
+    latencyMs: safeNumberOrNull(value.latencyMs) ?? undefined,
+    decisionStatus: safeStringOrNull(value.decisionStatus),
+    decisionReasonCode: safeStringOrNull(value.decisionReasonCode),
+    decisionAction: safeStringOrNull(value.decisionAction),
+    pendingConfirmation: typeof value.pendingConfirmation === "boolean" ? value.pendingConfirmation : undefined,
+    lastAction: safeStringOrNull(value.lastAction),
+    timestamp: safeStringOrNull(value.timestamp),
+    record: typeof value.record === "boolean" ? value.record : undefined,
+    activity,
   };
 }

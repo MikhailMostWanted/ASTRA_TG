@@ -1,5 +1,6 @@
 import type {
   ChatMessagesPayload,
+  LiveStatusPayload,
   ChatAutopilotPayload,
   AutopilotConfirmPayload,
   ChatSendPayload,
@@ -124,12 +125,27 @@ export const api = {
     request<LogsPayload>(withQuery("/api/logs", { component, tail })),
   chats: (params: { search?: string; filter?: string; sort?: string }) =>
     request<ChatsPayload>(
-      withQuery("/api/chats", {
+      withQuery("/api/live/roster", {
         search: params.search,
         filter: params.filter,
         sort: params.sort,
       }),
     ),
+  refreshLiveRoster: (params: { search?: string; filter?: string; sort?: string }) =>
+    request<ChatsPayload>(
+      withQuery("/api/live/roster/refresh", {
+        search: params.search,
+        filter: params.filter,
+        sort: params.sort,
+      }),
+      { method: "POST" },
+    ),
+  liveActivity: (limit = 12) =>
+    request<{ items: LiveStatusPayload[]; count: number }>(
+      withQuery("/api/live/activity", { limit }),
+    ),
+  clearLiveErrors: () =>
+    request<{ ok: boolean; live: LiveStatusPayload }>("/api/live/errors/clear", { method: "POST" }),
   chatMessages: (chatId: number, limit = 80, beforeRuntimeMessageId?: number | null) =>
     request<ChatMessagesPayload>(
       withQuery(`/api/chats/${chatId}/messages`, {
@@ -138,7 +154,20 @@ export const api = {
       }),
     ),
   chatWorkspace: (chatId: number, limit = 80) =>
-    request<ChatWorkspacePayload>(withQuery(`/api/chats/${chatId}/workspace`, { limit })),
+    request<ChatWorkspacePayload>(withQuery(`/api/live/chats/${chatId}/workspace`, { limit })),
+  refreshLiveChatWorkspace: (chatId: number, limit = 80) =>
+    request<ChatWorkspacePayload>(withQuery(`/api/live/chats/${chatId}/refresh`, { limit }), {
+      method: "POST",
+    }),
+  pauseLiveChat: (chatId: number, paused: boolean) =>
+    request<{ ok: boolean; live: LiveStatusPayload }>(`/api/live/chats/${chatId}/pause`, {
+      method: "POST",
+      body: { paused },
+    }),
+  clearLiveChatError: (chatId: number) =>
+    request<{ ok: boolean; live: LiveStatusPayload }>(`/api/live/chats/${chatId}/errors/clear`, {
+      method: "POST",
+    }),
   replyPreview: (chatId: number, useProviderRefinement?: boolean) =>
     request<ReplyPreviewPayload>(
       withQuery(`/api/chats/${chatId}/reply-preview`, {

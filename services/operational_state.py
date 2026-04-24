@@ -36,9 +36,12 @@ SNAPSHOT_KEY_MAP = {
     "message_workspace": "ops.runtime.message_workspace.last",
     "manual_send": "ops.manual_send.last",
     "reply_execution": "ops.reply_execution.last",
+    "live_status": "ops.live.status",
 }
 
 FULLACCESS_CHAT_SYNC_PREFIX = "ops.fullaccess.chat_sync."
+LIVE_ACTIVITY_KEY = "ops.live.activity.recent"
+MAX_LIVE_ACTIVITY_EVENTS = 40
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +253,41 @@ class OperationalStateService:
 
     async def get_reply_execution_status(self) -> OperationalEvent | None:
         return await self.get_named_snapshot("reply_execution")
+
+    async def record_live_status(self, *, payload: dict[str, Any]) -> None:
+        await self._store_json(
+            SNAPSHOT_KEY_MAP["live_status"],
+            {
+                "timestamp": _serialize_timestamp(None),
+                "payload": payload,
+            },
+        )
+
+    async def get_live_status(self) -> OperationalEvent | None:
+        return await self.get_named_snapshot("live_status")
+
+    async def record_live_activity(self, *, payload: dict[str, Any]) -> None:
+        current = await self.repository.get_value(LIVE_ACTIVITY_KEY)
+        events = [item for item in (current if isinstance(current, list) else []) if isinstance(item, dict)]
+        events.insert(
+            0,
+            {
+                "timestamp": _serialize_timestamp(None),
+                **payload,
+            },
+        )
+        await self.repository.set_value(
+            key=LIVE_ACTIVITY_KEY,
+            value_json=events[:MAX_LIVE_ACTIVITY_EVENTS],
+            value_text=None,
+        )
+
+    async def list_live_activity(self, *, limit: int = 12) -> tuple[dict[str, Any], ...]:
+        payload = await self.repository.get_value(LIVE_ACTIVITY_KEY)
+        if not isinstance(payload, list):
+            return ()
+        normalized = [item for item in payload if isinstance(item, dict)]
+        return tuple(normalized[: max(1, int(limit))])
 
     async def get_fullaccess_chat_sync(self, local_chat_id: int) -> OperationalEvent | None:
         return await self.get_snapshot(f"{FULLACCESS_CHAT_SYNC_PREFIX}{local_chat_id}")

@@ -176,7 +176,45 @@ export interface RuntimeStatusPayload {
   chatRoster?: ChatRosterStatePayload | null;
   messageWorkspace?: WorkspaceStatusPayload | null;
   manualSend?: ManualSendJournalPayload | null;
+  live?: LiveStatusPayload | null;
   managedProcess?: ProcessState;
+}
+
+export interface LiveStatusPayload {
+  scope: "active_chat" | "roster" | "all" | string;
+  source?: string | null;
+  status: "live" | "paused" | "cached" | "refreshed" | "degraded" | "cleared" | string;
+  active?: boolean;
+  paused?: boolean;
+  reason?: string | null;
+  reasonCode?: string | null;
+  chatId?: number | null;
+  newMessageCount?: number;
+  meaningfulMessageCount?: number;
+  totalNewMessageCount?: number;
+  totalMeaningfulMessageCount?: number;
+  changedItemCount?: number;
+  replyAction?: string | null;
+  replySkippedReason?: string | null;
+  refreshSource?: string | null;
+  syncing?: boolean;
+  lastUpdatedAt?: string | null;
+  lastSuccessAt?: string | null;
+  lastError?: string | null;
+  lastErrorAt?: string | null;
+  degraded?: boolean;
+  degradedUntil?: string | null;
+  nextRefreshAfter?: string | null;
+  intervalSeconds?: number;
+  latencyMs?: number;
+  decisionStatus?: string | null;
+  decisionReasonCode?: string | null;
+  decisionAction?: string | null;
+  pendingConfirmation?: boolean;
+  lastAction?: string | null;
+  timestamp?: string | null;
+  record?: boolean;
+  activity?: LiveStatusPayload[];
 }
 
 export interface ChatMemorySummary {
@@ -265,6 +303,7 @@ export interface ChatRosterStatePayload {
   lastError: string | null;
   lastErrorAt: string | null;
   route: RuntimeRoutePayload | Record<string, unknown>;
+  live?: LiveStatusPayload | null;
 }
 
 export interface ChatsPayload {
@@ -272,6 +311,7 @@ export interface ChatsPayload {
   count: number;
   source: "legacy" | "new" | "fallback_to_legacy" | string;
   roster: ChatRosterStatePayload;
+  live?: LiveStatusPayload | null;
   refreshedAt: string | null;
   filters: {
     active: string;
@@ -359,6 +399,7 @@ export interface WorkspaceStatusPayload {
   route?: RuntimeRoutePayload | Record<string, unknown>;
   sendPath?: RuntimeRoutePayload | Record<string, unknown>;
   sendDisabledReason?: string | null;
+  live?: LiveStatusPayload | null;
 }
 
 export interface ChatMessagesPayload {
@@ -610,6 +651,12 @@ export interface AutopilotPayload {
     draftScopeKey?: string | null;
     pendingDraftStatus: string | null;
     executionId?: string | null;
+    sourceBackend?: string | null;
+    workspaceSource?: string | null;
+    freshnessMode?: string | null;
+    freshnessSyncTrigger?: string | null;
+    liveSource?: string | null;
+    liveNewMessageCount?: number;
   };
   pendingDraft: {
     id?: string;
@@ -682,6 +729,7 @@ export interface ChatWorkspacePayload {
   autopilot: AutopilotPayload | null;
   freshness: ChatFreshnessPayload;
   status: WorkspaceStatusPayload;
+  live?: LiveStatusPayload | null;
   refreshedAt: string | null;
 }
 

@@ -83,6 +83,7 @@ from storage.repositories import (
     TaskRepository,
 )
 
+from .live import DesktopLiveCoordinator, LiveRefreshResult
 from .serializers import (
     build_chat_reference,
     serialize_chat,
@@ -151,6 +152,7 @@ class DesktopBridge:
     runtime_switches: RuntimeSwitches | None = None
     _runtime_manager: RuntimeManager = field(init=False, repr=False)
     _new_runtime_service: NewTelegramRuntimeService | None = field(init=False, default=None, repr=False)
+    _live_coordinator: DesktopLiveCoordinator = field(default_factory=DesktopLiveCoordinator, init=False, repr=False)
     _manual_send_inflight: set[str] = field(default_factory=set, init=False, repr=False)
     _manual_send_recent_success_at: dict[str, datetime] = field(default_factory=dict, init=False, repr=False)
 
@@ -196,6 +198,7 @@ class DesktopBridge:
         status["messageWorkspace"] = await self._get_message_workspace_state()
         status["manualSend"] = await self._get_manual_send_state()
         status["autopilot"] = await self.get_autopilot_status()
+        status["live"] = await self._get_live_status()
         return status
 
     async def get_new_runtime_health(self) -> dict[str, Any]:
@@ -362,6 +365,43 @@ class DesktopBridge:
         await self._record_chat_roster_state(roster_state)
         return payload
 
+    async def get_live_roster(
+        self,
+        *,
+        search: str | None = None,
+        filter_key: str = "all",
+        sort_key: str = "activity",
+        force: bool = False,
+        reason: str = "poll",
+    ) -> dict[str, Any]:
+        result = await self._live_coordinator.refresh_roster(
+            fetch_roster=lambda: self.list_chats(
+                search=search,
+                filter_key=filter_key,
+                sort_key=sort_key,
+            ),
+            force=force,
+            reason=reason,
+            cache_key=_live_roster_cache_key(search=search, filter_key=filter_key, sort_key=sort_key),
+        )
+        await self._record_live_result(result)
+        return result.payload
+
+    async def refresh_live_roster(
+        self,
+        *,
+        search: str | None = None,
+        filter_key: str = "all",
+        sort_key: str = "activity",
+    ) -> dict[str, Any]:
+        return await self.get_live_roster(
+            search=search,
+            filter_key=filter_key,
+            sort_key=sort_key,
+            force=True,
+            reason="manual_refresh",
+        )
+
     async def _legacy_list_chats(
         self,
         *,
@@ -490,6 +530,80 @@ class DesktopBridge:
                 return execution["workspace"]
         return payload
 
+    async def get_live_chat_workspace(
+        self,
+        chat_id: int,
+        *,
+        limit: int = 80,
+        force: bool = False,
+        reason: str = "poll",
+    ) -> dict[str, Any]:
+        result = await self._live_coordinator.refresh_active_chat(
+            chat_id=chat_id,
+            fetch_workspace=lambda: self.get_chat_workspace(
+                chat_id,
+                limit=limit,
+                execute_reply_modes=False,
+            ),
+            fetch_messages=lambda: self.get_chat_messages(chat_id, limit=limit),
+            force=force,
+            reason=reason,
+        )
+        payload = result.payload
+        if result.execute_reply_modes:
+            execution = await self._apply_reply_execution_to_workspace(
+                chat_id,
+                payload=payload,
+                limit=limit,
+                actor="desktop_live",
+            )
+            if execution is not None and execution.get("workspace") is not None:
+                refreshed = execution["workspace"]
+                if isinstance(refreshed, dict):
+                    refreshed["live"] = payload.get("live")
+                    if isinstance(refreshed.get("status"), dict) and isinstance(payload.get("live"), dict):
+                        refreshed["status"]["live"] = payload["live"]
+                    payload = refreshed
+            self._live_coordinator.update_active_payload(chat_id=chat_id, workspace=payload)
+        _decorate_live_autopilot_status(payload)
+        live_event = payload.get("live") if isinstance(payload.get("live"), dict) else result.event
+        await self._record_live_event(live_event, chat_id=chat_id)
+        return payload
+
+    async def refresh_live_chat_workspace(
+        self,
+        chat_id: int,
+        *,
+        limit: int = 80,
+    ) -> dict[str, Any]:
+        return await self.get_live_chat_workspace(
+            chat_id,
+            limit=limit,
+            force=True,
+            reason="manual_refresh",
+        )
+
+    async def pause_live_active_chat(self, chat_id: int, *, paused: bool) -> dict[str, Any]:
+        event = self._live_coordinator.pause_active_chat(chat_id=chat_id, paused=paused)
+        await self._record_live_event(event, chat_id=chat_id)
+        return {
+            "ok": True,
+            "live": event,
+        }
+
+    async def clear_live_errors(self, *, chat_id: int | None = None) -> dict[str, Any]:
+        event = self._live_coordinator.clear_errors(chat_id=chat_id)
+        await self._record_live_event(event, chat_id=chat_id)
+        return {
+            "ok": True,
+            "live": event,
+        }
+
+    async def list_live_activity(self, *, limit: int = 12) -> dict[str, Any]:
+        async with self.runtime.session_factory() as session:
+            items = await OperationalStateService(SettingRepository(session)).list_live_activity(limit=limit)
+        return {"items": list(items), "count": len(items)}
+
     async def _legacy_get_chat_workspace(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
         # LEGACY_RUNTIME: workspace refresh still uses fullaccess tail sync.
         # Future message workspace implementations should live behind MessageHistory.
@@ -524,13 +638,14 @@ class DesktopBridge:
         *,
         payload: dict[str, Any],
         limit: int,
+        actor: str = "desktop",
     ) -> dict[str, Any] | None:
         async with self.runtime.session_factory() as session:
             service = self._build_reply_execution_service(session)
             run = await service.evaluate_workspace(
                 requested_chat_id=chat_id,
                 workspace_payload=payload,
-                actor="desktop",
+                actor=actor,
             )
             payload["autopilot"] = run.autopilot
             await OperationalStateService(SettingRepository(session)).record_reply_execution(
@@ -562,7 +677,7 @@ class DesktopBridge:
                     state=state,
                     pending=pending,
                     error=str(error),
-                    actor="desktop",
+                    actor=actor,
                     automatic=True,
                 )
                 fallback_decision = await service.get_status_payload(
@@ -583,7 +698,7 @@ class DesktopBridge:
                 state=state,
                 pending=pending,
                 sent_payload=send_payload,
-                actor="desktop",
+                actor=actor,
                 automatic=True,
             )
             status = await service.get_status_payload(
@@ -2839,6 +2954,65 @@ class DesktopBridge:
         payload = event.payload.get("payload")
         return payload if isinstance(payload, dict) else None
 
+    async def _get_live_status(self) -> dict[str, Any] | None:
+        async with self.runtime.session_factory() as session:
+            service = OperationalStateService(SettingRepository(session))
+            event = await service.get_live_status()
+            recent = await service.list_live_activity(limit=8)
+        payload = event.payload.get("payload") if event is not None else None
+        if not isinstance(payload, dict):
+            payload = {}
+        payload["activity"] = list(recent)
+        return payload
+
+    async def _record_live_result(
+        self,
+        result: LiveRefreshResult,
+        *,
+        chat_id: int | None = None,
+    ) -> None:
+        await self._record_live_event(result.event, chat_id=chat_id)
+
+    async def _record_live_event(
+        self,
+        event: dict[str, Any],
+        *,
+        chat_id: int | None = None,
+    ) -> None:
+        if not bool(event.get("record")) and event.get("reasonCode") == "interval_not_due":
+            return
+        async with self.runtime.session_factory() as session:
+            setting_repository = SettingRepository(session)
+            operational_state = OperationalStateService(setting_repository)
+            await operational_state.record_live_status(payload=event)
+            if bool(event.get("record")):
+                await operational_state.record_live_activity(payload=event)
+                if chat_id is not None and event.get("scope") == "active_chat":
+                    await WorkflowJournalService(setting_repository).append_chat_event(
+                        chat_id,
+                        build_workflow_event(
+                            action="live_refresh",
+                            mode="live",
+                            status=str(event.get("status") or "unknown"),
+                            actor="desktop_live",
+                            automatic=event.get("reason") not in {"manual_refresh", "control"},
+                            message=_live_event_message(event),
+                            reason=event.get("lastError") if isinstance(event.get("lastError"), str) else None,
+                            reason_code=event.get("reasonCode") if isinstance(event.get("reasonCode"), str) else None,
+                            trigger=event.get("reasonCode") if isinstance(event.get("reasonCode"), str) else None,
+                            chat_id=chat_id,
+                            chat_key=None,
+                            runtime_chat_id=None,
+                            backend=event.get("refreshSource") if isinstance(event.get("refreshSource"), str) else None,
+                            error_code=(
+                                event.get("reasonCode")
+                                if event.get("status") == "degraded" and isinstance(event.get("reasonCode"), str)
+                                else None
+                            ),
+                        ),
+                    )
+            await session.commit()
+
     def _build_chat_roster_state(
         self,
         *,
@@ -3155,6 +3329,54 @@ def _pick_message_key(value: Any) -> str | None:
         return None
     message_key = value.get("messageKey")
     return message_key if isinstance(message_key, str) else None
+
+
+def _live_event_message(event: dict[str, Any]) -> str:
+    scope = event.get("scope")
+    reason_code = event.get("reasonCode")
+    if scope == "roster":
+        changed = int(event.get("changedItemCount") or 0)
+        if reason_code == "refresh_error":
+            return "Live roster refresh завершился ошибкой."
+        if changed > 0:
+            return f"Live roster обновлён: изменилось {changed} чатов."
+        return "Live roster проверен без новых изменений."
+
+    new_messages = int(event.get("newMessageCount") or 0)
+    meaningful = int(event.get("meaningfulMessageCount") or 0)
+    if reason_code == "meaningful_signal":
+        return f"Live active chat: {meaningful} meaningful signal, reply decision loop запущен."
+    if reason_code == "no_new_signal":
+        return f"Live active chat: +{new_messages} новых сообщений, reply decision loop пропущен."
+    if reason_code == "refresh_error":
+        return "Live active chat refresh завершился ошибкой."
+    if reason_code == "live_paused":
+        return "Live active chat поставлен на паузу."
+    if reason_code == "live_resumed":
+        return "Live active chat снова live."
+    return "Live active chat проверен."
+
+
+def _live_roster_cache_key(*, search: str | None, filter_key: str, sort_key: str) -> str:
+    normalized_search = " ".join((search or "").split()).casefold()
+    return f"{filter_key or 'all'}::{sort_key or 'activity'}::{normalized_search}"
+
+
+def _decorate_live_autopilot_status(payload: dict[str, Any]) -> None:
+    live = payload.get("live")
+    autopilot = payload.get("autopilot")
+    if not isinstance(live, dict) or not isinstance(autopilot, dict):
+        return
+    decision = autopilot.get("decision") if isinstance(autopilot.get("decision"), dict) else {}
+    state = autopilot.get("state") if isinstance(autopilot.get("state"), dict) else {}
+    pending = autopilot.get("pendingDraft") if isinstance(autopilot.get("pendingDraft"), dict) else None
+    live["decisionStatus"] = decision.get("status") or state.get("status")
+    live["decisionReasonCode"] = decision.get("reasonCode") or decision.get("reason_code") or state.get("reasonCode")
+    live["decisionAction"] = decision.get("action")
+    live["pendingConfirmation"] = bool(
+        pending is not None and pending.get("status") == "awaiting_confirmation"
+    )
+    live["lastAction"] = decision.get("reason") or state.get("reason")
 
 
 def _preview_text(text: str | None, *, limit: int = 140) -> str | None:

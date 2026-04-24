@@ -128,6 +128,17 @@ describe("ReplyPanel", () => {
               ],
             },
           }}
+          live={{
+            scope: "active_chat",
+            status: "refreshed",
+            reasonCode: "meaningful_signal",
+            replyAction: "started",
+            decisionStatus: "awaiting_confirmation",
+            pendingConfirmation: true,
+            newMessageCount: 1,
+            meaningfulMessageCount: 1,
+            lastAction: "Режим semi_auto: подготовлен черновик, требуется один явный confirm.",
+          }}
           workflowState={null}
           onRefresh={vi.fn()}
           onCopy={vi.fn()}
@@ -565,6 +576,17 @@ describe("ReplyPanel", () => {
             sendPath: { effective: "new" },
             sendDisabledReason: null,
           }}
+          live={{
+            scope: "active_chat",
+            status: "refreshed",
+            reasonCode: "meaningful_signal",
+            replyAction: "started",
+            decisionStatus: "awaiting_confirmation",
+            pendingConfirmation: true,
+            newMessageCount: 1,
+            meaningfulMessageCount: 1,
+            lastAction: "Режим semi_auto: подготовлен черновик, требуется один явный confirm.",
+          }}
           workflowState={null}
           onRefresh={vi.fn()}
           onCopy={vi.fn()}
@@ -796,6 +818,17 @@ describe("ReplyPanel", () => {
             sendPath: { effective: "new" },
             sendDisabledReason: null,
           }}
+          live={{
+            scope: "active_chat",
+            status: "refreshed",
+            reasonCode: "meaningful_signal",
+            replyAction: "started",
+            decisionStatus: "awaiting_confirmation",
+            pendingConfirmation: true,
+            newMessageCount: 1,
+            meaningfulMessageCount: 1,
+            lastAction: "Режим semi_auto: подготовлен черновик, требуется один явный confirm.",
+          }}
           workflowState={null}
           onRefresh={vi.fn()}
           onCopy={vi.fn()}
@@ -812,6 +845,8 @@ describe("ReplyPanel", () => {
     );
 
     expect(screen.getByText("Глобально: Полуавтомат")).toBeInTheDocument();
+    expect(screen.getByText("live pending")).toBeInTheDocument();
+    expect(screen.getByText("Live loop")).toBeInTheDocument();
     expect(screen.getAllByText("Ждёт подтверждения").length).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText("Глобальный режим"), { target: { value: "autopilot" } });
     fireEvent.change(screen.getByLabelText("Режим чата"), { target: { value: "draft" } });

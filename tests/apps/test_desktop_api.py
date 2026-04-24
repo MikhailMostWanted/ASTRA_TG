@@ -232,6 +232,43 @@ def test_desktop_api_chat_roster_payload_exposes_new_runtime_source_and_identity
     asyncio.run(run_assertions())
 
 
+def test_desktop_api_live_roster_uses_coordinator_cache_and_manual_refresh(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, _ = await _seed_runtime(monkeypatch, tmp_path)
+        target = _FakeTargetRuntime()
+        app = create_app(
+            settings,
+            runtime=runtime,
+            target_runtime=target,
+            runtime_switches=RuntimeSwitches(chat_roster="new"),
+        )
+
+        with TestClient(app) as client:
+            first = client.get("/api/live/roster")
+            assert first.status_code == 200
+            first_payload = first.json()
+            assert first_payload["live"]["scope"] == "roster"
+            assert first_payload["live"]["reasonCode"] == "roster_poll"
+            assert first_payload["live"]["changedItemCount"] == 1
+
+            cached = client.get("/api/live/roster")
+            assert cached.status_code == 200
+            assert cached.json()["live"]["reasonCode"] == "interval_not_due"
+            assert target.roster_calls == 1
+
+            refreshed = client.post("/api/live/roster/refresh")
+            assert refreshed.status_code == 200
+            assert refreshed.json()["live"]["reasonCode"] == "manual_refresh"
+            assert target.roster_calls == 2
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
 def test_desktop_api_workspace_payload_uses_new_runtime_for_runtime_only_chat(
     monkeypatch,
     tmp_path: Path,
@@ -490,6 +527,54 @@ def test_desktop_api_reply_execution_autopilot_send_and_emergency_stop(
             stopped_payload = stopped_workspace.json()
             assert stopped_payload["autopilot"]["decision"]["reasonCode"] == "emergency_stop_active"
             assert len(target.send_calls) == 1
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_desktop_api_live_active_workspace_runs_reply_execution_with_live_context(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, _ = await _seed_runtime(monkeypatch, tmp_path)
+        target = _ReplyExecutionTargetRuntime()
+        app = create_app(
+            settings,
+            runtime=runtime,
+            target_runtime=target,
+            runtime_switches=RuntimeSwitches(
+                message_workspace="new",
+                send_path="new",
+            ),
+        )
+
+        with TestClient(app) as client:
+            assert client.post("/api/autopilot", json={"mode": "autopilot"}).status_code == 200
+            assert client.post(
+                "/api/chats/-200001/autopilot",
+                json={
+                    "mode": "autopilot",
+                    "trusted": True,
+                    "autopilot_allowed": True,
+                },
+            ).status_code == 200
+
+            workspace = client.get("/api/live/chats/-200001/workspace")
+            assert workspace.status_code == 200
+            payload = workspace.json()
+            assert payload["live"]["scope"] == "active_chat"
+            assert payload["live"]["reasonCode"] == "initial_snapshot"
+            assert payload["live"]["decisionStatus"] in {"cooldown", "sent"}
+            assert payload["autopilot"]["decision"]["liveSource"] == "desktop_live_coordinator"
+            assert payload["autopilot"]["decision"]["freshnessMode"] == "fresh"
+            assert payload["messages"][-1]["direction"] == "outbound"
+            assert len(target.send_calls) == 1
+
+            activity = client.get("/api/live/activity")
+            assert activity.status_code == 200
+            assert any(item["scope"] == "active_chat" for item in activity.json()["items"])
 
         await runtime.dispose()
 
@@ -926,6 +1011,7 @@ class _FakeTargetRuntime:
         self.fail_workspace = fail_workspace
         self.sent_messages: list[dict[str, object]] = []
         self.send_calls: list[dict[str, object]] = []
+        self.roster_calls = 0
 
     @property
     def chat_roster(self):
@@ -948,6 +1034,7 @@ class _FakeTargetRuntime:
         return self
 
     async def list_chats(self, **_kwargs):
+        self.roster_calls += 1
         return {
             "items": [
                 {

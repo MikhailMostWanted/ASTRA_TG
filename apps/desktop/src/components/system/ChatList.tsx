@@ -17,7 +17,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCompactNumber, formatDateTime, formatRelativeTime, initials } from "@/lib/format";
 import { safeArray, safeRecord } from "@/lib/runtime-guards";
-import type { ChatItem, ChatRosterStatePayload } from "@/lib/types";
+import type { ChatItem, ChatRosterStatePayload, LiveStatusPayload } from "@/lib/types";
 import type { ChatWorkspaceState } from "@/stores/app-store";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +36,7 @@ interface ChatListProps {
   refreshedAt?: string | null;
   syncIndicator?: string | null;
   roster?: ChatRosterStatePayload | null;
+  live?: LiveStatusPayload | null;
   onSearchChange: (value: string) => void;
   onFilterChange: (value: string) => void;
   onSortChange: (value: string) => void;
@@ -64,6 +65,7 @@ export function ChatList({
   refreshedAt = null,
   syncIndicator = null,
   roster = null,
+  live = null,
   onSearchChange,
   onFilterChange,
   onSortChange,
@@ -153,6 +155,22 @@ export function ChatList({
             {roster?.degraded ? (
               <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
                 fallback
+              </Badge>
+            ) : null}
+            {live ? (
+              <Badge
+                variant="outline"
+                className={cn(
+                  "border-0 ring-1",
+                  live.degraded
+                    ? "bg-rose-400/12 text-rose-100 ring-rose-300/15"
+                    : "bg-emerald-300/12 text-emerald-100 ring-emerald-300/15",
+                )}
+              >
+                roster live
+                {typeof live.changedItemCount === "number" && live.changedItemCount > 0
+                  ? ` +${live.changedItemCount}`
+                  : ""}
               </Badge>
             ) : null}
           </div>

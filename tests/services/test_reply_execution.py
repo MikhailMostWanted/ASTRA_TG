@@ -118,6 +118,14 @@ def test_reply_execution_safeguards_block_weak_low_confidence_untrusted_and_unav
     )
     assert no_send_path.reason_code == "send_path_unavailable"
 
+    degraded = machine.evaluate(
+        global_policy=global_policy,
+        chat_policy=autopilot_chat,
+        state={},
+        context=_context(workspace_degraded=True),
+    )
+    assert degraded.reason_code == "runtime_degraded"
+
 
 def test_reply_execution_cooldown_antiduplicate_and_emergency_stop() -> None:
     machine = ReplyExecutionStateMachine()
@@ -139,6 +147,9 @@ def test_reply_execution_cooldown_antiduplicate_and_emergency_stop() -> None:
     )
     assert allowed.allowed is True
     assert allowed.action == "send"
+    assert allowed.to_payload()["sourceBackend"] == "new_runtime"
+    assert allowed.to_payload()["freshnessMode"] == "fresh"
+    assert allowed.to_payload()["liveSource"] == "desktop_live_coordinator"
 
     duplicate = machine.evaluate(
         global_policy=global_policy,
@@ -175,6 +186,7 @@ def _context(
     send_effective_backend: str = "new",
     source_message_key: str = "telegram:-1001:10",
     source_runtime_message_id: int = 10,
+    workspace_degraded: bool = False,
 ) -> ReplyExecutionContext:
     return ReplyExecutionContext(
         requested_chat_id=1,
@@ -184,7 +196,11 @@ def _context(
         chat_type="group",
         source_backend="new_runtime",
         workspace_source="new",
-        workspace_degraded=False,
+        freshness_mode="fresh",
+        freshness_sync_trigger="runtime_poll",
+        live_source="desktop_live_coordinator",
+        live_new_message_count=1,
+        workspace_degraded=workspace_degraded,
         send_available=send_available,
         send_effective_backend=send_effective_backend,
         latest_message_direction="inbound",
