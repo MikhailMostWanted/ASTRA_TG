@@ -574,34 +574,69 @@ export interface ReplyContextPayload {
 export interface AutopilotPayload {
   masterEnabled: boolean;
   allowChannels: boolean;
-  mode: "off" | "draft" | "confirm" | "autopilot" | string;
+  globalMode?: "off" | "draft" | "semi_auto" | "autopilot" | string;
+  emergencyStop?: boolean;
+  autopilotPaused?: boolean;
+  mode: "off" | "draft" | "semi_auto" | "confirm" | "autopilot" | string;
+  effectiveMode?: "off" | "draft" | "semi_auto" | "autopilot" | string;
   trusted: boolean;
+  allowed?: boolean;
+  autopilotAllowed?: boolean;
   writeReady: boolean;
+  policy?: Record<string, unknown>;
+  state?: {
+    status?: string;
+    reasonCode?: string | null;
+    reason?: string | null;
+    updatedAt?: string | null;
+    lastDecisionAt?: string | null;
+  };
   decision: {
     mode: string;
+    effectiveMode?: string;
+    status?: string;
     action: string;
     allowed: boolean;
     reason: string;
+    reasonCode?: string | null;
     confidence: number | null;
     trigger: string | null;
+    focus?: string | null;
+    opportunity?: string | null;
     sourceMessageId: number | null;
+    sourceMessageKey?: string | null;
+    sourceRuntimeMessageId?: number | null;
     replyText: string | null;
+    draftScopeKey?: string | null;
     pendingDraftStatus: string | null;
+    executionId?: string | null;
   };
   pendingDraft: {
+    id?: string;
+    executionId?: string;
     text?: string;
     mode?: string;
     status?: string;
     created_at?: string;
+    createdAt?: string;
     source_message_id?: number;
+    sourceMessageId?: number;
+    source_message_key?: string;
+    sourceMessageKey?: string;
     confidence?: number;
     trigger?: string;
     focus_label?: string;
+    focus?: string;
+    opportunity?: string;
+    draft_scope_key?: string;
+    draftScopeKey?: string;
     source_message_preview?: string;
     reply_opportunity_reason?: string;
   } | null;
   lastSentAt: string | null;
   lastSentSourceMessageId: number | null;
+  lastSentSourceMessageKey?: string | null;
+  lastSentMessageKey?: string | null;
   cooldown: {
     active: boolean;
     remainingSeconds: number;
@@ -616,8 +651,12 @@ export interface AutopilotPayload {
     automatic?: boolean;
     message?: string;
     reason?: string | null;
+    reasonCode?: string | null;
+    reason_code?: string | null;
     confidence?: number | null;
     trigger?: string | null;
+    focus?: string | null;
+    opportunity?: string | null;
     chat_id?: number | null;
     source_message_id?: number | null;
     sent_message_id?: number | null;
@@ -628,6 +667,9 @@ export interface AutopilotPayload {
     draft_scope_key?: string | null;
     sent_message_key?: string | null;
     error_code?: string | null;
+    executionId?: string | null;
+    execution_id?: string | null;
+    allowed?: boolean | null;
   }>;
 }
 
@@ -727,6 +769,8 @@ export interface ManualSendJournalPayload {
 }
 
 export interface AutopilotGlobalPayload {
+  policy?: Record<string, unknown>;
+  globalPolicy?: Record<string, unknown>;
   settings: {
     master_enabled: boolean;
     allow_channels: boolean;
@@ -734,11 +778,25 @@ export interface AutopilotGlobalPayload {
     min_prepare_confidence?: number;
     min_send_confidence?: number;
   };
+  activity?: AutopilotPayload["journal"];
 }
 
 export interface ChatAutopilotPayload {
   chat: ChatItem;
+  policy?: Record<string, unknown>;
   autopilot: AutopilotPayload;
+  workspace?: ChatWorkspacePayload | null;
+}
+
+export interface AutopilotConfirmPayload {
+  ok: boolean;
+  status: string;
+  reason: string | null;
+  error: { code: string; message: string | null } | null;
+  autopilot: AutopilotPayload | null;
+  sentMessage?: MessageItem | null;
+  sentMessageIdentity?: Record<string, unknown> | null;
+  workspace: ChatWorkspacePayload | null;
 }
 
 export interface SourcesPayload {

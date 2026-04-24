@@ -216,28 +216,36 @@ export function ChatsScreen() {
     },
   });
   const autopilotGlobalMutation = useMutation({
-    mutationFn: (enabled: boolean) => api.updateAutopilotGlobal({ master_enabled: enabled }),
+    mutationFn: (payload: {
+      mode?: string;
+      master_enabled?: boolean;
+      emergency_stop?: boolean;
+      autopilot_paused?: boolean;
+    }) => api.updateAutopilotGlobal(payload),
     onSuccess: async () => {
-      toast.success("Глобальный режим автопилота обновлён.");
+      toast.success("Глобальный режим ответов обновлён.");
       if (selectedChat?.chatKey) {
         await queryClient.refetchQueries({ queryKey: ["chat-workspace", selectedChat.chatKey], exact: true });
       }
     },
     onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Не удалось обновить master switch.");
+      toast.error(error instanceof Error ? error.message : "Не удалось обновить глобальный режим.");
     },
   });
   const autopilotChatMutation = useMutation({
     mutationFn: ({
-      localChatId,
+      chatId,
       chatKey: _chatKey,
       payload,
     }: {
-      localChatId: number;
+      chatId: number;
       chatKey: string;
-      payload: { trusted?: boolean; mode?: string };
-    }) => api.updateChatAutopilot(localChatId, payload),
-    onSuccess: async (_payload, variables) => {
+      payload: { trusted?: boolean; allowed?: boolean; autopilot_allowed?: boolean; mode?: string };
+    }) => api.updateChatAutopilot(chatId, payload),
+    onSuccess: async (payload, variables) => {
+      if (payload.workspace) {
+        queryClient.setQueryData(["chat-workspace", variables.chatKey], payload.workspace);
+      }
       toast.success("Настройки автопилота для чата обновлены.");
       await Promise.all([
         queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
@@ -246,6 +254,39 @@ export function ChatsScreen() {
     },
     onError: (error) => {
       toast.error(error instanceof Error ? error.message : "Не удалось обновить автопилот чата.");
+    },
+  });
+  const autopilotConfirmMutation = useMutation({
+    mutationFn: ({
+      chatId,
+      chatKey: _chatKey,
+      pendingId,
+    }: {
+      chatId: number;
+      chatKey: string;
+      pendingId: string | null;
+    }) => api.confirmAutopilotPending(chatId, pendingId),
+    onSuccess: async (payload, variables) => {
+      if (!payload.ok) {
+        toast.error(payload.reason || payload.error?.message || "Confirm send заблокирован.");
+        if (payload.workspace) {
+          queryClient.setQueryData(["chat-workspace", variables.chatKey], payload.workspace);
+        }
+        return;
+      }
+      if (payload.workspace) {
+        queryClient.setQueryData(["chat-workspace", variables.chatKey], payload.workspace);
+      }
+      clearReplyDraft(variables.chatKey);
+      setOlderMessages([]);
+      toast.success("Полуавтомат отправил сообщение после confirm.");
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
+      ]);
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось подтвердить отправку.");
     },
   });
   const tailMessageItems = safeArray(workspaceQuery.data?.messages);
@@ -471,7 +512,7 @@ export function ChatsScreen() {
         refreshing={workspaceQuery.isFetching || syncChatMutation.isPending}
         sending={sendMessageMutation.isPending}
         sendStatus={manualSendStatus}
-        autopilotUpdating={autopilotGlobalMutation.isPending || autopilotChatMutation.isPending}
+        autopilotUpdating={autopilotGlobalMutation.isPending || autopilotChatMutation.isPending || autopilotConfirmMutation.isPending}
         errorMessage={
           workspaceQuery.isError
             ? extractErrorMessage(workspaceQuery.error, "Не удалось собрать reply preview.")
@@ -569,21 +610,31 @@ export function ChatsScreen() {
           clearReplyDraft(selectedChat.chatKey);
           toast.success("Черновик очищен.");
         }}
-        onUpdateAutopilotGlobal={(enabled) => {
-          autopilotGlobalMutation.mutate(enabled);
+        onUpdateAutopilotGlobal={(payload) => {
+          autopilotGlobalMutation.mutate(payload);
         }}
         onUpdateChatAutopilot={(payload) => {
-          if (selectedLocalChatId === null) {
-            return;
-          }
           if (!selectedChat?.chatKey) {
             return;
           }
           autopilotChatMutation.mutate({
-            localChatId: selectedLocalChatId,
+            chatId: selectedChat.id,
             chatKey: selectedChat.chatKey,
             payload,
           });
+        }}
+        onConfirmAutopilot={(pendingId) => {
+          if (!selectedChat?.chatKey) {
+            return;
+          }
+          autopilotConfirmMutation.mutate({
+            chatId: selectedChat.id,
+            chatKey: selectedChat.chatKey,
+            pendingId,
+          });
+        }}
+        onEmergencyStop={() => {
+          autopilotGlobalMutation.mutate({ emergency_stop: true, mode: "off", autopilot_paused: true });
         }}
       />
     </div>

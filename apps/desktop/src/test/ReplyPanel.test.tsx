@@ -688,4 +688,208 @@ describe("ReplyPanel", () => {
     expect(screen.getByText("вопрос")).toBeInTheDocument();
     expect(screen.getByText("Message list и reply panel всё равно смотрят в один и тот же snapshot. Если draft не собрался, здесь остаётся честный focus context без декоративного фейка.")).toBeInTheDocument();
   });
+
+  it("renders managed reply execution controls and confirms pending semi-auto send", () => {
+    const onUpdateGlobal = vi.fn();
+    const onUpdateChat = vi.fn();
+    const onConfirm = vi.fn();
+    const onEmergencyStop = vi.fn();
+
+    render(
+      <TooltipProvider>
+        <ReplyPanel
+          reply={buildAutopilotReply()}
+          autopilot={{
+            masterEnabled: true,
+            allowChannels: false,
+            globalMode: "semi_auto",
+            emergencyStop: false,
+            autopilotPaused: false,
+            mode: "semi_auto",
+            effectiveMode: "semi_auto",
+            trusted: true,
+            allowed: false,
+            autopilotAllowed: false,
+            writeReady: true,
+            decision: {
+              mode: "semi_auto",
+              effectiveMode: "semi_auto",
+              status: "awaiting_confirmation",
+              action: "confirm",
+              allowed: true,
+              reason: "Режим semi_auto: подготовлен черновик, требуется один явный confirm.",
+              reasonCode: "confirm_required",
+              confidence: 0.91,
+              trigger: "вопрос",
+              focus: "вопрос",
+              opportunity: "direct_reply",
+              sourceMessageId: null,
+              sourceMessageKey: "telegram:-100777:41",
+              sourceRuntimeMessageId: 41,
+              replyText: "Да, посмотрю сейчас.",
+              draftScopeKey: "telegram:-100777:41::вопрос::direct_reply::Сможешь посмотреть это сегодня?",
+              pendingDraftStatus: "awaiting_confirmation",
+              executionId: "rex_test_confirm",
+            },
+            pendingDraft: {
+              id: "rex_test_confirm",
+              executionId: "rex_test_confirm",
+              text: "Да, посмотрю сейчас.",
+              mode: "semi_auto",
+              status: "awaiting_confirmation",
+              sourceMessageKey: "telegram:-100777:41",
+              confidence: 0.91,
+              trigger: "вопрос",
+              draftScopeKey: "telegram:-100777:41::вопрос::direct_reply::Сможешь посмотреть это сегодня?",
+            },
+            lastSentAt: null,
+            lastSentSourceMessageId: null,
+            cooldown: {
+              active: false,
+              remainingSeconds: 0,
+              until: null,
+            },
+            journal: [
+              {
+                timestamp: "2026-04-24T12:00:00.000Z",
+                action: "confirm_awaited",
+                status: "awaiting_confirmation",
+              message: "Ждёт подтверждения",
+                reasonCode: "confirm_required",
+              },
+            ],
+          }}
+          workspaceStatus={{
+            source: "new",
+            requestedBackend: "new",
+            effectiveBackend: "new",
+            degraded: false,
+            degradedReason: null,
+            syncTrigger: "runtime_poll",
+            updatedNow: true,
+            syncError: null,
+            lastUpdatedAt: "2026-04-23T09:05:02.000Z",
+            lastSuccessAt: "2026-04-23T09:05:02.000Z",
+            lastError: null,
+            lastErrorAt: null,
+            availability: {
+              workspaceAvailable: true,
+              historyReadable: true,
+              runtimeReadable: true,
+              legacyWorkspaceAvailable: false,
+              replyContextAvailable: true,
+              sendAvailable: true,
+              autopilotAvailable: true,
+              canLoadOlder: true,
+            },
+            messageSource: {
+              backend: "new_runtime",
+              chatKey: "telegram:-100777",
+              runtimeChatId: -100777,
+              localChatId: null,
+              oldestMessageKey: "telegram:-100777:41",
+              newestMessageKey: "telegram:-100777:41",
+              oldestRuntimeMessageId: 41,
+              newestRuntimeMessageId: 41,
+            },
+            route: {},
+            sendPath: { effective: "new" },
+            sendDisabledReason: null,
+          }}
+          workflowState={null}
+          onRefresh={vi.fn()}
+          onCopy={vi.fn()}
+          onUseDraft={vi.fn()}
+          onSend={vi.fn()}
+          onMarkSent={vi.fn()}
+          onClearDraft={vi.fn()}
+          onUpdateAutopilotGlobal={onUpdateGlobal}
+          onUpdateChatAutopilot={onUpdateChat}
+          onConfirmAutopilot={onConfirm}
+          onEmergencyStop={onEmergencyStop}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("Глобально: Полуавтомат")).toBeInTheDocument();
+    expect(screen.getAllByText("Ждёт подтверждения").length).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText("Глобальный режим"), { target: { value: "autopilot" } });
+    fireEvent.change(screen.getByLabelText("Режим чата"), { target: { value: "draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Подтвердить отправку" }));
+    fireEvent.click(screen.getByRole("button", { name: "Экстренный стоп" }));
+
+    expect(onUpdateGlobal).toHaveBeenCalledWith({ mode: "autopilot" });
+    expect(onUpdateChat).toHaveBeenCalledWith({ mode: "draft" });
+    expect(onConfirm).toHaveBeenCalledWith("rex_test_confirm");
+    expect(onEmergencyStop).toHaveBeenCalled();
+  });
 });
+
+function buildAutopilotReply(): ReplyPreviewPayload {
+  return {
+    kind: "suggestion",
+    chatId: -200001,
+    chatTitle: "Runtime chat",
+    chatReference: "@runtime_chat",
+    errorMessage: null,
+    sourceSenderName: "Анна",
+    sourceMessagePreview: "Сможешь посмотреть это сегодня?",
+    actions: {
+      copy: true,
+      refresh: true,
+      pasteToTelegram: false,
+      send: true,
+      markSent: false,
+      variants: {},
+      disabledReason: null,
+    },
+    suggestion: {
+      baseReplyText: "Да, посмотрю сейчас.",
+      replyMessages: ["Да, посмотрю сейчас."],
+      finalReplyMessages: ["Да, посмотрю сейчас."],
+      replyText: "Да, посмотрю сейчас.",
+      styleProfileKey: "friend_explain",
+      styleSource: "auto",
+      styleNotes: [],
+      personaApplied: false,
+      personaNotes: [],
+      guardrailFlags: [],
+      reasonShort: "Есть вопрос.",
+      riskLabel: "низкий",
+      confidence: 0.91,
+      strategy: "ответить коротко",
+      sourceMessageId: null,
+      chatId: -200001,
+      situation: "question",
+      sourceMessagePreview: "Сможешь посмотреть это сегодня?",
+      focusLabel: "вопрос",
+      focusReason: "Последний входящий вопрос.",
+      sourceMessageKey: "telegram:-100777:41",
+      sourceLocalMessageId: null,
+      sourceRuntimeMessageId: 41,
+      sourceBackend: "new_runtime",
+      replyOpportunityMode: "direct_reply",
+      replyOpportunityReason: "Последний входящий вопрос без ответа.",
+      replyRecommended: true,
+      fewShotFound: false,
+      fewShotMatchCount: 0,
+      fewShotNotes: [],
+      alternativeAction: null,
+      llmRefineRequested: false,
+      llmRefineApplied: false,
+      llmRefineProvider: null,
+      llmRefineNotes: [],
+      llmRefineGuardrailFlags: [],
+      llmStatus: null,
+      llmDebug: null,
+      variants: [
+        {
+          id: "primary",
+          label: "Основной",
+          description: "Короткий ответ.",
+          text: "Да, посмотрю сейчас.",
+        },
+      ],
+    },
+  };
+}

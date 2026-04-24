@@ -70,8 +70,15 @@ interface ReplyPanelProps {
   ) => void;
   onMarkSent: (sourceMessageId: number | null, sourceMessageKey: string | null) => void;
   onClearDraft: () => void;
-  onUpdateAutopilotGlobal?: (enabled: boolean) => void;
-  onUpdateChatAutopilot?: (payload: { trusted?: boolean; mode?: string }) => void;
+  onUpdateAutopilotGlobal?: (payload: {
+    mode?: string;
+    master_enabled?: boolean;
+    emergency_stop?: boolean;
+    autopilot_paused?: boolean;
+  }) => void;
+  onUpdateChatAutopilot?: (payload: { trusted?: boolean; allowed?: boolean; autopilot_allowed?: boolean; mode?: string }) => void;
+  onConfirmAutopilot?: (pendingId: string | null) => void;
+  onEmergencyStop?: () => void;
 }
 
 export function ReplyPanel({
@@ -95,6 +102,8 @@ export function ReplyPanel({
   onClearDraft,
   onUpdateAutopilotGlobal = () => undefined,
   onUpdateChatAutopilot = () => undefined,
+  onConfirmAutopilot = () => undefined,
+  onEmergencyStop = () => undefined,
 }: ReplyPanelProps) {
   const safeReply = normalizeReplyPreviewPayload(reply);
   const safeAutopilot = normalizeAutopilotPayload(autopilot);
@@ -225,6 +234,13 @@ export function ReplyPanel({
   );
   const hasActiveDraft = Boolean(workflowState?.draftText && (draftScopeMatches || legacyDraftMatches));
   const hasStaleDraft = Boolean(workflowState?.draftText && !hasActiveDraft);
+  const autopilotPending = safeAutopilot?.pendingDraft ?? null;
+  const autopilotPendingId = autopilotPending?.executionId || autopilotPending?.id || null;
+  const autopilotMode = safeAutopilot?.mode || "off";
+  const autopilotEffectiveMode = safeAutopilot?.effectiveMode || autopilotMode;
+  const autopilotAllowed = Boolean(safeAutopilot?.autopilotAllowed ?? safeAutopilot?.allowed);
+  const autopilotBlockedReason = safeAutopilot?.decision.reason || safeAutopilot?.state?.reason || null;
+  const autopilotReasonCode = safeAutopilot?.decision.reasonCode || safeAutopilot?.state?.reasonCode || null;
   useEffect(() => {
     const activeDraft = hasActiveDraft ? workflowState?.draftText || "" : "";
     setDraftText(activeDraft || selectedReply || "");
@@ -1008,26 +1024,82 @@ export function ReplyPanel({
                       : "bg-white/7 text-slate-200 ring-white/10",
                   )}
                 >
-                  {formatAutopilotMode(safeAutopilot.mode)}
+                  {formatAutopilotMode(autopilotEffectiveMode)}
                 </Badge>
               ) : null}
             </div>
 
             {safeAutopilot ? (
               <div className="flex flex-col gap-3">
+                <div
+                  className={cn(
+                    "rounded-[18px] border px-4 py-3",
+                    safeAutopilot.emergencyStop
+                      ? "border-rose-300/16 bg-rose-400/8"
+                      : safeAutopilot.masterEnabled
+                        ? "border-emerald-300/14 bg-emerald-300/8"
+                        : "border-white/6 bg-white/[0.03]",
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Безопасность</div>
+                      <div className="mt-1 font-medium text-white">
+                        {safeAutopilot.emergencyStop
+                          ? "Экстренный стоп активен"
+                          : safeAutopilot.masterEnabled
+                            ? `Глобально: ${formatAutopilotMode(safeAutopilot.globalMode)}`
+                            : "Глобально выключено"}
+                      </div>
+                    </div>
+                    <Button
+                      variant="outline"
+                      className="border-rose-300/14 bg-rose-400/8 text-rose-50"
+                      disabled={autopilotUpdating || safeAutopilot.emergencyStop}
+                      onClick={onEmergencyStop}
+                    >
+                      <StopCircle data-icon="inline-start" />
+                      Экстренный стоп
+                    </Button>
+                  </div>
+                  {safeAutopilot.autopilotPaused ? (
+                    <div className="mt-2 text-xs text-amber-100">Автопилот на паузе, автоотправка не выполняется.</div>
+                  ) : null}
+                </div>
+
                 <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "border-white/8 bg-black/18 text-slate-100",
-                      safeAutopilot.masterEnabled ? "border-emerald-300/18 bg-emerald-300/10 text-emerald-50" : "",
-                    )}
-                    disabled={autopilotUpdating}
-                    onClick={() => onUpdateAutopilotGlobal(!safeAutopilot.masterEnabled)}
-                  >
-                    <Power data-icon="inline-start" />
-                    {safeAutopilot.masterEnabled ? "Глобально включён" : "Глобально выключен"}
-                  </Button>
+                  <label className="flex flex-col gap-2">
+                    <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Глобальный режим</span>
+                    <select
+                      value={safeAutopilot.globalMode || "off"}
+                      disabled={autopilotUpdating || safeAutopilot.emergencyStop}
+                      onChange={(event) => onUpdateAutopilotGlobal({ mode: event.target.value })}
+                      className="rounded-[16px] border border-white/8 bg-black/24 px-3 py-2 text-sm text-slate-100 outline-none"
+                    >
+                      <option value="off">Выключен</option>
+                      <option value="draft">Черновик</option>
+                      <option value="semi_auto">Полуавтомат</option>
+                      <option value="autopilot">Автопилот</option>
+                    </select>
+                  </label>
+
+                  <label className="flex flex-col gap-2">
+                    <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Режим чата</span>
+                    <select
+                      value={autopilotMode === "confirm" ? "semi_auto" : autopilotMode}
+                      disabled={autopilotUpdating}
+                      onChange={(event) => onUpdateChatAutopilot({ mode: event.target.value })}
+                      className="rounded-[16px] border border-white/8 bg-black/24 px-3 py-2 text-sm text-slate-100 outline-none"
+                    >
+                      <option value="off">Выключен</option>
+                      <option value="draft">Черновик</option>
+                      <option value="semi_auto">Полуавтомат</option>
+                      <option value="autopilot">Автопилот</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
                   <Button
                     variant="outline"
                     className={cn(
@@ -1037,29 +1109,27 @@ export function ReplyPanel({
                     disabled={autopilotUpdating}
                     onClick={() => onUpdateChatAutopilot({ trusted: !safeAutopilot.trusted })}
                   >
-                    {safeAutopilot.trusted ? "Чат разрешён" : "Чат не разрешён"}
+                    {safeAutopilot.trusted ? "Доверенный чат" : "Не доверенный"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      "border-white/8 bg-black/18 text-slate-100",
+                      autopilotAllowed ? "border-emerald-300/18 bg-emerald-300/10 text-emerald-50" : "",
+                    )}
+                    disabled={autopilotUpdating}
+                    onClick={() => onUpdateChatAutopilot({ autopilot_allowed: !autopilotAllowed, allowed: !autopilotAllowed })}
+                  >
+                    {autopilotAllowed ? "Автопилот разрешён" : "Автопилот запрещён"}
                   </Button>
                 </div>
 
-                <label className="flex flex-col gap-2">
-                  <span className="text-xs uppercase tracking-[0.22em] text-slate-500">Режим чата</span>
-                  <select
-                    value={safeAutopilot.mode}
-                    disabled={autopilotUpdating}
-                    onChange={(event) => onUpdateChatAutopilot({ mode: event.target.value })}
-                    className="rounded-[16px] border border-white/8 bg-black/24 px-3 py-2 text-sm text-slate-100 outline-none"
-                  >
-                    <option value="off">Выключен</option>
-                    <option value="draft">Черновик</option>
-                    <option value="confirm">Полуавтомат</option>
-                    <option value="autopilot">Автопилот</option>
-                  </select>
-                </label>
-
                 <div className="rounded-[18px] border border-white/6 bg-white/[0.03] px-4 py-3">
                   <div className="mb-1 text-xs uppercase tracking-[0.22em] text-slate-500">Решение сейчас</div>
-                  <div className="text-slate-100">{safeAutopilot.decision.reason}</div>
+                  <div className="text-slate-100">{autopilotBlockedReason || "Решения пока нет."}</div>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-400">
+                    <span>статус: {safeAutopilot.state?.status || safeAutopilot.decision.status || "idle"}</span>
+                    <span>код: {autopilotReasonCode || "none"}</span>
                     <span>триггер: {safeAutopilot.decision.trigger || "нет"}</span>
                     <span>уверенность: {formatConfidence(safeAutopilot.decision.confidence)}</span>
                     {safeAutopilot.cooldown.active ? (
@@ -1069,46 +1139,70 @@ export function ReplyPanel({
                   </div>
                 </div>
 
-                {safeAutopilot.pendingDraft?.text ? (
+                {autopilotPending?.text ? (
                   <div className="rounded-[18px] border border-amber-300/12 bg-amber-300/8 px-4 py-3">
                     <div className="mb-1 text-xs uppercase tracking-[0.22em] text-amber-100/70">
-                      Авточерновик
+                      {autopilotPending.status === "awaiting_confirmation" ? "Ждёт подтверждения" : "Авточерновик"}
                     </div>
-                    <div className="whitespace-pre-wrap text-slate-100">{safeAutopilot.pendingDraft.text}</div>
+                    <div className="whitespace-pre-wrap text-slate-100">{autopilotPending.text}</div>
                     <div className="mt-3 flex gap-2">
                       <Button
                         variant="outline"
                         className="border-white/8 bg-black/18 text-slate-100"
                         onClick={() => {
-                          const text = safeAutopilot.pendingDraft?.text || "";
+                          const text = autopilotPending?.text || "";
                           setDraftText(text);
-                          onUseDraft(text, safeAutopilot.decision.sourceMessageId, contextSourceMessageKey);
+                          onUseDraft(
+                            text,
+                            safeAutopilot.decision.sourceMessageId,
+                            safeAutopilot.decision.sourceMessageKey || contextSourceMessageKey,
+                          );
                         }}
                       >
                         Вставить
                       </Button>
-                      <Button
-                        className="bg-emerald-300 text-[#05111c] hover:bg-emerald-200"
-                        disabled={!sendAllowed || sending}
-                        onClick={() => onSend(
-                          safeAutopilot.pendingDraft?.text || "",
-                          safeAutopilot.decision.sourceMessageId,
-                          contextSourceMessageKey,
-                          currentDraftScopeKey,
-                        )}
-                      >
-                        Отправить
-                      </Button>
+                      {autopilotPending.status === "awaiting_confirmation" ? (
+                        <Button
+                          className="bg-emerald-300 text-[#05111c] hover:bg-emerald-200"
+                          disabled={autopilotUpdating || sending}
+                          onClick={() => onConfirmAutopilot(autopilotPendingId)}
+                        >
+                          <Send data-icon="inline-start" />
+                          Подтвердить отправку
+                        </Button>
+                      ) : (
+                        <Button
+                          className="bg-emerald-300 text-[#05111c] hover:bg-emerald-200"
+                          disabled={!sendAllowed || sending}
+                          onClick={() => onSend(
+                            autopilotPending?.text || "",
+                            safeAutopilot.decision.sourceMessageId,
+                            safeAutopilot.decision.sourceMessageKey || contextSourceMessageKey,
+                            safeAutopilot.decision.draftScopeKey || currentDraftScopeKey,
+                          )}
+                        >
+                          Отправить вручную
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ) : null}
 
-                <div className="flex gap-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    className="border-white/8 bg-black/18 text-slate-100"
+                    disabled={autopilotUpdating}
+                    onClick={() => onUpdateAutopilotGlobal({ autopilot_paused: !safeAutopilot.autopilotPaused })}
+                  >
+                    <Power data-icon="inline-start" />
+                    {safeAutopilot.autopilotPaused ? "Снять паузу" : "Пауза автопилота"}
+                  </Button>
                   <Button
                     variant="outline"
                     className="border-rose-300/14 bg-rose-400/8 text-rose-50"
                     disabled={autopilotUpdating}
-                    onClick={() => onUpdateChatAutopilot({ trusted: false, mode: "off" })}
+                    onClick={() => onUpdateChatAutopilot({ trusted: false, allowed: false, autopilot_allowed: false, mode: "off" })}
                   >
                     <StopCircle data-icon="inline-start" />
                     Стоп для чата
@@ -1147,7 +1241,7 @@ function formatAutopilotMode(mode: string | null | undefined): string {
   if (mode === "draft") {
     return "Черновик";
   }
-  if (mode === "confirm") {
+  if (mode === "confirm" || mode === "semi_auto") {
     return "Полуавтомат";
   }
   if (mode === "autopilot") {

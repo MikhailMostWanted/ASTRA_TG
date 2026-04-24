@@ -46,6 +46,11 @@ from services.memory_builder import MemoryService
 from services.memory_formatter import MemoryFormatter
 from services.operational_state import OperationalStateService
 from services.operational_tools import OperationalBackupService, OperationalExportService
+from services.reply_execution import (
+    ReplyExecutionActionError,
+    ReplyExecutionService,
+    normalize_reply_execution_mode,
+)
 from services.people_memory_builder import PeopleMemoryBuilder
 from services.providers.digest_refiner import DigestLLMRefiner
 from services.providers.manager import ProviderManager
@@ -190,6 +195,7 @@ class DesktopBridge:
         status["chatRoster"] = await self._get_chat_roster_state()
         status["messageWorkspace"] = await self._get_message_workspace_state()
         status["manualSend"] = await self._get_manual_send_state()
+        status["autopilot"] = await self.get_autopilot_status()
         return status
 
     async def get_new_runtime_health(self) -> dict[str, Any]:
@@ -437,7 +443,13 @@ class DesktopBridge:
             "refreshedAt": serialize_datetime(datetime.now(timezone.utc)),
         }
 
-    async def get_chat_workspace(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
+    async def get_chat_workspace(
+        self,
+        chat_id: int,
+        *,
+        limit: int = 80,
+        execute_reply_modes: bool = True,
+    ) -> dict[str, Any]:
         route = self._runtime_manager.route_status("messageWorkspace")
         effective_backend = route.effective
         payload: dict[str, Any]
@@ -468,6 +480,14 @@ class DesktopBridge:
             last_error=workspace_error,
         )
         await self._record_message_workspace_state(status_payload)
+        if execute_reply_modes:
+            execution = await self._apply_reply_execution_to_workspace(
+                chat_id,
+                payload=payload,
+                limit=limit,
+            )
+            if execution is not None and execution.get("workspace") is not None:
+                return execution["workspace"]
         return payload
 
     async def _legacy_get_chat_workspace(self, chat_id: int, *, limit: int = 80) -> dict[str, Any]:
@@ -497,6 +517,142 @@ class DesktopBridge:
                 limit=limit,
                 tail_refresh=tail_refresh,
             )
+
+    async def _apply_reply_execution_to_workspace(
+        self,
+        chat_id: int,
+        *,
+        payload: dict[str, Any],
+        limit: int,
+    ) -> dict[str, Any] | None:
+        async with self.runtime.session_factory() as session:
+            service = self._build_reply_execution_service(session)
+            run = await service.evaluate_workspace(
+                requested_chat_id=chat_id,
+                workspace_payload=payload,
+                actor="desktop",
+            )
+            payload["autopilot"] = run.autopilot
+            await OperationalStateService(SettingRepository(session)).record_reply_execution(
+                payload={
+                    "chatKey": run.autopilot.get("policy", {}).get("chat", {}).get("chatKey")
+                    if isinstance(run.autopilot.get("policy"), dict)
+                    else None,
+                    "decision": run.decision.to_payload(),
+                    "autopilot": run.autopilot,
+                },
+            )
+            await session.commit()
+            if run.pending_send is None:
+                return {"workspace": None, "autopilot": run.autopilot}
+            chat_policy = await service.get_chat_policy_for_payload(
+                requested_chat_id=chat_id,
+                chat_payload=payload.get("chat") if isinstance(payload.get("chat"), dict) else None,
+            )
+            state = await service._load_state(chat_policy.chat_key)
+            pending = run.pending_send
+
+        try:
+            send_payload = await self._send_reply_execution_via_new_send_path(chat_id, pending=pending)
+        except Exception as error:
+            async with self.runtime.session_factory() as session:
+                service = self._build_reply_execution_service(session)
+                state = await service.mark_failed(
+                    chat_policy=chat_policy,
+                    state=state,
+                    pending=pending,
+                    error=str(error),
+                    actor="desktop",
+                    automatic=True,
+                )
+                fallback_decision = await service.get_status_payload(
+                    requested_chat_id=chat_id,
+                    chat_payload=payload.get("chat") if isinstance(payload.get("chat"), dict) else None,
+                )
+                await OperationalStateService(SettingRepository(session)).record_reply_execution(
+                    payload=fallback_decision,
+                )
+                await session.commit()
+            payload["autopilot"] = fallback_decision.get("autopilot")
+            return {"workspace": None, "autopilot": payload["autopilot"]}
+
+        async with self.runtime.session_factory() as session:
+            service = self._build_reply_execution_service(session)
+            state = await service.mark_sent(
+                chat_policy=chat_policy,
+                state=state,
+                pending=pending,
+                sent_payload=send_payload,
+                actor="desktop",
+                automatic=True,
+            )
+            status = await service.get_status_payload(
+                requested_chat_id=chat_id,
+                chat_payload=payload.get("chat") if isinstance(payload.get("chat"), dict) else None,
+            )
+            await OperationalStateService(SettingRepository(session)).record_reply_execution(payload=status)
+            await session.commit()
+
+        workspace = await self.get_chat_workspace(
+            chat_id,
+            limit=limit,
+            execute_reply_modes=False,
+        )
+        workspace["autopilot"] = status.get("autopilot")
+        return {"workspace": workspace, "state": state}
+
+    async def _send_reply_execution_via_new_send_path(
+        self,
+        chat_id: int,
+        *,
+        pending: dict[str, Any],
+    ) -> dict[str, Any]:
+        route = self._runtime_manager.route_status("sendPath").to_payload()
+        if route.get("effective") != "new":
+            raise RuntimeUnavailableError(
+                route.get("reason")
+                if isinstance(route.get("reason"), str)
+                else "New runtime send-path is required for reply execution."
+            )
+        text = pending.get("text") if isinstance(pending.get("text"), str) else ""
+        source_message_id = (
+            pending.get("sourceMessageId")
+            if isinstance(pending.get("sourceMessageId"), int)
+            else pending.get("source_message_id")
+            if isinstance(pending.get("source_message_id"), int)
+            else None
+        )
+        source_message_key = (
+            pending.get("sourceMessageKey")
+            if isinstance(pending.get("sourceMessageKey"), str)
+            else pending.get("source_message_key")
+            if isinstance(pending.get("source_message_key"), str)
+            else None
+        )
+        draft_scope_key = (
+            pending.get("draftScopeKey")
+            if isinstance(pending.get("draftScopeKey"), str)
+            else pending.get("draft_scope_key")
+            if isinstance(pending.get("draft_scope_key"), str)
+            else None
+        )
+        client_send_id = (
+            pending.get("executionId")
+            if isinstance(pending.get("executionId"), str)
+            else pending.get("execution_id")
+            if isinstance(pending.get("execution_id"), str)
+            else None
+        )
+        return await self._runtime_manager.surface("sendPath").send_chat_message(
+            chat_id,
+            text=text,
+            source_message_id=source_message_id,
+            reply_to_source_message_id=source_message_id,
+            source_message_key=source_message_key,
+            reply_to_source_message_key=source_message_key,
+            draft_scope_key=draft_scope_key,
+            client_send_id=client_send_id,
+        )
 
     async def get_chat_messages(
         self,
@@ -756,7 +912,7 @@ class DesktopBridge:
                 draft_scope_key=draft_scope_key,
                 client_send_id=client_send_id,
             )
-            workspace = await self.get_chat_workspace(chat_id, limit=80)
+            workspace = await self.get_chat_workspace(chat_id, limit=80, execute_reply_modes=False)
             sent_message = send_payload.get("sentMessage") if isinstance(send_payload.get("sentMessage"), dict) else None
             sent_identity = _build_sent_message_identity(sent_message, send_payload)
             self._manual_send_recent_success_at[guard_key] = datetime.now(timezone.utc)
@@ -1213,24 +1369,48 @@ class DesktopBridge:
     async def update_autopilot_global(
         self,
         *,
+        mode: str | None = None,
         master_enabled: bool | None = None,
         allow_channels: bool | None = None,
+        emergency_stop: bool | None = None,
+        autopilot_paused: bool | None = None,
     ) -> dict[str, Any]:
-        return await self._runtime_manager.surface("autopilotControl").update_autopilot_global(
-            master_enabled=master_enabled,
-            allow_channels=allow_channels,
-        )
+        async with self.runtime.session_factory() as session:
+            service = self._build_reply_execution_service(session)
+            policy = await service.update_global_policy(
+                mode=mode,
+                master_enabled=master_enabled,
+                allow_channels=allow_channels,
+                emergency_stop=emergency_stop,
+                autopilot_paused=autopilot_paused,
+            )
+            payload = await service.get_status_payload()
+            await OperationalStateService(SettingRepository(session)).record_reply_execution(payload=payload)
+            await session.commit()
+            return {
+                **payload,
+                "settings": {
+                    "master_enabled": policy.master_enabled,
+                    "allow_channels": policy.allow_channels,
+                    "cooldown_seconds": policy.cooldown_seconds,
+                    "min_prepare_confidence": policy.min_prepare_confidence,
+                    "min_send_confidence": policy.min_send_confidence,
+                },
+            }
 
     async def _legacy_update_autopilot_global(
         self,
         *,
+        mode: str | None = None,
         master_enabled: bool | None = None,
         allow_channels: bool | None = None,
+        emergency_stop: bool | None = None,
+        autopilot_paused: bool | None = None,
     ) -> dict[str, Any]:
         # LEGACY_RUNTIME: settings-only autopilot control surface.
         async with self.runtime.session_factory() as session:
             payload = await self._build_autopilot_service(session).update_global_settings(
-                master_enabled=master_enabled,
+                master_enabled=master_enabled if master_enabled is not None else (normalize_reply_execution_mode(mode) != "off" if mode is not None else None),
                 allow_channels=allow_channels,
             )
             await session.commit()
@@ -1241,19 +1421,49 @@ class DesktopBridge:
         chat_id: int,
         *,
         trusted: bool | None = None,
+        allowed: bool | None = None,
+        autopilot_allowed: bool | None = None,
         mode: str | None = None,
     ) -> dict[str, Any]:
-        return await self._runtime_manager.surface("autopilotControl").update_chat_autopilot(
-            chat_id,
-            trusted=trusted,
-            mode=mode,
-        )
+        workspace = await self.get_chat_workspace(chat_id, limit=60, execute_reply_modes=False)
+        async with self.runtime.session_factory() as session:
+            service = self._build_reply_execution_service(session)
+            await service.update_chat_policy(
+                requested_chat_id=chat_id,
+                chat_payload=workspace.get("chat") if isinstance(workspace.get("chat"), dict) else None,
+                trusted=trusted,
+                allowed=allowed,
+                autopilot_allowed=autopilot_allowed,
+                mode=mode,
+            )
+            await session.commit()
+
+        refreshed = await self.get_chat_workspace(chat_id, limit=60, execute_reply_modes=False)
+        async with self.runtime.session_factory() as session:
+            service = self._build_reply_execution_service(session)
+            status = await service.get_status_payload(
+                requested_chat_id=chat_id,
+                chat_payload=refreshed.get("chat") if isinstance(refreshed.get("chat"), dict) else None,
+            )
+            await OperationalStateService(SettingRepository(session)).record_reply_execution(payload=status)
+            await session.commit()
+        autopilot = status.get("autopilot") if isinstance(status.get("autopilot"), dict) else None
+        if autopilot is not None:
+            refreshed["autopilot"] = autopilot
+        return {
+            "chat": refreshed.get("chat"),
+            "policy": status.get("chatPolicy"),
+            "autopilot": refreshed.get("autopilot"),
+            "workspace": refreshed,
+        }
 
     async def _legacy_update_chat_autopilot(
         self,
         chat_id: int,
         *,
         trusted: bool | None = None,
+        allowed: bool | None = None,
+        autopilot_allowed: bool | None = None,
         mode: str | None = None,
     ) -> dict[str, Any]:
         # LEGACY_RUNTIME: chat flags and draft overview are still old service state.
@@ -1288,6 +1498,164 @@ class DesktopBridge:
                 ),
                 "autopilot": overview,
             }
+
+    async def get_autopilot_status(self, *, chat_id: int | None = None) -> dict[str, Any]:
+        chat_payload: dict[str, Any] | None = None
+        if chat_id is not None:
+            workspace = await self.get_chat_workspace(chat_id, limit=60, execute_reply_modes=False)
+            chat_payload = workspace.get("chat") if isinstance(workspace.get("chat"), dict) else None
+        async with self.runtime.session_factory() as session:
+            payload = await self._build_reply_execution_service(session).get_status_payload(
+                requested_chat_id=chat_id,
+                chat_payload=chat_payload,
+            )
+            return payload
+
+    async def emergency_stop_autopilot(self) -> dict[str, Any]:
+        async with self.runtime.session_factory() as session:
+            service = self._build_reply_execution_service(session)
+            await service.emergency_stop()
+            payload = await service.get_status_payload()
+            await OperationalStateService(SettingRepository(session)).record_reply_execution(payload=payload)
+            await session.commit()
+            return payload
+
+    async def pause_autopilot(self, *, paused: bool = True) -> dict[str, Any]:
+        async with self.runtime.session_factory() as session:
+            service = self._build_reply_execution_service(session)
+            await service.pause_autopilot(paused=paused)
+            payload = await service.get_status_payload()
+            await OperationalStateService(SettingRepository(session)).record_reply_execution(payload=payload)
+            await session.commit()
+            return payload
+
+    async def list_autopilot_activity(self, *, limit: int = 20) -> dict[str, Any]:
+        async with self.runtime.session_factory() as session:
+            events = await WorkflowJournalService(SettingRepository(session)).list_global_events(limit=limit)
+            return {"items": list(events), "count": len(events)}
+
+    async def confirm_autopilot_pending(
+        self,
+        chat_id: int,
+        *,
+        pending_id: str | None = None,
+    ) -> dict[str, Any]:
+        workspace = await self.get_chat_workspace(chat_id, limit=60, execute_reply_modes=False)
+        chat_payload = workspace.get("chat") if isinstance(workspace.get("chat"), dict) else None
+        async with self.runtime.session_factory() as session:
+            service = self._build_reply_execution_service(session)
+            try:
+                chat_policy, state, pending = await service.prepare_confirm_send(
+                    requested_chat_id=chat_id,
+                    chat_payload=chat_payload,
+                    pending_id=pending_id,
+                )
+            except ReplyExecutionActionError as error:
+                await session.commit()
+                return {
+                    "ok": False,
+                    "status": "blocked",
+                    "reason": str(error),
+                    "error": {"code": error.code, "message": str(error)},
+                    "autopilot": error.autopilot,
+                    "workspace": None,
+                }
+            await session.commit()
+
+        try:
+            send_payload = await self._send_reply_execution_via_new_send_path(chat_id, pending=pending)
+        except Exception as error:
+            async with self.runtime.session_factory() as session:
+                service = self._build_reply_execution_service(session)
+                state = await service.mark_failed(
+                    chat_policy=chat_policy,
+                    state=state,
+                    pending=pending,
+                    error=str(error),
+                    actor="desktop",
+                    automatic=False,
+                )
+                autopilot = await service._build_autopilot_payload(
+                    global_policy=await service.get_global_policy(),
+                    chat_policy=chat_policy,
+                    state=state,
+                    decision=service.machine._decision(
+                        mode=chat_policy.mode,
+                        effective_mode=chat_policy.mode,
+                        status="failed",
+                        action="send",
+                        allowed=False,
+                        reason_code="send_failed",
+                        confidence=None,
+                        trigger=None,
+                        focus=None,
+                        opportunity=None,
+                        source_message_id=None,
+                        source_message_key=None,
+                        source_runtime_message_id=None,
+                        reply_text=None,
+                        draft_scope_key=None,
+                        execution_id=None,
+                        execution_key=None,
+                    ),
+                )
+                await session.commit()
+            return {
+                "ok": False,
+                "status": "failed",
+                "reason": str(error),
+                "error": {"code": "send_failed", "message": str(error)},
+                "autopilot": autopilot,
+                "workspace": None,
+            }
+
+        async with self.runtime.session_factory() as session:
+            service = self._build_reply_execution_service(session)
+            state = await service.mark_sent(
+                chat_policy=chat_policy,
+                state=state,
+                pending=pending,
+                sent_payload=send_payload,
+                actor="desktop",
+                automatic=False,
+            )
+            autopilot = await service._build_autopilot_payload(
+                global_policy=await service.get_global_policy(),
+                chat_policy=chat_policy,
+                state=state,
+                decision=service.machine._decision(
+                    mode=chat_policy.mode,
+                    effective_mode=chat_policy.mode,
+                    status="sent",
+                    action="send",
+                    allowed=True,
+                    reason_code="sent",
+                    confidence=None,
+                    trigger=None,
+                    focus=None,
+                    opportunity=None,
+                    source_message_id=None,
+                    source_message_key=None,
+                    source_runtime_message_id=None,
+                    reply_text=None,
+                    draft_scope_key=None,
+                    execution_id=None,
+                    execution_key=None,
+                ),
+            )
+            await session.commit()
+        workspace = await self.get_chat_workspace(chat_id, limit=80, execute_reply_modes=False)
+        workspace["autopilot"] = autopilot
+        return {
+            "ok": True,
+            "status": "sent",
+            "reason": "Сообщение отправлено после явного confirm.",
+            "error": None,
+            "autopilot": autopilot,
+            "sentMessage": send_payload.get("sentMessage") if isinstance(send_payload, dict) else None,
+            "sentMessageIdentity": send_payload.get("sentMessageIdentity") if isinstance(send_payload, dict) else None,
+            "workspace": workspace,
+        }
 
     async def list_sources(self) -> dict[str, Any]:
         chats = await self.list_chats(sort_key="title")
@@ -1849,6 +2217,14 @@ class DesktopBridge:
             chat_repository=ChatRepository(session),
             setting_repository=setting_repository,
             send_service=self._build_fullaccess_send_service(session),
+            journal=WorkflowJournalService(setting_repository),
+        )
+
+    def _build_reply_execution_service(self, session) -> ReplyExecutionService:
+        setting_repository = SettingRepository(session)
+        return ReplyExecutionService(
+            chat_repository=ChatRepository(session),
+            setting_repository=setting_repository,
             journal=WorkflowJournalService(setting_repository),
         )
 

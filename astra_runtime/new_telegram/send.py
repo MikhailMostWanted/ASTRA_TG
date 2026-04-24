@@ -85,6 +85,8 @@ class NewTelegramMessageSender:
         reply_to_source_message_id: int | None = None,
         source_message_key: str | None = None,
         reply_to_source_message_key: str | None = None,
+        draft_scope_key: str | None = None,
+        client_send_id: str | None = None,
     ) -> dict[str, Any]:
         if not self.route_ready():
             raise RuntimeUnavailableError(self.route_reason() or "New Telegram send path is not route-ready.")
@@ -104,6 +106,8 @@ class NewTelegramMessageSender:
             "localChatId": None,
             "replyToRuntimeMessageId": None,
             "replyToLocalMessageId": None,
+            "draftScopeKey": draft_scope_key,
+            "clientSendId": client_send_id,
             "localStoreUpdated": False,
             "error": None,
         }

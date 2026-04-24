@@ -121,12 +121,18 @@ class LegacyAstraRuntime:
     async def update_autopilot_global(
         self,
         *,
+        mode: str | None = None,
         master_enabled: bool | None = None,
         allow_channels: bool | None = None,
+        emergency_stop: bool | None = None,
+        autopilot_paused: bool | None = None,
     ) -> dict[str, Any]:
         return await self.bridge._legacy_update_autopilot_global(
+            mode=mode,
             master_enabled=master_enabled,
             allow_channels=allow_channels,
+            emergency_stop=emergency_stop,
+            autopilot_paused=autopilot_paused,
         )
 
     async def update_chat_autopilot(
@@ -134,10 +140,34 @@ class LegacyAstraRuntime:
         chat_id: int,
         *,
         trusted: bool | None = None,
+        allowed: bool | None = None,
+        autopilot_allowed: bool | None = None,
         mode: str | None = None,
     ) -> dict[str, Any]:
         return await self.bridge._legacy_update_chat_autopilot(
             chat_id,
             trusted=trusted,
+            allowed=allowed,
+            autopilot_allowed=autopilot_allowed,
             mode=mode,
         )
+
+    async def get_autopilot_status(self, chat_id: int | None = None) -> dict[str, Any]:
+        return await self.bridge.get_autopilot_status(chat_id=chat_id)
+
+    async def confirm_autopilot_pending(
+        self,
+        chat_id: int,
+        *,
+        pending_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await self.bridge.confirm_autopilot_pending(chat_id, pending_id=pending_id)
+
+    async def emergency_stop_autopilot(self) -> dict[str, Any]:
+        return await self.bridge.emergency_stop_autopilot()
+
+    async def pause_autopilot(self, *, paused: bool = True) -> dict[str, Any]:
+        return await self.bridge.pause_autopilot(paused=paused)
+
+    async def list_autopilot_activity(self, *, limit: int = 20) -> dict[str, Any]:
+        return await self.bridge.list_autopilot_activity(limit=limit)

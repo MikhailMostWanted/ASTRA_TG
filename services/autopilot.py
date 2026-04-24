@@ -11,7 +11,7 @@ from services.workflow_journal import WorkflowJournalService, build_workflow_eve
 
 AUTOPILOT_GLOBAL_KEY = "autopilot.global"
 AUTOPILOT_CHAT_STATE_PREFIX = "autopilot.chat."
-AUTOPILOT_MODES = {"off", "draft", "confirm", "autopilot"}
+AUTOPILOT_MODES = {"off", "draft", "confirm", "semi_auto", "autopilot"}
 DEFAULT_COOLDOWN_SECONDS = 900
 DEFAULT_MIN_PREPARE_CONFIDENCE = 0.58
 DEFAULT_MIN_SEND_CONFIDENCE = 0.72
@@ -556,6 +556,8 @@ def normalize_autopilot_mode(value: str | None, *, fallback: str = "off") -> str
     if not normalized:
         return fallback
     if normalized == "manual":
+        return "confirm"
+    if normalized == "semi_auto":
         return "confirm"
     if normalized in AUTOPILOT_MODES:
         return normalized

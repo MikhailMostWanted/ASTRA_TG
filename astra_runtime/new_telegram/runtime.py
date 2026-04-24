@@ -453,10 +453,25 @@ class _NewTelegramRuntimeSurface:
         self._ensure_surface_available(SEND_PATH_SURFACE)
         return await self.service._message_sender.send_chat_message(*_args, **_kwargs)
 
+    async def get_autopilot_status(self, *_args, **_kwargs) -> dict[str, Any]:
+        raise RuntimeUnavailableError(self._surface_unavailable_message("autopilotControl"))
+
     async def update_autopilot_global(self, **_kwargs) -> dict[str, Any]:
         raise RuntimeUnavailableError(self._surface_unavailable_message("autopilotControl"))
 
     async def update_chat_autopilot(self, *_args, **_kwargs) -> dict[str, Any]:
+        raise RuntimeUnavailableError(self._surface_unavailable_message("autopilotControl"))
+
+    async def confirm_autopilot_pending(self, *_args, **_kwargs) -> dict[str, Any]:
+        raise RuntimeUnavailableError(self._surface_unavailable_message("autopilotControl"))
+
+    async def emergency_stop_autopilot(self) -> dict[str, Any]:
+        raise RuntimeUnavailableError(self._surface_unavailable_message("autopilotControl"))
+
+    async def pause_autopilot(self, **_kwargs) -> dict[str, Any]:
+        raise RuntimeUnavailableError(self._surface_unavailable_message("autopilotControl"))
+
+    async def list_autopilot_activity(self, **_kwargs) -> dict[str, Any]:
         raise RuntimeUnavailableError(self._surface_unavailable_message("autopilotControl"))
 
     def _ensure_surface_available(self, surface: str) -> None:

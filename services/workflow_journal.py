@@ -21,8 +21,11 @@ class WorkflowJournalEvent:
     automatic: bool
     message: str
     reason: str | None = None
+    reason_code: str | None = None
     confidence: float | None = None
     trigger: str | None = None
+    focus: str | None = None
+    opportunity: str | None = None
     chat_id: int | None = None
     source_message_id: int | None = None
     sent_message_id: int | None = None
@@ -33,6 +36,8 @@ class WorkflowJournalEvent:
     draft_scope_key: str | None = None
     sent_message_key: str | None = None
     error_code: str | None = None
+    execution_id: str | None = None
+    allowed: bool | None = None
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -44,8 +49,12 @@ class WorkflowJournalEvent:
             "automatic": self.automatic,
             "message": self.message,
             "reason": self.reason,
+            "reason_code": self.reason_code,
+            "reasonCode": self.reason_code,
             "confidence": self.confidence,
             "trigger": self.trigger,
+            "focus": self.focus,
+            "opportunity": self.opportunity,
             "chat_id": self.chat_id,
             "source_message_id": self.source_message_id,
             "sent_message_id": self.sent_message_id,
@@ -56,6 +65,9 @@ class WorkflowJournalEvent:
             "draft_scope_key": self.draft_scope_key,
             "sent_message_key": self.sent_message_key,
             "error_code": self.error_code,
+            "execution_id": self.execution_id,
+            "executionId": self.execution_id,
+            "allowed": self.allowed,
         }
         return payload
 
@@ -123,8 +135,11 @@ def build_workflow_event(
     automatic: bool,
     message: str,
     reason: str | None = None,
+    reason_code: str | None = None,
     confidence: float | None = None,
     trigger: str | None = None,
+    focus: str | None = None,
+    opportunity: str | None = None,
     chat_id: int | None = None,
     source_message_id: int | None = None,
     sent_message_id: int | None = None,
@@ -135,6 +150,8 @@ def build_workflow_event(
     draft_scope_key: str | None = None,
     sent_message_key: str | None = None,
     error_code: str | None = None,
+    execution_id: str | None = None,
+    allowed: bool | None = None,
 ) -> WorkflowJournalEvent:
     return WorkflowJournalEvent(
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -145,8 +162,11 @@ def build_workflow_event(
         automatic=automatic,
         message=message,
         reason=reason,
+        reason_code=reason_code,
         confidence=confidence,
         trigger=trigger,
+        focus=focus,
+        opportunity=opportunity,
         chat_id=chat_id,
         source_message_id=source_message_id,
         sent_message_id=sent_message_id,
@@ -157,4 +177,6 @@ def build_workflow_event(
         draft_scope_key=draft_scope_key,
         sent_message_key=sent_message_key,
         error_code=error_code,
+        execution_id=execution_id,
+        allowed=allowed,
     )

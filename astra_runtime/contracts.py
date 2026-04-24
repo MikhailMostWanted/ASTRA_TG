@@ -75,11 +75,19 @@ class MessageSender(Protocol):
 class AutopilotControlSurface(Protocol):
     """Contract for autopilot settings, state and future actions."""
 
+    async def get_autopilot_status(
+        self,
+        chat_id: int | None = None,
+    ) -> dict[str, Any]: ...
+
     async def update_autopilot_global(
         self,
         *,
+        mode: str | None = None,
         master_enabled: bool | None = None,
         allow_channels: bool | None = None,
+        emergency_stop: bool | None = None,
+        autopilot_paused: bool | None = None,
     ) -> dict[str, Any]: ...
 
     async def update_chat_autopilot(
@@ -87,8 +95,23 @@ class AutopilotControlSurface(Protocol):
         chat_id: int,
         *,
         trusted: bool | None = None,
+        allowed: bool | None = None,
+        autopilot_allowed: bool | None = None,
         mode: str | None = None,
     ) -> dict[str, Any]: ...
+
+    async def confirm_autopilot_pending(
+        self,
+        chat_id: int,
+        *,
+        pending_id: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def emergency_stop_autopilot(self) -> dict[str, Any]: ...
+
+    async def pause_autopilot(self, *, paused: bool = True) -> dict[str, Any]: ...
+
+    async def list_autopilot_activity(self, *, limit: int = 20) -> dict[str, Any]: ...
 
 
 class TelegramRuntime(Protocol):

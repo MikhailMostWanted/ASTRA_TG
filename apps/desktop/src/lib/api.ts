@@ -1,6 +1,7 @@
 import type {
   ChatMessagesPayload,
   ChatAutopilotPayload,
+  AutopilotConfirmPayload,
   ChatSendPayload,
   ChatSendPreparePayload,
   ChatWorkspacePayload,
@@ -180,15 +181,44 @@ export const api = {
       method: "POST",
       body: payload,
     }),
-  updateAutopilotGlobal: (payload: { master_enabled?: boolean; allow_channels?: boolean }) =>
+  autopilotStatus: (chatId?: number) =>
+    request<AutopilotGlobalPayload | ChatAutopilotPayload>(
+      typeof chatId === "number" ? `/api/chats/${chatId}/autopilot` : "/api/autopilot",
+    ),
+  updateAutopilotGlobal: (payload: {
+    mode?: string;
+    master_enabled?: boolean;
+    allow_channels?: boolean;
+    emergency_stop?: boolean;
+    autopilot_paused?: boolean;
+  }) =>
     request<AutopilotGlobalPayload>("/api/autopilot", {
       method: "POST",
       body: payload,
     }),
-  updateChatAutopilot: (chatId: number, payload: { trusted?: boolean; mode?: string }) =>
+  emergencyStopAutopilot: () =>
+    request<AutopilotGlobalPayload>("/api/autopilot/emergency-stop", { method: "POST" }),
+  pauseAutopilot: (paused: boolean) =>
+    request<AutopilotGlobalPayload>("/api/autopilot/pause", {
+      method: "POST",
+      body: { paused },
+    }),
+  autopilotActivity: (limit = 20) =>
+    request<{ items: AutopilotGlobalPayload["activity"]; count: number }>(
+      withQuery("/api/autopilot/activity", { limit }),
+    ),
+  updateChatAutopilot: (
+    chatId: number,
+    payload: { trusted?: boolean; allowed?: boolean; autopilot_allowed?: boolean; mode?: string },
+  ) =>
     request<ChatAutopilotPayload>(`/api/chats/${chatId}/autopilot`, {
       method: "POST",
       body: payload,
+    }),
+  confirmAutopilotPending: (chatId: number, pendingId?: string | null) =>
+    request<AutopilotConfirmPayload>(`/api/chats/${chatId}/autopilot/confirm`, {
+      method: "POST",
+      body: { pending_id: pendingId ?? null },
     }),
   sources: () => request<SourcesPayload>("/api/sources"),
   addSource: (payload: { reference?: string; title?: string; chat_type?: string }) =>

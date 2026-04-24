@@ -79,13 +79,26 @@ class ChatSendRequest(BaseModel):
 
 
 class AutopilotGlobalRequest(BaseModel):
+    mode: str | None = None
     master_enabled: bool | None = None
     allow_channels: bool | None = None
+    emergency_stop: bool | None = None
+    autopilot_paused: bool | None = None
 
 
 class ChatAutopilotRequest(BaseModel):
     trusted: bool | None = None
+    allowed: bool | None = None
+    autopilot_allowed: bool | None = None
     mode: str | None = None
+
+
+class AutopilotConfirmRequest(BaseModel):
+    pending_id: str | None = None
+
+
+class AutopilotPauseRequest(BaseModel):
+    paused: bool = True
 
 
 def create_app(
@@ -298,15 +311,38 @@ def create_app(
             ),
         )
 
+    @app.get("/api/autopilot")
+    async def autopilot_status() -> dict[str, Any]:
+        return await _bridge(app).get_autopilot_status()
+
     @app.post("/api/autopilot")
     async def autopilot_global(payload: AutopilotGlobalRequest) -> dict[str, Any]:
         return await _call_with_value_error(
             app,
             lambda: _bridge(app).update_autopilot_global(
+                mode=payload.mode,
                 master_enabled=payload.master_enabled,
                 allow_channels=payload.allow_channels,
+                emergency_stop=payload.emergency_stop,
+                autopilot_paused=payload.autopilot_paused,
             ),
         )
+
+    @app.post("/api/autopilot/emergency-stop")
+    async def autopilot_emergency_stop() -> dict[str, Any]:
+        return await _bridge(app).emergency_stop_autopilot()
+
+    @app.post("/api/autopilot/pause")
+    async def autopilot_pause(payload: AutopilotPauseRequest) -> dict[str, Any]:
+        return await _bridge(app).pause_autopilot(paused=payload.paused)
+
+    @app.get("/api/autopilot/activity")
+    async def autopilot_activity(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
+        return await _bridge(app).list_autopilot_activity(limit=limit)
+
+    @app.get("/api/chats/{chat_id}/autopilot")
+    async def autopilot_chat_status(chat_id: int) -> dict[str, Any]:
+        return await _call_with_lookup(app, lambda: _bridge(app).get_autopilot_status(chat_id=chat_id))
 
     @app.post("/api/chats/{chat_id}/autopilot")
     async def autopilot_chat(chat_id: int, payload: ChatAutopilotRequest) -> dict[str, Any]:
@@ -315,7 +351,19 @@ def create_app(
             lambda: _bridge(app).update_chat_autopilot(
                 chat_id,
                 trusted=payload.trusted,
+                allowed=payload.allowed,
+                autopilot_allowed=payload.autopilot_allowed,
                 mode=payload.mode,
+            ),
+        )
+
+    @app.post("/api/chats/{chat_id}/autopilot/confirm")
+    async def autopilot_chat_confirm(chat_id: int, payload: AutopilotConfirmRequest) -> dict[str, Any]:
+        return await _call_with_lookup(
+            app,
+            lambda: _bridge(app).confirm_autopilot_pending(
+                chat_id,
+                pending_id=payload.pending_id,
             ),
         )
 
