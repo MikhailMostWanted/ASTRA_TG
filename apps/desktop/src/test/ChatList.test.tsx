@@ -139,10 +139,122 @@ describe("ChatList", () => {
       />,
     );
 
-    expect(screen.getByText("fallback на legacy")).toBeInTheDocument();
-    expect(screen.getByText("fallback")).toBeInTheDocument();
-    expect(screen.getByText("roster live +2")).toBeInTheDocument();
+    expect(screen.getAllByText("работаю через резервный слой").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Что случилось:/)).toBeInTheDocument();
     expect(screen.getByText("Новый runtime временно деградировал, поэтому roster обслуживается legacy.")).toBeInTheDocument();
     expect(screen.getByText("3 непрочит.")).toBeInTheDocument();
+  });
+
+  it("shows compact markers for chat mode, pending confirmation and degraded active chat", () => {
+    render(
+      <ChatList
+        chats={[{ ...baseChat, autoReplyMode: "semi_auto" }]}
+        selectedChatKey="telegram:-10042"
+        search=""
+        filter="all"
+        sort="activity"
+        favorites={[]}
+        workspaceStateByChat={{
+          "telegram:-10042": {
+            seenMessageKey: "telegram:-10042:200",
+            seenMessageId: 200,
+            draftText: "Ок, вернусь с файлом.",
+            draftSourceMessageKey: "telegram:-10042:300",
+            draftSourceMessageId: 300,
+            draftFocusLabel: "вопрос",
+            draftScopeKey: "telegram:-10042:300::вопрос::direct_reply::Когда сможешь прислать финальный файл?",
+            draftUpdatedAt: "2026-04-22T10:32:00.000Z",
+            sentSourceMessageKey: null,
+            sentSourceMessageId: null,
+            sentAt: null,
+          },
+        }}
+        loading={false}
+        refreshing={false}
+        activeWorkspaceStatus={{
+          source: "fallback_to_legacy",
+          requestedBackend: "new",
+          effectiveBackend: "legacy",
+          degraded: true,
+          degradedReason: "Telegram runtime отвечает нестабильно.",
+          syncTrigger: "runtime_poll",
+          updatedNow: false,
+          syncError: "timeout",
+          lastUpdatedAt: null,
+          lastSuccessAt: null,
+          lastError: "timeout",
+          lastErrorAt: null,
+          availability: {
+            workspaceAvailable: true,
+            historyReadable: true,
+            runtimeReadable: false,
+            legacyWorkspaceAvailable: true,
+            replyContextAvailable: true,
+            sendAvailable: false,
+            autopilotAvailable: true,
+            canLoadOlder: false,
+          },
+          messageSource: {
+            backend: "legacy_local_store",
+            chatKey: "telegram:-10042",
+            runtimeChatId: -10042,
+            localChatId: 42,
+            oldestMessageKey: null,
+            newestMessageKey: "telegram:-10042:300",
+            oldestRuntimeMessageId: null,
+            newestRuntimeMessageId: 300,
+          },
+        }}
+        activeAutopilot={{
+          masterEnabled: true,
+          allowChannels: false,
+          globalMode: "semi_auto",
+          mode: "semi_auto",
+          effectiveMode: "semi_auto",
+          trusted: true,
+          allowed: false,
+          autopilotAllowed: false,
+          writeReady: false,
+          decision: {
+            mode: "semi_auto",
+            status: "awaiting_confirmation",
+            action: "confirm",
+            allowed: true,
+            reason: "Ждёт подтверждение.",
+            confidence: 0.91,
+            trigger: "вопрос",
+            sourceMessageId: 300,
+            sourceMessageKey: "telegram:-10042:300",
+            replyText: "Ок, вернусь с файлом.",
+            pendingDraftStatus: "awaiting_confirmation",
+          },
+          pendingDraft: {
+            id: "pending",
+            text: "Ок, вернусь с файлом.",
+            status: "awaiting_confirmation",
+          },
+          lastSentAt: null,
+          lastSentSourceMessageId: null,
+          cooldown: {
+            active: false,
+            remainingSeconds: 0,
+            until: null,
+          },
+          journal: [],
+        }}
+        onSearchChange={vi.fn()}
+        onFilterChange={vi.fn()}
+        onSortChange={vi.fn()}
+        onSelectChat={vi.fn()}
+        onToggleFavorite={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("Полуавтомат").length).toBeGreaterThan(0);
+    expect(screen.getByText("Черновик")).toBeInTheDocument();
+    expect(screen.getByText("Ждёт подтверждение")).toBeInTheDocument();
+    expect(screen.getByText("Резервный слой")).toBeInTheDocument();
+    expect(screen.getByText("Нестабильно")).toBeInTheDocument();
   });
 });

@@ -1,7 +1,5 @@
 import { useEffect, useRef } from "react";
 import {
-  ArrowDownLeft,
-  ArrowUpRight,
   AlertCircle,
   ImageIcon,
   LoaderCircle,
@@ -16,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { buildFreshnessCopy, buildLiveCopy, buildWorkspaceCopy, toneBadgeClasses, tonePanelClasses } from "@/lib/chat-ux";
 import { formatDateTime, formatRelativeTime, initials } from "@/lib/format";
 import { safeArray } from "@/lib/runtime-guards";
 import type { ChatFreshnessPayload, ChatItem, LiveStatusPayload, MessageItem, WorkspaceStatusPayload } from "@/lib/types";
@@ -36,6 +35,7 @@ interface MessageListProps {
   lastUpdatedAt?: string | null;
   freshness?: ChatFreshnessPayload | null;
   live?: LiveStatusPayload | null;
+  highlightMessageKey?: string | null;
   errorMessage?: string | null;
   onLoadOlder: () => void;
   onRefresh: () => void;
@@ -56,6 +56,7 @@ export function MessageList({
   lastUpdatedAt = null,
   freshness = null,
   live = null,
+  highlightMessageKey = null,
   errorMessage = null,
   onLoadOlder,
   onRefresh,
@@ -64,6 +65,8 @@ export function MessageList({
   onSyncChat,
 }: MessageListProps) {
   const endRef = useRef<HTMLDivElement | null>(null);
+  const scrollRootRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
   const lastScrollTargetRef = useRef<{ chatKey: string | null; messageKey: string | null }>({
     chatKey: null,
     messageKey: null,
@@ -73,12 +76,9 @@ export function MessageList({
   const displayActivityAt = chat?.rosterLastActivityAt || chat?.lastMessageAt || null;
   const workspaceReadable = Boolean(workspaceStatus?.availability.workspaceAvailable);
   const historyReadable = Boolean(workspaceStatus?.availability.historyReadable);
-  const sourceLabel =
-    workspaceStatus?.source === "new"
-      ? "new workspace"
-      : workspaceStatus?.source === "fallback_to_legacy"
-        ? "fallback на legacy"
-        : "legacy workspace";
+  const workspaceCopy = buildWorkspaceCopy(workspaceStatus);
+  const freshnessCopy = buildFreshnessCopy(freshness, live, workspaceStatus);
+  const liveCopy = buildLiveCopy(live);
 
   useEffect(() => {
     const previous = lastScrollTargetRef.current;
@@ -91,8 +91,19 @@ export function MessageList({
     if (loadingOlder || (!chatChanged && !latestChanged)) {
       return;
     }
-    endRef.current?.scrollIntoView({ block: "end" });
+    if (chatChanged || stickToBottomRef.current) {
+      endRef.current?.scrollIntoView({ block: "end" });
+    }
   }, [chat?.chatKey, latestMessageKey, loadingOlder]);
+
+  const handleScrollCapture = () => {
+    const viewport = scrollRootRef.current?.querySelector<HTMLElement>("[data-slot='scroll-area-viewport']");
+    if (!viewport) {
+      return;
+    }
+    const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    stickToBottomRef.current = distanceToBottom < 96;
+  };
 
   if (!chat) {
     return (
@@ -106,8 +117,8 @@ export function MessageList({
   if (errorMessage) {
     return (
       <WarningState
-        title="Лента сообщений не загрузилась"
-        description={errorMessage}
+        title="Чат недоступен"
+        description={`Astra не смогла собрать ленту сообщений. ${errorMessage}`}
         action={
           <div>
             <Button variant="outline" onClick={onRefresh}>
@@ -121,12 +132,12 @@ export function MessageList({
   }
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/7 bg-white/[0.035]">
-      <div className="border-b border-white/7 px-4 py-4">
-        <div className="flex items-start justify-between gap-4">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[22px] border border-white/7 bg-white/[0.035]">
+      <div className="border-b border-white/7 px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <Avatar className="size-11 border border-white/8 bg-white/[0.04]">
+            <div className="flex flex-wrap items-center gap-2">
+              <Avatar className="size-10 border border-white/8 bg-white/[0.04]">
                 <AvatarImage src={chat.avatarUrl || undefined} alt={chat.title} />
                 <AvatarFallback className="bg-cyan-400/10 text-cyan-100">
                   {initials(chat.title)}
@@ -138,33 +149,15 @@ export function MessageList({
                   {chat.handle ? `@${chat.handle}` : chat.reference}
                 </div>
               </div>
-              <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-                {chat.type}
+              <Badge variant="outline" className={cn("border-0 ring-1", toneBadgeClasses(workspaceCopy.tone))}>
+                {workspaceCopy.label}
               </Badge>
-              <Badge variant="outline" className="border-0 bg-cyan-400/10 text-cyan-100 ring-1 ring-cyan-300/10">
-                {chat.syncStatus}
-              </Badge>
-              <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-                {sourceLabel}
-              </Badge>
-              {workspaceStatus?.degraded ? (
-                <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
-                  degraded
-                </Badge>
-              ) : null}
               {live ? (
                 <Badge
                   variant="outline"
-                  className={cn(
-                    "border-0 ring-1",
-                    live.paused
-                      ? "bg-amber-300/12 text-amber-100 ring-amber-300/15"
-                      : live.degraded
-                        ? "bg-rose-400/12 text-rose-100 ring-rose-300/15"
-                        : "bg-emerald-300/12 text-emerald-100 ring-emerald-300/15",
-                  )}
+                  className={cn("border-0 ring-1", toneBadgeClasses(liveCopy.tone))}
                 >
-                  {live.paused ? "live paused" : live.degraded ? "live degraded" : "live"}
+                  {liveCopy.label}
                 </Badge>
               ) : null}
               {chat.unreadCount > 0 ? (
@@ -179,34 +172,13 @@ export function MessageList({
               ) : null}
             </div>
 
-            <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-slate-400">
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-400">
               <span>Последняя активность {formatRelativeTime(displayActivityAt)}</span>
-              <span>UI обновлён {lastUpdatedAt ? formatDateTime(lastUpdatedAt) : "только открылся"}</span>
-              <span>{formatDateTime(displayActivityAt)} • {chat.messageCount} сообщений</span>
-              {workspaceStatus?.messageSource.backend ? (
-                <span>источник {workspaceStatus.messageSource.backend}</span>
-              ) : null}
-              {freshness ? <span>{freshness.label}</span> : null}
-              {live ? (
-                <span>
-                  live {live.syncing ? "syncing" : live.paused ? "paused" : "ready"}
-                  {typeof live.newMessageCount === "number" && live.newMessageCount > 0
-                    ? ` • +${live.newMessageCount} новых`
-                    : ""}
-                  {typeof live.meaningfulMessageCount === "number" && live.meaningfulMessageCount > 0
-                    ? ` • ${live.meaningfulMessageCount} meaningful`
-                    : ""}
-                </span>
-              ) : null}
-              {workspaceStatus?.syncTrigger ? (
-                <span>{workspaceStatus.syncTrigger === "auto" ? "auto-sync" : workspaceStatus.syncTrigger}</span>
-              ) : null}
-              {freshness?.updatedNow ? <span>хвост дочитан сейчас</span> : null}
-              {freshness?.syncError ? <span className="text-rose-200">{freshness.syncError}</span> : null}
-              {workspaceStatus?.degradedReason ? (
-                <span className="text-amber-100">{workspaceStatus.degradedReason}</span>
-              ) : null}
-              {live?.lastError ? <span className="text-rose-200">{live.lastError}</span> : null}
+              <span>{formatCompactMessageCount(chat.messageCount)}</span>
+              <span>{lastUpdatedAt ? `обновлено ${formatDateTime(lastUpdatedAt)}` : "только открылся"}</span>
+              <span className={cn(freshnessCopy.tone === "danger" && "text-rose-200", freshnessCopy.tone === "warning" && "text-amber-100")}>
+                {freshnessCopy.label}
+              </span>
             </div>
           </div>
 
@@ -215,9 +187,10 @@ export function MessageList({
               variant="outline"
               className="border-white/8 bg-black/18 text-slate-100"
               onClick={onToggleLivePause}
+              disabled={refreshing}
             >
               {live?.paused ? <Play data-icon="inline-start" /> : <Pause data-icon="inline-start" />}
-              {live?.paused ? "Live" : "Пауза"}
+              {live?.paused ? "Продолжить" : "Пауза"}
             </Button>
             <Button
               variant="outline"
@@ -226,7 +199,7 @@ export function MessageList({
               disabled={refreshing}
             >
               {refreshing ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <RefreshCcw data-icon="inline-start" />}
-              Обновить контекст
+              {refreshing ? "Обновляю" : "Обновить"}
             </Button>
             <Button
               variant="outline"
@@ -235,7 +208,7 @@ export function MessageList({
               disabled={!fullaccessReady || refreshing}
             >
               <Sparkles data-icon="inline-start" />
-              Синхронизировать чат
+              Синхронизировать
             </Button>
             {live?.lastError ? (
               <Button
@@ -244,15 +217,23 @@ export function MessageList({
                 onClick={onClearLiveError}
               >
                 <AlertCircle data-icon="inline-start" />
-                Retry
+                Сбросить ошибку
               </Button>
             ) : null}
           </div>
         </div>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-4 px-4 py-4">
+      {workspaceStatus?.degraded || live?.paused || live?.lastError ? (
+        <div className={cn("mx-4 mt-3 rounded-[18px] border px-4 py-3 text-sm leading-6 text-slate-100", tonePanelClasses(freshnessCopy.tone))}>
+          <div className="font-medium">{freshnessCopy.label}</div>
+          <div className="text-xs text-slate-300">{freshnessCopy.detail}</div>
+        </div>
+      ) : null}
+
+      <div ref={scrollRootRef} className="min-h-0 flex-1">
+      <ScrollArea className="h-full min-h-0" onScrollCapture={handleScrollCapture}>
+        <div className="flex flex-col gap-2 px-4 py-4">
           {canLoadOlder ? (
             <div className="flex justify-center">
               <Button
@@ -262,7 +243,7 @@ export function MessageList({
                 disabled={loadingOlder}
               >
                 {loadingOlder ? <LoaderCircle data-icon="inline-start" className="animate-spin" /> : <RefreshCcw data-icon="inline-start" />}
-                Показать более ранние сообщения
+                {loadingOlder ? "Загружаю" : "Показать ранние"}
               </Button>
             </div>
           ) : null}
@@ -271,73 +252,92 @@ export function MessageList({
 
           {!loading && safeMessages.length === 0 && !workspaceReadable ? (
             <EmptyState
-              title="Workspace для чтения пока недоступен"
-              description="Этот чат уже виден в roster, но history path сейчас недоступен. Проверь backend и fallback-статус справа сверху."
+              title="Чат пока нельзя прочитать"
+              description="Astra видит чат в списке, но история сейчас недоступна. Обнови чат или проверь авторизацию Telegram runtime."
+              action={
+                <Button variant="outline" className="border-white/8 bg-black/18 text-slate-100" onClick={onRefresh}>
+                  <RefreshCcw data-icon="inline-start" />
+                  Обновить чат
+                </Button>
+              }
             />
           ) : null}
 
           {!loading && safeMessages.length === 0 && workspaceReadable && !historyReadable ? (
             <EmptyState
               title="История временно нечитабельна"
-              description="Маршрут workspace существует, но текущий backend не смог отдать читаемую history-ленту."
+              description="Контекст собран, но ленту сообщений прочитать не удалось. Это обычно значит, что Telegram runtime или резервный слой отвечает нестабильно."
             />
           ) : null}
 
           {!loading && safeMessages.length === 0 && workspaceReadable && historyReadable ? (
             <EmptyState
               title="Сообщений пока нет"
-              description="Когда в выбранный чат придут данные, здесь появится рабочая лента сообщений."
+              description="В выбранном чате нет доступной истории. Когда придут сообщения, они появятся здесь как обычная лента."
             />
           ) : null}
 
           {safeMessages.map((message, index) => {
             const inbound = message.direction === "inbound";
+            const previousMessage = safeMessages[index - 1];
+            const nextMessage = safeMessages[index + 1];
+            const groupedWithPrevious = Boolean(previousMessage && previousMessage.direction === message.direction);
+            const groupedWithNext = Boolean(nextMessage && nextMessage.direction === message.direction);
+            const isHighlighted = Boolean(highlightMessageKey && message.messageKey === highlightMessageKey);
 
             return (
               <div
                 key={message.messageKey}
                 className={cn(
-                  "flex w-full gap-3",
+                  "flex w-full gap-2",
                   inbound ? "justify-start" : "justify-end",
-                  index > 0 && safeMessages[index - 1]?.direction === message.direction ? "pt-0" : "pt-1",
+                  groupedWithPrevious ? "pt-0.5" : "pt-3",
                 )}
               >
-                {inbound ? (
-                  <Avatar className="mt-1 size-9 border border-white/8 bg-white/[0.04]">
+                {inbound && !groupedWithPrevious ? (
+                  <Avatar className="mt-1 size-8 border border-white/8 bg-white/[0.04]">
                     <AvatarFallback className="bg-white/8 text-slate-200">
                       {initials(message.senderName)}
                     </AvatarFallback>
                   </Avatar>
+                ) : inbound ? (
+                  <div className="w-8 shrink-0" />
                 ) : null}
 
                 <div
                   className={cn(
-                    "max-w-[86%] rounded-[24px] border px-4 py-3 shadow-[0_12px_35px_rgba(3,8,18,0.18)]",
+                    "max-w-[76%] rounded-[18px] border px-3.5 py-2.5 shadow-[0_12px_35px_rgba(3,8,18,0.16)]",
                     inbound
                       ? "border-white/8 bg-white/[0.045] text-slate-100"
                       : "border-cyan-300/14 bg-cyan-400/10 text-cyan-50",
+                    groupedWithPrevious && inbound && "rounded-tl-md",
+                    groupedWithPrevious && !inbound && "rounded-tr-md",
+                    groupedWithNext && inbound && "rounded-bl-md",
+                    groupedWithNext && !inbound && "rounded-br-md",
+                    isHighlighted && "border-amber-200/35 bg-amber-300/10 shadow-[0_0_0_1px_rgba(251,191,36,0.18)]",
                   )}
                 >
-                  <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-                    <Badge
-                      variant="outline"
-                      className={cn(
-                        "border-0 ring-1",
-                        inbound
-                          ? "bg-white/7 text-slate-300 ring-white/10"
-                          : "bg-cyan-300/12 text-cyan-100 ring-cyan-300/12",
+                  {!groupedWithPrevious ? (
+                    <div className="mb-1 flex flex-wrap items-center gap-2 text-xs">
+                      {message.senderName ? (
+                        <span className={cn("font-medium", inbound ? "text-slate-300" : "text-cyan-100")}>
+                          {inbound ? message.senderName : "Я"}
+                        </span>
+                      ) : (
+                        <span className={cn("font-medium", inbound ? "text-slate-300" : "text-cyan-100")}>
+                          {inbound ? "Входящее" : "Я"}
+                        </span>
                       )}
-                    >
-                      {inbound ? <ArrowDownLeft data-icon="inline-start" /> : <ArrowUpRight data-icon="inline-start" />}
-                      {inbound ? "входящее" : "исходящее"}
-                    </Badge>
-                    {message.senderName ? (
-                      <span className="text-slate-400">{message.senderName}</span>
-                    ) : null}
-                    <span className="text-slate-500">{formatDateTime(message.sentAt)}</span>
-                  </div>
+                      <span className="text-slate-500">{formatDateTime(message.sentAt)}</span>
+                      {isHighlighted ? (
+                        <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
+                          опорный сигнал
+                        </Badge>
+                      ) : null}
+                    </div>
+                  ) : null}
 
-                  <div className="whitespace-pre-wrap text-sm leading-6">
+                  <div className="whitespace-pre-wrap text-sm leading-5">
                     {message.text || "Без текста"}
                   </div>
 
@@ -351,7 +351,7 @@ export function MessageList({
                     <div className="mt-3 overflow-hidden rounded-[18px] border border-white/8 bg-black/20">
                       <img
                         src={message.mediaPreviewUrl}
-                        alt={message.mediaType || "media preview"}
+                        alt={message.mediaType || "вложение"}
                         className="max-h-[280px] w-full object-cover"
                       />
                     </div>
@@ -365,10 +365,12 @@ export function MessageList({
                   ) : null}
                 </div>
 
-                {!inbound ? (
-                  <Avatar className="mt-1 size-9 border border-cyan-300/14 bg-cyan-400/10">
+                {!inbound && !groupedWithPrevious ? (
+                  <Avatar className="mt-1 size-8 border border-cyan-300/14 bg-cyan-400/10">
                     <AvatarFallback className="bg-cyan-400/12 text-cyan-100">Я</AvatarFallback>
                   </Avatar>
+                ) : !inbound ? (
+                  <div className="w-8 shrink-0" />
                 ) : null}
               </div>
             );
@@ -376,8 +378,13 @@ export function MessageList({
           <div ref={endRef} />
         </div>
       </ScrollArea>
+      </div>
     </section>
   );
+}
+
+function formatCompactMessageCount(value: number): string {
+  return new Intl.NumberFormat("ru-RU").format(value) + " сообщений";
 }
 
 function MessageListSkeleton() {

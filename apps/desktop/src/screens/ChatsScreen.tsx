@@ -130,10 +130,10 @@ export function ChatsScreen() {
     mutationFn: () => api.refreshLiveRoster({ search: deferredSearch, filter, sort }),
     onSuccess: (payload) => {
       queryClient.setQueryData(rosterQueryKey, payload);
-      toast.success("Roster обновлён.");
+      toast.success("Список чатов обновлён.");
     },
     onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Не удалось обновить roster.");
+      toast.error(error instanceof Error ? error.message : "Не удалось обновить список чатов.");
     },
   });
 
@@ -142,10 +142,10 @@ export function ChatsScreen() {
       api.refreshLiveChatWorkspace(chatId, 60),
     onSuccess: (payload, variables) => {
       queryClient.setQueryData(["chat-workspace", variables.chatKey], payload);
-      toast.success("Активный чат обновлён.");
+      toast.success("Чат обновлён.");
     },
     onError: (error) => {
-      toast.error(error instanceof Error ? error.message : "Не удалось обновить активный чат.");
+      toast.error(error instanceof Error ? error.message : "Не удалось обновить чат.");
     },
   });
 
@@ -153,7 +153,7 @@ export function ChatsScreen() {
     mutationFn: ({ chatId, paused }: { chatId: number; chatKey: string; paused: boolean }) =>
       api.pauseLiveChat(chatId, paused),
     onSuccess: async (_payload, variables) => {
-      toast.success(variables.paused ? "Live активного чата на паузе." : "Live активного чата включён.");
+      toast.success(variables.paused ? "Live поставлен на паузу." : "Live снова ищет новые сообщения.");
       await queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true });
     },
     onError: (error) => {
@@ -164,7 +164,7 @@ export function ChatsScreen() {
   const clearLiveErrorMutation = useMutation({
     mutationFn: ({ chatId }: { chatId: number; chatKey: string }) => api.clearLiveChatError(chatId),
     onSuccess: async (_payload, variables) => {
-      toast.success("Live error очищен.");
+      toast.success("Ошибка live очищена.");
       await queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true });
     },
     onError: (error) => {
@@ -246,7 +246,7 @@ export function ChatsScreen() {
       clearReplyDraft(variables.chatKey);
       setOlderMessages([]);
       setManualSendStatus(buildManualSendStatus(payload));
-      toast.success(payload.fallback.used ? "Сообщение отправлено через fallback." : "Сообщение отправлено через Desktop.");
+      toast.success(payload.fallback.used ? "Сообщение отправлено через резервный слой." : "Сообщение отправлено.");
       await Promise.all([
         queryClient.refetchQueries({ queryKey: rosterQueryKey, exact: true }),
         queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
@@ -332,7 +332,7 @@ export function ChatsScreen() {
       }
       clearReplyDraft(variables.chatKey);
       setOlderMessages([]);
-      toast.success("Полуавтомат отправил сообщение после confirm.");
+      toast.success("Полуавтомат отправил сообщение после подтверждения.");
       await Promise.all([
         queryClient.refetchQueries({ queryKey: rosterQueryKey, exact: true }),
         queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
@@ -461,18 +461,18 @@ export function ChatsScreen() {
       ? syncChatMutation.isPending || (workspaceQuery.isFetching && fullaccessReady)
         ? "Активный чат сейчас синхронизируется"
         : freshness?.syncError
-          ? `Активный чат: авто-sync с ошибкой`
+          ? "Активный чат обновился с ошибкой"
           : freshness?.updatedNow
             ? "Активный чат только что обновлён"
             : freshness?.label || null
       : workspaceStatus?.source === "new"
-        ? "Workspace читается через new runtime"
+        ? "Чат читается через Telegram runtime"
         : workspaceStatus?.source === "fallback_to_legacy"
-          ? "Workspace временно откатился на legacy"
+          ? "Чат временно работает через резервный слой"
           : rosterState?.source === "new"
-        ? "Roster идёт из new runtime"
+        ? "Список идёт из Telegram runtime"
         : rosterState?.source === "fallback_to_legacy"
-          ? "New runtime roster деградировал, поэтому сейчас используется legacy"
+          ? "Список работает через резервный слой"
           : null;
 
   const handleCopy = async (value: string) => {
@@ -498,7 +498,7 @@ export function ChatsScreen() {
   }
 
   return (
-    <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)_400px]">
+    <div className="grid h-full min-h-0 overflow-hidden gap-3 xl:grid-cols-[300px_minmax(0,1fr)_390px] 2xl:grid-cols-[332px_minmax(0,1fr)_420px]">
       <ChatList
         chats={chatItems}
         selectedChatKey={selectedChatKey}
@@ -513,6 +513,8 @@ export function ChatsScreen() {
         syncIndicator={syncIndicator}
         roster={rosterState}
         live={rosterLiveState}
+        activeWorkspaceStatus={workspaceStatus}
+        activeAutopilot={autopilotPayload}
         onSearchChange={setSearch}
         onFilterChange={setFilter}
         onSortChange={setSort}
@@ -535,6 +537,7 @@ export function ChatsScreen() {
         lastUpdatedAt={workspaceQuery.data?.refreshedAt || chatsQuery.data?.refreshedAt || null}
         freshness={freshness}
         live={liveState}
+        highlightMessageKey={replyContext?.sourceMessageKey ?? null}
         errorMessage={
           workspaceQuery.isError
             ? extractErrorMessage(workspaceQuery.error, "Не удалось загрузить рабочий контекст чата.")
@@ -742,7 +745,7 @@ function buildManualSendStatus(payload: ChatSendPayload) {
     status: payload.status,
     message: payload.ok
       ? payload.fallback.used
-        ? payload.reason || "Сообщение отправлено через fallback."
+        ? payload.reason || "Сообщение отправлено через резервный слой."
         : "Сообщение отправлено."
       : payload.reason || payload.error?.message || "Не удалось отправить сообщение.",
     backend: payload.effectiveBackend,

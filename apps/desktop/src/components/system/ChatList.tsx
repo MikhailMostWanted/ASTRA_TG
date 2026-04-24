@@ -15,9 +15,10 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { buildAutopilotCopy, buildRosterCopy, formatAutopilotMode, toneBadgeClasses } from "@/lib/chat-ux";
 import { formatCompactNumber, formatDateTime, formatRelativeTime, initials } from "@/lib/format";
 import { safeArray, safeRecord } from "@/lib/runtime-guards";
-import type { ChatItem, ChatRosterStatePayload, LiveStatusPayload } from "@/lib/types";
+import type { AutopilotPayload, ChatItem, ChatRosterStatePayload, LiveStatusPayload, WorkspaceStatusPayload } from "@/lib/types";
 import type { ChatWorkspaceState } from "@/stores/app-store";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +38,8 @@ interface ChatListProps {
   syncIndicator?: string | null;
   roster?: ChatRosterStatePayload | null;
   live?: LiveStatusPayload | null;
+  activeWorkspaceStatus?: WorkspaceStatusPayload | null;
+  activeAutopilot?: AutopilotPayload | null;
   onSearchChange: (value: string) => void;
   onFilterChange: (value: string) => void;
   onSortChange: (value: string) => void;
@@ -46,10 +49,10 @@ interface ChatListProps {
 }
 
 const syncLabelMap: Record<string, string> = {
-  fullaccess: "full-access",
+  fullaccess: "полный доступ",
   local: "локально",
-  runtime: "runtime",
-  empty: "без sync",
+  runtime: "Telegram",
+  empty: "нет истории",
 };
 
 export function ChatList({
@@ -66,6 +69,8 @@ export function ChatList({
   syncIndicator = null,
   roster = null,
   live = null,
+  activeWorkspaceStatus = null,
+  activeAutopilot = null,
   onSearchChange,
   onFilterChange,
   onSortChange,
@@ -78,23 +83,21 @@ export function ChatList({
     (item): item is number => typeof item === "number" && Number.isFinite(item),
   );
   const safeWorkspaceState = safeRecord<ChatWorkspaceState>(workspaceStateByChat);
-  const rosterSourceLabel =
-    roster?.source === "new"
-      ? "new runtime"
-      : roster?.source === "fallback_to_legacy"
-        ? "fallback на legacy"
-        : "legacy roster";
+  const rosterCopy = buildRosterCopy(roster, live);
+  const autopilotCopy = buildAutopilotCopy(activeAutopilot);
+  const activePendingConfirmation = Boolean(
+    activeAutopilot?.pendingDraft?.status === "awaiting_confirmation"
+      || activeAutopilot?.decision.status === "awaiting_confirmation",
+  );
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/7 bg-white/[0.035]">
-      <div className="border-b border-white/7 px-4 py-4">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-[22px] border border-white/7 bg-white/[0.035]">
+      <div className="border-b border-white/7 px-3 py-3">
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
-            <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Workspace</div>
-            <div className="text-base font-semibold text-white">Живые чаты</div>
-            <div className="text-sm leading-6 text-slate-400">
-              Компактный список для быстрого выбора, sync и контроля хвостов.
-            </div>
+            <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Пульт</div>
+            <div className="text-base font-semibold text-white">Чаты</div>
+            <div className="text-xs leading-5 text-slate-400">{rosterCopy.label}</div>
           </div>
           <Button
             variant="outline"
@@ -102,16 +105,18 @@ export function ChatList({
             className="border-white/8 bg-black/18 text-slate-100"
             onClick={onRefresh}
             disabled={refreshing}
+            aria-label={refreshing ? "Обновляю список чатов" : "Обновить список чатов"}
+            title={refreshing ? "Обновляю список чатов" : "Обновить список чатов"}
           >
             {refreshing ? <LoaderCircle className="animate-spin" /> : <RefreshCcw />}
           </Button>
         </div>
 
-        <div className="mt-4 relative">
+        <div className="mt-3 relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
           <Input
-            className="w-full border-white/8 bg-black/16 pl-10 text-slate-100 placeholder:text-slate-500"
-            placeholder="Поиск по имени, @username или chat_id"
+            className="h-9 w-full border-white/8 bg-black/16 pl-10 text-sm text-slate-100 placeholder:text-slate-500"
+            placeholder="Имя, @username или chat_id"
             value={search}
             onChange={(event) => onSearchChange(event.currentTarget.value)}
           />
@@ -119,21 +124,21 @@ export function ChatList({
 
         <div className="mt-3 grid grid-cols-2 gap-2">
           <Select value={filter} onValueChange={onFilterChange}>
-            <SelectTrigger className="w-full border-white/8 bg-black/16 text-slate-100">
+            <SelectTrigger className="h-9 w-full border-white/8 bg-black/16 text-sm text-slate-100">
               <SelectValue placeholder="Фильтр" />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="all">Все</SelectItem>
                 <SelectItem value="enabled">Активные</SelectItem>
-                <SelectItem value="reply">Где нужен reply</SelectItem>
+                <SelectItem value="reply">Нужен ответ</SelectItem>
                 <SelectItem value="fullaccess">Через full-access</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
 
           <Select value={sort} onValueChange={onSortChange}>
-            <SelectTrigger className="w-full border-white/8 bg-black/16 text-slate-100">
+            <SelectTrigger className="h-9 w-full border-white/8 bg-black/16 text-sm text-slate-100">
               <SelectValue placeholder="Сортировка" />
             </SelectTrigger>
             <SelectContent>
@@ -147,30 +152,14 @@ export function ChatList({
         </div>
 
         <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <span>{formatCompactNumber(safeChats.length)} в выборке</span>
-            <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
-              {rosterSourceLabel}
+            <Badge variant="outline" className={cn("border-0 ring-1", toneBadgeClasses(rosterCopy.tone))}>
+              {rosterCopy.label}
             </Badge>
-            {roster?.degraded ? (
-              <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
-                fallback
-              </Badge>
-            ) : null}
-            {live ? (
-              <Badge
-                variant="outline"
-                className={cn(
-                  "border-0 ring-1",
-                  live.degraded
-                    ? "bg-rose-400/12 text-rose-100 ring-rose-300/15"
-                    : "bg-emerald-300/12 text-emerald-100 ring-emerald-300/15",
-                )}
-              >
-                roster live
-                {typeof live.changedItemCount === "number" && live.changedItemCount > 0
-                  ? ` +${live.changedItemCount}`
-                  : ""}
+            {activeAutopilot ? (
+              <Badge variant="outline" className={cn("border-0 ring-1", toneBadgeClasses(autopilotCopy.tone))}>
+                {autopilotCopy.label}
               </Badge>
             ) : null}
           </div>
@@ -186,7 +175,8 @@ export function ChatList({
 
         {roster?.degradedReason ? (
           <div className="mt-3 rounded-2xl border border-amber-300/10 bg-amber-300/6 px-3 py-2 text-xs leading-5 text-amber-100/85">
-            {roster.degradedReason}
+            <span className="font-medium text-amber-50">Что случилось: </span>
+            {rosterCopy.detail}
           </div>
         ) : null}
       </div>
@@ -198,7 +188,13 @@ export function ChatList({
           {!loading && safeChats.length === 0 ? (
             <EmptyState
               title="Чаты не найдены"
-              description="Проверь фильтры или подтяни источники и full-access синхронизацию."
+              description="Список пустой для текущих фильтров. Сбрось поиск или обнови список чатов."
+              action={
+                <Button variant="outline" className="border-white/8 bg-black/18 text-slate-100" onClick={onRefresh}>
+                  <RefreshCcw data-icon="inline-start" />
+                  Обновить список
+                </Button>
+              }
             />
           ) : null}
 
@@ -242,6 +238,9 @@ export function ChatList({
             const displayActivityAt = chat.rosterLastActivityAt || chat.lastMessageAt;
             const displaySender = chat.rosterLastSenderName || chat.lastSenderName;
             const hasUnread = chat.unreadCount > 0;
+            const chatMode = chat.autoReplyMode || (chat.replyAssistEnabled ? "draft" : "off");
+            const isActiveDegraded = Boolean(isSelected && activeWorkspaceStatus?.degraded);
+            const isActiveFallback = Boolean(isSelected && activeWorkspaceStatus?.source === "fallback_to_legacy");
 
             return (
               <div
@@ -249,7 +248,7 @@ export function ChatList({
                 role="button"
                 tabIndex={0}
                 className={cn(
-                  "cursor-pointer rounded-[24px] border border-transparent bg-transparent px-3 py-3 text-left transition-all active:translate-y-px hover:border-white/10 hover:bg-white/[0.045]",
+                  "cursor-pointer rounded-[18px] border border-transparent bg-transparent px-3 py-2.5 text-left transition-all active:translate-y-px hover:border-white/10 hover:bg-white/[0.045]",
                   isSelected && "border-cyan-300/18 bg-cyan-400/9 shadow-[0_14px_38px_rgba(8,145,178,0.16)]",
                 )}
                 onClick={() => onSelectChat(chat.chatKey)}
@@ -261,12 +260,17 @@ export function ChatList({
                 }}
               >
                 <div className="flex items-start gap-3">
-                  <Avatar className="size-11 border border-white/8 bg-white/[0.04]">
+                  <div className="relative shrink-0">
+                    <Avatar className="size-10 border border-white/8 bg-white/[0.04]">
                     <AvatarImage src={chat.avatarUrl || undefined} alt={chat.title} />
                     <AvatarFallback className="bg-cyan-400/10 text-cyan-100">
                       {initials(chat.title)}
                     </AvatarFallback>
                   </Avatar>
+                    {hasNewMessages || hasUnread ? (
+                      <span className="absolute -right-0.5 -top-0.5 size-3 rounded-full border border-[#07111c] bg-cyan-300" />
+                    ) : null}
+                  </div>
 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-3">
@@ -283,6 +287,7 @@ export function ChatList({
                           "rounded-full p-1 text-slate-500 transition-all hover:bg-white/8 hover:text-white active:translate-y-px",
                           isFavorite && "text-amber-200",
                         )}
+                        aria-label={isFavorite ? "Убрать чат из избранного" : "Добавить чат в избранное"}
                         onClick={(event) => {
                           event.stopPropagation();
                           onToggleFavorite(chat.id);
@@ -292,10 +297,18 @@ export function ChatList({
                       </button>
                     </div>
 
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <Badge variant="outline" className="border-0 bg-white/7 text-slate-200 ring-1 ring-white/10">
                         {syncLabelMap[chat.syncStatus] || chat.syncStatus}
                       </Badge>
+                      {chatMode !== "off" ? (
+                        <Badge
+                          variant="outline"
+                          className={cn("border-0 ring-1", toneBadgeClasses(chatMode === "autopilot" ? "danger" : chatMode === "semi_auto" ? "warning" : "info"))}
+                        >
+                          {formatAutopilotMode(chatMode)}
+                        </Badge>
+                      ) : null}
                       {chat.pinned ? (
                         <Badge variant="outline" className="border-0 bg-cyan-400/10 text-cyan-100 ring-1 ring-cyan-300/12">
                           Закреплён
@@ -321,6 +334,21 @@ export function ChatList({
                           Черновик
                         </Badge>
                       ) : null}
+                      {isSelected && activePendingConfirmation ? (
+                        <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
+                          Ждёт подтверждение
+                        </Badge>
+                      ) : null}
+                      {isActiveFallback ? (
+                        <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
+                          Резервный слой
+                        </Badge>
+                      ) : null}
+                      {isActiveDegraded ? (
+                        <Badge variant="outline" className="border-0 bg-rose-400/12 text-rose-100 ring-1 ring-rose-300/15">
+                          Нестабильно
+                        </Badge>
+                      ) : null}
                       {hasNewMessages ? (
                         <Badge variant="outline" className="border-0 bg-cyan-400/12 text-cyan-100 ring-1 ring-cyan-300/15">
                           Новое
@@ -328,11 +356,11 @@ export function ChatList({
                       ) : null}
                     </div>
 
-                    <div className="mt-3 line-clamp-2 text-sm leading-6 text-slate-300">
+                    <div className="mt-2 line-clamp-2 text-sm leading-5 text-slate-300">
                       {displayPreview}
                     </div>
 
-                    <div className="mt-3 flex items-center justify-between gap-3">
+                    <div className="mt-2 flex items-center justify-between gap-3">
                       <div className="truncate text-xs text-slate-500">
                         {formatCompactNumber(chat.messageCount)} сообщений
                         {displaySender ? ` • ${displaySender}` : ""}

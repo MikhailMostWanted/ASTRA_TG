@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ReplyPanel } from "@/components/system/ReplyPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { ReplyPreviewPayload } from "@/lib/types";
+import type { ReplyPreviewPayload, WorkspaceStatusPayload } from "@/lib/types";
 import { buildReplyDraftScopeKey } from "@/stores/app-store";
 
 describe("ReplyPanel", () => {
@@ -41,8 +41,8 @@ describe("ReplyPanel", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByText("Astra Reply")).toBeInTheDocument();
-    expect(screen.getByText("Фокус ответа")).toBeInTheDocument();
+    expect(screen.getByText("Панель ответа")).toBeInTheDocument();
+    expect(screen.getByText("Главный вариант")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Использовать как черновик" })).toBeInTheDocument();
   });
 
@@ -613,6 +613,41 @@ describe("ReplyPanel", () => {
     expect(screen.queryByText("Отправить вариант")).not.toBeInTheDocument();
   });
 
+  it("shows loading and disabled states for rebuild and send feedback", () => {
+    render(
+      <TooltipProvider>
+        <ReplyPanel
+          reply={buildAutopilotReply()}
+          workspaceStatus={buildWritableWorkspaceStatus()}
+          workflowState={null}
+          refreshing
+          sending
+          sendStatus={{
+            status: "pending",
+            message: "Отправляю сообщение.",
+            backend: "new",
+            sentMessageKey: null,
+            timestamp: "2026-04-24T12:05:00.000Z",
+            tone: "pending",
+          }}
+          onRefresh={vi.fn()}
+          onCopy={vi.fn()}
+          onUseDraft={vi.fn()}
+          onSend={vi.fn()}
+          onMarkSent={vi.fn()}
+          onClearDraft={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Пересобираю" })).toBeDisabled();
+    const sendButton = screen.getByRole("button", { name: "Отправляю" });
+    expect(sendButton).toBeDisabled();
+    expect(sendButton).toHaveAttribute("aria-busy", "true");
+    expect(screen.getAllByText("Отправляю сообщение.").length).toBeGreaterThan(0);
+    expect(screen.getByText(/основной Telegram/)).toBeInTheDocument();
+  });
+
   it("renders workspace context without reply generation when new runtime is read-only", () => {
     render(
       <TooltipProvider>
@@ -705,10 +740,12 @@ describe("ReplyPanel", () => {
       </TooltipProvider>,
     );
 
-    expect(screen.getByText("Контекст")).toBeInTheDocument();
-    expect(screen.getByText("Workspace уже собрал общий trigger и focus, но нормальный draft сейчас не получился.")).toBeInTheDocument();
+    expect(screen.getByText("Панель ответа")).toBeInTheDocument();
+    expect(screen.getByText("ответ не собран")).toBeInTheDocument();
+    expect(screen.getByText("Контекст найден, но готовый текст или отправка сейчас недоступны.")).toBeInTheDocument();
+    expect(screen.getByText("Последний входящий message остаётся без ответа.")).toBeInTheDocument();
     expect(screen.getByText("вопрос")).toBeInTheDocument();
-    expect(screen.getByText("Message list и reply panel всё равно смотрят в один и тот же snapshot. Если draft не собрался, здесь остаётся честный focus context без декоративного фейка.")).toBeInTheDocument();
+    expect(screen.getByText(/можно читать контекст, но отправлять готовый ответ пока нельзя/)).toBeInTheDocument();
   });
 
   it("renders managed reply execution controls and confirms pending semi-auto send", () => {
@@ -776,7 +813,7 @@ describe("ReplyPanel", () => {
                 timestamp: "2026-04-24T12:00:00.000Z",
                 action: "confirm_awaited",
                 status: "awaiting_confirmation",
-              message: "Ждёт подтверждения",
+                message: "Ждёт подтверждения",
                 reasonCode: "confirm_required",
               },
             ],
@@ -845,10 +882,13 @@ describe("ReplyPanel", () => {
     );
 
     expect(screen.getByText("Глобально: Полуавтомат")).toBeInTheDocument();
-    expect(screen.getByText("live pending")).toBeInTheDocument();
-    expect(screen.getByText("Live loop")).toBeInTheDocument();
+    expect(screen.getAllByText("ждёт подтверждение").length).toBeGreaterThan(0);
+    expect(screen.getByText("Безопасность автопилота")).toBeInTheDocument();
     expect(screen.getAllByText("Ждёт подтверждения").length).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText("Глобальный режим"), { target: { value: "autopilot" } });
+    expect(onUpdateGlobal).not.toHaveBeenCalledWith({ mode: "autopilot" });
+    expect(screen.getByText("Подтверди включение автопилота")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Включить автопилот" }));
     fireEvent.change(screen.getByLabelText("Режим чата"), { target: { value: "draft" } });
     fireEvent.click(screen.getByRole("button", { name: "Подтвердить отправку" }));
     fireEvent.click(screen.getByRole("button", { name: "Экстренный стоп" }));
@@ -926,5 +966,45 @@ function buildAutopilotReply(): ReplyPreviewPayload {
         },
       ],
     },
+  };
+}
+
+function buildWritableWorkspaceStatus(): WorkspaceStatusPayload {
+  return {
+    source: "new",
+    requestedBackend: "new",
+    effectiveBackend: "new",
+    degraded: false,
+    degradedReason: null,
+    syncTrigger: "runtime_poll",
+    updatedNow: true,
+    syncError: null,
+    lastUpdatedAt: "2026-04-23T09:05:02.000Z",
+    lastSuccessAt: "2026-04-23T09:05:02.000Z",
+    lastError: null,
+    lastErrorAt: null,
+    availability: {
+      workspaceAvailable: true,
+      historyReadable: true,
+      runtimeReadable: true,
+      legacyWorkspaceAvailable: false,
+      replyContextAvailable: true,
+      sendAvailable: true,
+      autopilotAvailable: true,
+      canLoadOlder: true,
+    },
+    messageSource: {
+      backend: "new_runtime",
+      chatKey: "telegram:-100777",
+      runtimeChatId: -100777,
+      localChatId: null,
+      oldestMessageKey: "telegram:-100777:41",
+      newestMessageKey: "telegram:-100777:41",
+      oldestRuntimeMessageId: 41,
+      newestRuntimeMessageId: 41,
+    },
+    route: {},
+    sendPath: { effective: "new" },
+    sendDisabledReason: null,
   };
 }

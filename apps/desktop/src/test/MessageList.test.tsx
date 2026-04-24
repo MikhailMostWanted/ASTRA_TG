@@ -133,11 +133,153 @@ describe("MessageList", () => {
       />,
     );
 
-    expect(screen.getByText("new workspace")).toBeInTheDocument();
-    expect(screen.getByText("live paused")).toBeInTheDocument();
+    expect(screen.getByText("чат пока недоступен")).toBeInTheDocument();
+    expect(screen.getByText("live на паузе")).toBeInTheDocument();
+    expect(screen.getAllByText("связь с Telegram нестабильна").length).toBeGreaterThan(0);
     expect(screen.getByText("runtime timeout")).toBeInTheDocument();
-    expect(screen.getByText("Retry")).toBeInTheDocument();
+    expect(screen.getByText("Сбросить ошибку")).toBeInTheDocument();
     expect(screen.getByText("2 непрочит.")).toBeInTheDocument();
-    expect(screen.getByText("Workspace для чтения пока недоступен")).toBeInTheDocument();
+    expect(screen.getByText("Чат пока нельзя прочитать")).toBeInTheDocument();
+  });
+
+  it("highlights the source message and keeps the chat-like bubble grouping", () => {
+    render(
+      <MessageList
+        chat={{ ...runtimeOnlyChat, messageCount: 3, unreadCount: 0 }}
+        messages={[
+          {
+            id: 41,
+            chatKey: "telegram:-100500",
+            messageKey: "telegram:-100500:41",
+            runtimeMessageId: 41,
+            localMessageId: null,
+            telegramMessageId: 41,
+            chatId: -200001,
+            direction: "inbound",
+            sourceAdapter: "new_runtime",
+            sourceType: "message",
+            senderId: 11,
+            senderName: "Анна",
+            sentAt: "2026-04-22T11:01:00.000Z",
+            text: "Сможешь посмотреть сегодня?",
+            normalizedText: "Сможешь посмотреть сегодня?",
+            replyToMessageId: null,
+            replyToLocalMessageId: null,
+            replyToRuntimeMessageId: null,
+            replyToMessageKey: null,
+            hasMedia: false,
+            mediaType: null,
+            mediaPreviewUrl: null,
+            forwardInfo: null,
+            entities: null,
+            preview: "Сможешь посмотреть сегодня?",
+          },
+          {
+            id: 42,
+            chatKey: "telegram:-100500",
+            messageKey: "telegram:-100500:42",
+            runtimeMessageId: 42,
+            localMessageId: null,
+            telegramMessageId: 42,
+            chatId: -200001,
+            direction: "outbound",
+            sourceAdapter: "new_runtime",
+            sourceType: "message",
+            senderId: 7,
+            senderName: "Михаил",
+            sentAt: "2026-04-22T11:02:00.000Z",
+            text: "Да, посмотрю.",
+            normalizedText: "Да, посмотрю.",
+            replyToMessageId: null,
+            replyToLocalMessageId: null,
+            replyToRuntimeMessageId: 41,
+            replyToMessageKey: "telegram:-100500:41",
+            hasMedia: false,
+            mediaType: null,
+            mediaPreviewUrl: null,
+            forwardInfo: null,
+            entities: null,
+            preview: "Да, посмотрю.",
+          },
+        ]}
+        loading={false}
+        refreshing={false}
+        fullaccessReady
+        workspaceStatus={{
+          source: "new",
+          requestedBackend: "new",
+          effectiveBackend: "new",
+          degraded: false,
+          degradedReason: null,
+          syncTrigger: "runtime_poll",
+          updatedNow: true,
+          syncError: null,
+          lastUpdatedAt: "2026-04-22T11:03:00.000Z",
+          lastSuccessAt: "2026-04-22T11:03:00.000Z",
+          lastError: null,
+          lastErrorAt: null,
+          availability: {
+            workspaceAvailable: true,
+            historyReadable: true,
+            runtimeReadable: true,
+            legacyWorkspaceAvailable: false,
+            replyContextAvailable: true,
+            sendAvailable: true,
+            autopilotAvailable: true,
+            canLoadOlder: false,
+          },
+          messageSource: {
+            backend: "new_runtime",
+            chatKey: "telegram:-100500",
+            runtimeChatId: -100500,
+            localChatId: null,
+            oldestMessageKey: "telegram:-100500:41",
+            newestMessageKey: "telegram:-100500:42",
+            oldestRuntimeMessageId: 41,
+            newestRuntimeMessageId: 42,
+          },
+          route: {},
+        }}
+        highlightMessageKey="telegram:-100500:41"
+        canLoadOlder={false}
+        loadingOlder={false}
+        lastUpdatedAt="2026-04-22T11:03:00.000Z"
+        freshness={{
+          mode: "fresh",
+          label: "Контекст свежий",
+          detail: "Хвост обновлён.",
+          isStale: false,
+          fullaccessReady: true,
+          canManualSync: true,
+          lastSyncAt: "2026-04-22T11:03:00.000Z",
+          reference: "@runtime_chat",
+          createdCount: 0,
+          updatedCount: 0,
+          skippedCount: 0,
+          syncTrigger: "runtime_poll",
+          updatedNow: true,
+          syncError: null,
+        }}
+        live={{
+          scope: "active_chat",
+          status: "refreshed",
+          paused: false,
+          degraded: false,
+          newMessageCount: 0,
+          meaningfulMessageCount: 0,
+        }}
+        errorMessage={null}
+        onLoadOlder={vi.fn()}
+        onRefresh={vi.fn()}
+        onToggleLivePause={vi.fn()}
+        onClearLiveError={vi.fn()}
+        onSyncChat={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Анна")).toBeInTheDocument();
+    expect(screen.getAllByText("Я").length).toBeGreaterThan(0);
+    expect(screen.getByText("опорный сигнал")).toBeInTheDocument();
+    expect(screen.getByText("Сможешь посмотреть сегодня?")).toBeInTheDocument();
   });
 });
