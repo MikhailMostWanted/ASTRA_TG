@@ -1,14 +1,16 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from astra_runtime.manager import LegacyRuntimeBackend, RuntimeManager, StaticRuntimeBackend
 from astra_runtime.new_telegram import NewTelegramRuntimeConfig, NewTelegramRuntimeService
 from astra_runtime.new_telegram.auth import default_auth_session_state
-from astra_runtime.status import RuntimeAuthSessionState
+from astra_runtime.status import RuntimeAuthSessionState, RuntimeUnavailableError
 from astra_runtime.switches import RuntimeSwitches
 
 
-def test_runtime_manager_keeps_legacy_effective_when_new_runtime_is_not_route_ready(
+def test_runtime_manager_does_not_fallback_when_new_runtime_is_not_route_ready(
     tmp_path: Path,
 ) -> None:
     async def run_assertions() -> None:
@@ -27,13 +29,16 @@ def test_runtime_manager_keeps_legacy_effective_when_new_runtime_is_not_route_re
         manager.register_backend(new_runtime)
 
         await manager.bootstrap()
-        payload = await manager.surface("chatRoster").list_chats()
+        with pytest.raises(RuntimeUnavailableError) as error:
+            await manager.surface("chatRoster").list_chats()
         status = await manager.status()
         route = status["routes"]["routes"]["chatRoster"]
 
-        assert payload == {"runtime": "legacy"}
+        assert "RUNTIME_NEW_API_ID" in str(error.value)
         assert route["requested"] == "new"
-        assert route["effective"] == "legacy"
+        assert route["effective"] == "new"
+        assert route["status"] == "unavailable"
+        assert route["reasonCode"] == "not_ready"
         assert route["targetAvailable"] is True
         assert route["targetReady"] is False
         assert route["reason"] == "Нужно задать RUNTIME_NEW_API_ID и RUNTIME_NEW_API_HASH."
@@ -67,7 +72,7 @@ def test_runtime_manager_can_route_to_registered_route_ready_target() -> None:
     asyncio.run(run_assertions())
 
 
-def test_runtime_manager_keeps_unimplemented_surfaces_on_legacy_even_when_chat_roster_is_ready() -> None:
+def test_runtime_manager_marks_unimplemented_new_surface_unavailable_without_legacy_fallback() -> None:
     async def run_assertions() -> None:
         manager = RuntimeManager(
             RuntimeSwitches(
@@ -79,10 +84,13 @@ def test_runtime_manager_keeps_unimplemented_surfaces_on_legacy_even_when_chat_r
         manager.register_backend(_SurfaceAwareBackend())
 
         assert manager.active_backend_for_surface("chatRoster") == "new"
-        assert manager.active_backend_for_surface("sendPath") == "legacy"
-        assert manager.describe_routes()["routes"]["sendPath"]["reason"] == (
-            "New runtime пока не реализует этот surface; legacy remains effective."
-        )
+        assert manager.active_backend_for_surface("sendPath") == "new"
+        send_route = manager.describe_routes()["routes"]["sendPath"]
+        assert send_route["effective"] == "new"
+        assert send_route["status"] == "unavailable"
+        assert send_route["reason"] == "New runtime пока не реализует этот surface; surface недоступен."
+        with pytest.raises(RuntimeUnavailableError):
+            manager.surface("sendPath")
 
     asyncio.run(run_assertions())
 
@@ -211,7 +219,7 @@ class _SurfaceAwareBackend:
     def route_reason_for(self, surface: str) -> str | None:
         if surface == "chatRoster":
             return None
-        return "New runtime пока не реализует этот surface; legacy remains effective."
+        return "New runtime пока не реализует этот surface; surface недоступен."
 
 
 class _WorkspaceAwareBackend:
@@ -249,7 +257,7 @@ class _WorkspaceAwareBackend:
     def route_reason_for(self, surface: str) -> str | None:
         if surface == "messageWorkspace":
             return None
-        return "New runtime пока не реализует этот surface; legacy remains effective."
+        return "New runtime пока не реализует этот surface; surface недоступен."
 
 
 class _SendAwareBackend:
@@ -287,4 +295,4 @@ class _SendAwareBackend:
     def route_reason_for(self, surface: str) -> str | None:
         if surface == "sendPath":
             return None
-        return "New runtime пока не реализует этот surface; legacy remains effective."
+        return "New runtime пока не реализует этот surface; surface недоступен."

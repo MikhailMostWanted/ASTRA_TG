@@ -276,10 +276,10 @@ export function FullAccessScreen() {
         <div className="border-b border-white/7 px-4 py-4">
           <div>
             <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Telegram access</div>
-            <div className="mt-1 text-base font-semibold text-white">Новый runtime auth + legacy fallback</div>
+            <div className="mt-1 text-base font-semibold text-white">Новый runtime auth</div>
             <div className="mt-1 text-sm leading-6 text-slate-400">
-              Новый runtime получает реальный auth/session контур уже сейчас. Legacy full-access ниже
-              остаётся резервным путём для ручной синхронизации и старого fallback-сценария.
+              Новый runtime получает реальный auth/session контур. Legacy full-access ниже остаётся
+              отдельным ручным режимом для старых сценариев синхронизации.
             </div>
           </div>
         </div>
@@ -291,8 +291,8 @@ export function FullAccessScreen() {
                 <div>
                   <div className="text-sm font-medium text-white">Новый Telegram runtime</div>
                   <div className="mt-1 text-sm leading-6 text-slate-300">
-                    Реальный auth/session слой нового backend. По умолчанию roster, message history и send
-                    по-прежнему остаются на legacy-routing.
+                    Реальный auth/session слой нового backend. Product surfaces работают через backend,
+                    явно выбранный в runtime switches.
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">

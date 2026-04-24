@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core.logging import get_logger, log_event
+from astra_runtime.status import RuntimeUnavailableError
 from services.reply_signal import (
     has_emotional_signal,
     has_follow_up_commitment_signal,
@@ -238,6 +239,8 @@ class DesktopLiveCoordinator:
                 )
             except Exception as error:
                 event = self._record_active_error(state, error=error, started_at=now, reason=reason)
+                if isinstance(error, RuntimeUnavailableError):
+                    raise
                 if state.cached_workspace is not None:
                     return LiveRefreshResult(
                         payload=_decorate_workspace_with_live(state.cached_workspace, event),
@@ -304,6 +307,8 @@ class DesktopLiveCoordinator:
                 payload = await fetch_roster()
             except Exception as error:
                 event = self._record_roster_error(state, error=error, started_at=now, reason=reason)
+                if isinstance(error, RuntimeUnavailableError):
+                    raise
                 if state.cached_roster is not None:
                     return LiveRefreshResult(
                         payload=_decorate_roster_with_live(state.cached_roster, event),

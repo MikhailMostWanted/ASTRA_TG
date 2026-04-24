@@ -10,6 +10,7 @@ from astra_runtime.contracts import (
     MessageSender,
     TelegramRuntime,
 )
+from astra_runtime.status import RuntimeUnavailableError
 from astra_runtime.switches import RuntimeBackend, RuntimeSwitches
 
 
@@ -18,19 +19,24 @@ class RuntimeRouteStatus:
     requested: RuntimeBackend
     effective: RuntimeBackend
     target_available: bool
+    status: str
 
     @property
     def reason(self) -> str | None:
-        if self.requested == self.effective:
+        if self.status == "available":
             return None
-        return "New runtime is not registered yet; legacy adapter remains effective."
+        return "New runtime is not registered yet."
 
     def to_payload(self) -> dict[str, object]:
         return {
             "requested": self.requested,
             "effective": self.effective,
             "targetAvailable": self.target_available,
+            "targetReady": self.status == "available" and self.effective == "new",
+            "status": self.status,
             "reason": self.reason,
+            "reasonCode": None if self.status == "available" else "not_registered",
+            "actionHint": None if self.status == "available" else "Проверь запуск нового Telegram runtime.",
         }
 
 
@@ -77,12 +83,22 @@ class RuntimeRouter:
     def _select(self, component: str, requested: RuntimeBackend):
         if requested == "new" and self.target is not None:
             return getattr(self.target, component)
+        if requested == "new":
+            raise RuntimeUnavailableError(
+                "New runtime is not registered yet.",
+                code="not_registered",
+                action_hint="Проверь запуск нового Telegram runtime.",
+            )
         return getattr(self.legacy, component)
 
     def _status(self, requested: RuntimeBackend) -> RuntimeRouteStatus:
-        effective: RuntimeBackend = "new" if requested == "new" and self.target is not None else "legacy"
+        effective: RuntimeBackend = requested
+        status = "available"
+        if requested == "new" and self.target is None:
+            status = "unavailable"
         return RuntimeRouteStatus(
             requested=requested,
             effective=effective,
             target_available=self.target is not None,
+            status=status,
         )

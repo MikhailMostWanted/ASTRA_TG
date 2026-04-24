@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol, cast
 
 from astra_runtime.contracts import TelegramRuntime
-from astra_runtime.status import RuntimeBackendStatus, RuntimeRouteStatus
+from astra_runtime.status import RuntimeBackendStatus, RuntimeRouteStatus, RuntimeUnavailableError
 from astra_runtime.switches import RuntimeBackend, RuntimeSwitches
 
 
@@ -145,6 +145,12 @@ class RuntimeManager:
 
     def surface(self, surface: RuntimeSurfaceName):
         status = self._route_status(surface)
+        if status.status != "available":
+            raise RuntimeUnavailableError(
+                status.reason or f"Runtime surface is unavailable: {surface}",
+                code=status.reason_code,
+                action_hint=status.action_hint,
+            )
         backend = self._registry[status.effective]
         component_name = SURFACE_TO_COMPONENT[surface]
         return getattr(backend.runtime, component_name)
@@ -214,21 +220,32 @@ class RuntimeManager:
         target = self._registry.get("new")
         target_available = target is not None
         target_ready = bool(target and target.route_available_for(surface))
-        effective: RuntimeBackend = "legacy"
+        effective: RuntimeBackend = requested
         reason: str | None = None
+        status = "available"
+        reason_code: str | None = None
+        action_hint: str | None = None
 
         if requested == "new":
             if target_ready:
                 effective = "new"
             elif not target_available:
-                reason = "New runtime is not registered; legacy remains effective."
+                status = "unavailable"
+                reason_code = "not_registered"
+                reason = "New runtime is not registered."
+                action_hint = "Проверь запуск нового Telegram runtime."
             else:
+                status = "unavailable"
                 reason = (
                     target.route_reason_for(surface)
-                    or "New runtime is registered but not route-ready; legacy remains effective."
+                    or "New runtime is registered but not route-ready."
                 )
+                reason_code, action_hint = _classify_unavailable_reason(reason)
         elif "legacy" not in self._registry:
+            status = "unavailable"
+            reason_code = "legacy_not_registered"
             reason = "Legacy runtime is not registered."
+            action_hint = "Выбери доступный backend или зарегистрируй legacy runtime."
 
         return RuntimeRouteStatus(
             surface=surface,
@@ -237,6 +254,9 @@ class RuntimeManager:
             target_available=target_available,
             target_ready=target_ready,
             reason=reason,
+            status=status,
+            reason_code=reason_code,
+            action_hint=action_hint,
         )
 
     def _require_backend(self, backend: RuntimeBackend) -> RuntimeBackendHandle:
@@ -244,3 +264,18 @@ class RuntimeManager:
         if handle is None:
             raise ValueError(f"Runtime backend is not registered: {backend}")
         return handle
+
+
+def _classify_unavailable_reason(reason: str | None) -> tuple[str, str]:
+    lowered = (reason or "").casefold()
+    if "api_id" in lowered or "api_hash" in lowered or "disabled" in lowered or "выключ" in lowered:
+        return "not_ready", "Проверь настройки нового Telegram runtime."
+    if "not authorized" in lowered or "authorized" in lowered or "авториз" in lowered or "войти" in lowered:
+        return "not_authorized", "Войди в Telegram runtime."
+    if "degraded" in lowered or "temporarily" in lowered or "временно" in lowered:
+        return "degraded", "Повтори позже или обнови runtime."
+    if "chat" in lowered or "чат" in lowered:
+        return "chat_not_available", "Обнови чат или дождись чтения новым runtime."
+    if "not route-ready" in lowered or "route-ready" in lowered:
+        return "not_ready", "Проверь готовность surface нового runtime."
+    return "unavailable", "Проверь runtime и повтори действие."

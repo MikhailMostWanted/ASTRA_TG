@@ -240,7 +240,6 @@ export function ChatList({
             const hasUnread = chat.unreadCount > 0;
             const chatMode = chat.autoReplyMode || (chat.replyAssistEnabled ? "draft" : "off");
             const isActiveDegraded = Boolean(isSelected && activeWorkspaceStatus?.degraded);
-            const isActiveFallback = Boolean(isSelected && activeWorkspaceStatus?.source === "fallback_to_legacy");
 
             return (
               <div
@@ -337,11 +336,6 @@ export function ChatList({
                       {isSelected && activePendingConfirmation ? (
                         <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
                           Ждёт подтверждение
-                        </Badge>
-                      ) : null}
-                      {isActiveFallback ? (
-                        <Badge variant="outline" className="border-0 bg-amber-300/12 text-amber-100 ring-1 ring-amber-300/15">
-                          Резервный слой
                         </Badge>
                       ) : null}
                       {isActiveDegraded ? (

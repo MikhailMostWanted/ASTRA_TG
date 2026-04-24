@@ -25,6 +25,17 @@ RuntimeAuthMachineState = Literal[
 class RuntimeUnavailableError(RuntimeError):
     """Raised when a runtime surface is called before it is route-ready."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        action_hint: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.action_hint = action_hint
+
 
 @dataclass(frozen=True, slots=True)
 class RuntimeAuthSessionState:
@@ -198,6 +209,9 @@ class RuntimeRouteStatus:
     target_available: bool
     target_ready: bool
     reason: str | None = None
+    status: str = "available"
+    reason_code: str | None = None
+    action_hint: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -206,7 +220,10 @@ class RuntimeRouteStatus:
             "effective": self.effective,
             "targetAvailable": self.target_available,
             "targetReady": self.target_ready,
+            "status": self.status,
             "reason": self.reason,
+            "reasonCode": self.reason_code,
+            "actionHint": self.action_hint,
         }
 
 

@@ -159,7 +159,10 @@ export interface RuntimeRoutePayload {
   effective: "legacy" | "new" | string;
   targetAvailable: boolean;
   targetReady: boolean;
+  status?: "available" | "unavailable" | string;
   reason: string | null;
+  reasonCode?: string | null;
+  actionHint?: string | null;
 }
 
 export interface RuntimeStatusPayload {
@@ -293,7 +296,7 @@ export interface ChatItem {
 }
 
 export interface ChatRosterStatePayload {
-  source: "legacy" | "new" | "fallback_to_legacy" | string;
+  source: "legacy" | "new" | string;
   requestedBackend: "legacy" | "new" | string | null;
   effectiveBackend: "legacy" | "new" | string | null;
   degraded: boolean;
@@ -309,7 +312,7 @@ export interface ChatRosterStatePayload {
 export interface ChatsPayload {
   items: ChatItem[];
   count: number;
-  source: "legacy" | "new" | "fallback_to_legacy" | string;
+  source: "legacy" | "new" | string;
   roster: ChatRosterStatePayload;
   live?: LiveStatusPayload | null;
   refreshedAt: string | null;
@@ -382,7 +385,7 @@ export interface MessageSourceIdentityPayload {
 }
 
 export interface WorkspaceStatusPayload {
-  source: "legacy" | "new" | "fallback_to_legacy" | string;
+  source: "legacy" | "new" | string;
   requestedBackend: "legacy" | "new" | string | null;
   effectiveBackend: "legacy" | "new" | string | null;
   degraded: boolean;
@@ -742,7 +745,7 @@ export interface ChatSendPayload {
   status: "success" | "failed" | "unavailable" | "degraded" | "fallback" | string;
   reason: string | null;
   error: { code: string; message: string | null } | null;
-  source: "legacy" | "new" | "fallback_to_legacy" | string;
+  source: "legacy" | "new" | string;
   requestedBackend: "legacy" | "new" | string | null;
   effectiveBackend: "legacy" | "new" | string | null;
   backend: "legacy" | "new" | string | null;

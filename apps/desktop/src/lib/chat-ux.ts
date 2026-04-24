@@ -141,18 +141,10 @@ export function buildWorkspaceCopy(status?: WorkspaceStatusPayload | null): UiSt
     };
   }
 
-  if (status.source === "fallback_to_legacy") {
-    return {
-      label: "работаю через резервный слой",
-      detail: status.degradedReason || "Основное подключение к Telegram недоступно, поэтому Astra читает доступный резервный контекст.",
-      tone: "warning",
-    };
-  }
-
   if (status.degraded) {
     return {
       label: "связь с Telegram нестабильна",
-      detail: status.degradedReason || status.lastError || "Часть данных может прийти через резервный слой.",
+      detail: status.degradedReason || status.lastError || "Обнови чат, чтобы получить свежий снимок.",
       tone: "warning",
     };
   }
@@ -183,9 +175,9 @@ export function buildWorkspaceCopy(status?: WorkspaceStatusPayload | null): UiSt
 export function buildRosterCopy(roster?: ChatRosterStatePayload | null, live?: LiveStatusPayload | null): UiStatusCopy {
   if (live?.degraded || roster?.degraded) {
     return {
-      label: roster?.source === "fallback_to_legacy" ? "работаю через резервный слой" : "связь с Telegram нестабильна",
+      label: roster?.requestedBackend === "new" ? "runtime недоступен" : "связь с Telegram нестабильна",
       detail: roster?.degradedReason || live?.lastError || "Список чатов обновляется с ошибками.",
-      tone: "warning",
+      tone: roster?.requestedBackend === "new" ? "danger" : "warning",
     };
   }
 

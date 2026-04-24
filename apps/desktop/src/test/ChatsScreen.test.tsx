@@ -16,6 +16,7 @@ const apiMock = vi.hoisted(() => ({
   sendChatMessage: vi.fn(),
   updateAutopilotGlobal: vi.fn(),
   updateChatAutopilot: vi.fn(),
+  runtime: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -170,6 +171,24 @@ describe("ChatsScreen", () => {
   beforeEach(() => {
     Object.values(apiMock).forEach((mockFn) => mockFn.mockReset());
     useAppStore.getState().resetDesktopState();
+  });
+
+  it("shows a human runtime error when new roster is unavailable", async () => {
+    apiMock.chats.mockRejectedValue(new Error("New Telegram runtime is not authorized yet."));
+    apiMock.fullaccess.mockResolvedValue({
+      status: {
+        readyForManualSync: false,
+        readyForManualSend: false,
+      },
+    });
+    apiMock.runtime.mockResolvedValue({});
+
+    renderScreen();
+
+    expect(await screen.findByText("Новый Telegram runtime недоступен")).toBeInTheDocument();
+    expect(screen.getByText(/Нужно войти в Telegram runtime/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Обновить/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Проверить runtime/ })).toBeInTheDocument();
   });
 
   it("opens runtime-only chat and renders a unified new workspace snapshot", async () => {
@@ -598,9 +617,10 @@ function buildRuntimeOnlyWorkspacePayload({
       sendPath: {
         surface: "sendPath",
         requested: "new",
-        effective: sendAvailable ? "new" : "legacy",
+        effective: "new",
         targetAvailable: true,
         targetReady: sendAvailable,
+        status: sendAvailable ? "available" : "unavailable",
         reason: sendAvailable ? null : "not ready",
       },
       sendDisabledReason: sendAvailable ? null : "Write-path на этом этапе выключен.",

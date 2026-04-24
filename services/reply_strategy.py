@@ -154,6 +154,9 @@ class ReplyStrategyResolver:
         short_mode = few_shot_support is not None and few_shot_support.length_hint == "short"
         strategy_bias = few_shot_support.strategy_bias if few_shot_support else None
         follow_up_after_self = context.reply_opportunity_mode == "follow_up_after_self"
+        contextual_reply = _build_contextual_short_reply(context)
+        if contextual_reply is not None and strategy != "не отвечать":
+            return contextual_reply
         if strategy == "не отвечать":
             return (
                 "Сейчас лучше не писать. Явного повода нет, а лишний follow-up тут только собьёт темп."
@@ -291,3 +294,33 @@ def _strip_sender_prefix(text: str, sender: str) -> str:
             break
         cleaned = cleaned[len(matched_prefix) :].lstrip(" :—–-\t")
     return cleaned
+
+
+def _build_contextual_short_reply(context: ReplyContext) -> str | None:
+    recent_inbound = [
+        _pick_message_text(message)
+        for message in context.working_messages[-6:]
+        if message.direction == "inbound" and _pick_message_text(message)
+    ]
+    tail = " ".join(recent_inbound).casefold()
+    if not tail:
+        return None
+
+    excludes_person = any(
+        marker in tail
+        for marker in (
+            "не относится к нам",
+            "не относится",
+            "не к нам",
+            "вообще мимо",
+        )
+    )
+    protocol_context = "от протокола" in tail or "протокол" in tail
+    mentions_sanya = "саня" in tail or "саню" in tail or "сани" in tail
+    if excludes_person and protocol_context:
+        if mentions_sanya:
+            return "а ну тогда саню можно не считать"
+        return "а ну тогда его не трогаем"
+    if excludes_person:
+        return "а ну тогда он вообще мимо"
+    return None

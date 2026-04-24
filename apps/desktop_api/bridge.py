@@ -197,7 +197,14 @@ class DesktopBridge:
         status["chatRoster"] = await self._get_chat_roster_state()
         status["messageWorkspace"] = await self._get_message_workspace_state()
         status["manualSend"] = await self._get_manual_send_state()
-        status["autopilot"] = await self.get_autopilot_status()
+        try:
+            status["autopilot"] = await self.get_autopilot_status()
+        except RuntimeUnavailableError as error:
+            status["autopilot"] = _build_unavailable_surface_status(
+                route=self._runtime_manager.route_status("autopilotControl").to_payload(),
+                reason=str(error),
+                code=error.code,
+            )
         status["live"] = await self._get_live_status()
         return status
 
@@ -320,45 +327,52 @@ class DesktopBridge:
         sort_key: str = "activity",
     ) -> dict[str, Any]:
         route = self._runtime_manager.route_status("chatRoster")
-        effective_backend = route.effective
-        payload: dict[str, Any]
-        roster_error: str | None = None
-
         try:
             payload = await self._runtime_manager.surface("chatRoster").list_chats(
                 search=search,
                 filter_key=filter_key,
                 sort_key=sort_key,
             )
+        except RuntimeUnavailableError:
+            raise
         except Exception as error:
-            if route.requested == "new" and route.effective == "new":
-                roster_error = str(error)
-                effective_backend = "legacy"
-                payload = await self._legacy_list_chats(
-                    search=search,
-                    filter_key=filter_key,
-                    sort_key=sort_key,
+            if route.requested == "new":
+                route_payload = route.to_payload()
+                route_payload["status"] = "unavailable"
+                route_payload["reason"] = str(error)
+                route_payload["reasonCode"] = "degraded"
+                route_payload["actionHint"] = "Обнови runtime и повтори загрузку списка."
+                await self._record_chat_roster_state(
+                    self._build_chat_roster_state(
+                        route=route_payload,
+                        source="new",
+                        effective_backend="new",
+                        refreshed_at=None,
+                        runtime_meta={},
+                        last_error=str(error),
+                    )
                 )
-            else:
-                raise
+                raise RuntimeUnavailableError(
+                    str(error),
+                    code="degraded",
+                    action_hint="Обнови runtime и повтори загрузку списка.",
+                ) from error
+            raise
 
         source = _resolve_runtime_surface_source(
             requested=route.requested,
-            effective=effective_backend,
+            effective=route.effective,
         )
         runtime_meta = payload.get("runtimeMeta") if isinstance(payload.get("runtimeMeta"), dict) else {}
         payload.pop("runtimeMeta", None)
         route_payload = route.to_payload()
-        if effective_backend != route.effective:
-            route_payload["effective"] = effective_backend
-            route_payload["reason"] = roster_error or route_payload.get("reason")
         roster_state = self._build_chat_roster_state(
             route=route_payload,
             source=source,
-            effective_backend=effective_backend,
+            effective_backend=route.effective,
             refreshed_at=payload.get("refreshedAt"),
             runtime_meta=runtime_meta,
-            last_error=roster_error,
+            last_error=None,
         )
         payload["source"] = source
         payload["roster"] = roster_state
@@ -491,33 +505,40 @@ class DesktopBridge:
         execute_reply_modes: bool = True,
     ) -> dict[str, Any]:
         route = self._runtime_manager.route_status("messageWorkspace")
-        effective_backend = route.effective
-        payload: dict[str, Any]
-        workspace_error: str | None = None
-
         try:
             payload = await self._runtime_manager.surface("messageWorkspace").get_chat_workspace(
                 chat_id,
                 limit=limit,
             )
+        except RuntimeUnavailableError:
+            raise
         except Exception as error:
-            if route.requested == "new" and route.effective == "new":
-                workspace_error = str(error)
-                effective_backend = "legacy"
-                payload = await self._legacy_get_chat_workspace(chat_id, limit=limit)
-            else:
-                raise
+            if route.requested == "new":
+                route_payload = route.to_payload()
+                route_payload["status"] = "unavailable"
+                route_payload["reason"] = str(error)
+                route_payload["reasonCode"] = "degraded"
+                route_payload["actionHint"] = "Повтори обновление workspace через новый runtime."
+                await self._record_message_workspace_state(
+                    _build_unavailable_workspace_status(route=route_payload)
+                )
+                raise RuntimeUnavailableError(
+                    str(error),
+                    code="degraded",
+                    action_hint="Повтори обновление workspace через новый runtime.",
+                ) from error
+            raise
 
         source = _resolve_runtime_surface_source(
             requested=route.requested,
-            effective=effective_backend,
+            effective=route.effective,
         )
         status_payload = self._decorate_workspace_status_payload(
             payload=payload,
             route=route.to_payload(),
             source=source,
-            effective_backend=effective_backend,
-            last_error=workspace_error,
+            effective_backend=route.effective,
+            last_error=None,
         )
         await self._record_message_workspace_state(status_payload)
         if execute_reply_modes:
@@ -777,37 +798,40 @@ class DesktopBridge:
         before_runtime_message_id: int | None = None,
     ) -> dict[str, Any]:
         route = self._runtime_manager.route_status("messageWorkspace")
-        effective_backend = route.effective
-        payload: dict[str, Any]
-        messages_error: str | None = None
-
         try:
             payload = await self._runtime_manager.surface("messageWorkspace").get_chat_messages(
                 chat_id,
                 limit=limit,
                 before_runtime_message_id=before_runtime_message_id,
             )
+        except RuntimeUnavailableError:
+            raise
         except Exception as error:
-            if route.requested == "new" and route.effective == "new":
-                messages_error = str(error)
-                effective_backend = "legacy"
-                payload = await self._legacy_get_chat_messages(
-                    chat_id,
-                    limit=limit,
-                    before_runtime_message_id=before_runtime_message_id,
+            if route.requested == "new":
+                route_payload = route.to_payload()
+                route_payload["status"] = "unavailable"
+                route_payload["reason"] = str(error)
+                route_payload["reasonCode"] = "degraded"
+                route_payload["actionHint"] = "Повтори чтение истории через новый runtime."
+                await self._record_message_workspace_state(
+                    _build_unavailable_workspace_status(route=route_payload)
                 )
-            else:
-                raise
+                raise RuntimeUnavailableError(
+                    str(error),
+                    code="degraded",
+                    action_hint="Повтори чтение истории через новый runtime.",
+                ) from error
+            raise
 
         self._decorate_workspace_status_payload(
             payload=payload,
             route=route.to_payload(),
             source=_resolve_runtime_surface_source(
                 requested=route.requested,
-                effective=effective_backend,
+                effective=route.effective,
             ),
-            effective_backend=effective_backend,
-            last_error=messages_error,
+            effective_backend=route.effective,
+            last_error=None,
         )
         return payload
 
@@ -894,10 +918,22 @@ class DesktopBridge:
         *,
         use_provider_refinement: bool | None = None,
     ) -> dict[str, Any]:
-        return await self._runtime_manager.surface("replyGeneration").get_reply_preview(
-            chat_id,
-            use_provider_refinement=use_provider_refinement,
-        )
+        route = self._runtime_manager.route_status("replyGeneration")
+        try:
+            return await self._runtime_manager.surface("replyGeneration").get_reply_preview(
+                chat_id,
+                use_provider_refinement=use_provider_refinement,
+            )
+        except RuntimeUnavailableError:
+            raise
+        except Exception as error:
+            if route.requested == "new":
+                raise RuntimeUnavailableError(
+                    str(error),
+                    code="degraded",
+                    action_hint="Повтори сборку reply через новый runtime.",
+                ) from error
+            raise
 
     async def _legacy_get_reply_preview(
         self,
@@ -1281,10 +1317,9 @@ class DesktopBridge:
         target: ManualSendTarget,
         route_payload: dict[str, Any],
     ) -> dict[str, Any]:
-        requested = str(route_payload.get("requested") or "legacy")
         effective = str(route_payload.get("effective") or "legacy")
-        fallback_used = requested == "new" and effective == "legacy"
-        fallback_reason = route_payload.get("reason") if fallback_used else None
+        route_status = str(route_payload.get("status") or "available")
+        route_reason = route_payload.get("reason") if isinstance(route_payload.get("reason"), str) else None
 
         if target.runtime_chat_id is None:
             return {
@@ -1292,8 +1327,18 @@ class DesktopBridge:
                 "code": "unknown_chat",
                 "reason": "Чат не найден или недоступен для отправки.",
                 "effectiveBackend": effective,
-                "fallbackUsed": fallback_used,
-                "fallbackReason": fallback_reason,
+                "fallbackUsed": False,
+                "fallbackReason": None,
+            }
+
+        if route_status != "available":
+            return {
+                "available": False,
+                "code": str(route_payload.get("reasonCode") or "send_unavailable"),
+                "reason": route_reason or "Отправка через выбранный runtime сейчас недоступна.",
+                "effectiveBackend": effective,
+                "fallbackUsed": False,
+                "fallbackReason": None,
             }
 
         if effective == "new":
@@ -1307,19 +1352,13 @@ class DesktopBridge:
             }
 
         if target.local_chat_id is None:
-            reason = (
-                "New runtime send-path сейчас недоступен, а legacy fallback не умеет отправлять "
-                "в runtime-only чат без локального source."
-                if fallback_used
-                else "Legacy send-path требует локальный чат; runtime-only чат доступен только через new runtime."
-            )
             return {
                 "available": False,
                 "code": "runtime_only_legacy_unavailable",
-                "reason": reason,
+                "reason": "Legacy send-path требует локальный чат; runtime-only чат доступен только через new runtime.",
                 "effectiveBackend": "legacy",
-                "fallbackUsed": fallback_used,
-                "fallbackReason": fallback_reason,
+                "fallbackUsed": False,
+                "fallbackReason": None,
             }
 
         async with self.runtime.session_factory() as session:
@@ -1329,8 +1368,8 @@ class DesktopBridge:
             "code": None if status.ready_for_manual_send else "legacy_write_unavailable",
             "reason": None if status.ready_for_manual_send else status.reason,
             "effectiveBackend": "legacy",
-            "fallbackUsed": fallback_used,
-            "fallbackReason": fallback_reason,
+            "fallbackUsed": False,
+            "fallbackReason": None,
         }
 
     def _manual_send_duplicate_reason(self, guard_key: str) -> str | None:
@@ -1490,6 +1529,7 @@ class DesktopBridge:
         emergency_stop: bool | None = None,
         autopilot_paused: bool | None = None,
     ) -> dict[str, Any]:
+        self._ensure_autopilot_control_available()
         async with self.runtime.session_factory() as session:
             service = self._build_reply_execution_service(session)
             policy = await service.update_global_policy(
@@ -1540,6 +1580,7 @@ class DesktopBridge:
         autopilot_allowed: bool | None = None,
         mode: str | None = None,
     ) -> dict[str, Any]:
+        self._ensure_autopilot_control_available()
         workspace = await self.get_chat_workspace(chat_id, limit=60, execute_reply_modes=False)
         async with self.runtime.session_factory() as session:
             service = self._build_reply_execution_service(session)
@@ -1615,6 +1656,7 @@ class DesktopBridge:
             }
 
     async def get_autopilot_status(self, *, chat_id: int | None = None) -> dict[str, Any]:
+        self._ensure_autopilot_control_available()
         chat_payload: dict[str, Any] | None = None
         if chat_id is not None:
             workspace = await self.get_chat_workspace(chat_id, limit=60, execute_reply_modes=False)
@@ -1627,6 +1669,7 @@ class DesktopBridge:
             return payload
 
     async def emergency_stop_autopilot(self) -> dict[str, Any]:
+        self._ensure_autopilot_control_available()
         async with self.runtime.session_factory() as session:
             service = self._build_reply_execution_service(session)
             await service.emergency_stop()
@@ -1636,6 +1679,7 @@ class DesktopBridge:
             return payload
 
     async def pause_autopilot(self, *, paused: bool = True) -> dict[str, Any]:
+        self._ensure_autopilot_control_available()
         async with self.runtime.session_factory() as session:
             service = self._build_reply_execution_service(session)
             await service.pause_autopilot(paused=paused)
@@ -1645,6 +1689,7 @@ class DesktopBridge:
             return payload
 
     async def list_autopilot_activity(self, *, limit: int = 20) -> dict[str, Any]:
+        self._ensure_autopilot_control_available()
         async with self.runtime.session_factory() as session:
             events = await WorkflowJournalService(SettingRepository(session)).list_global_events(limit=limit)
             return {"items": list(events), "count": len(events)}
@@ -1655,6 +1700,7 @@ class DesktopBridge:
         *,
         pending_id: str | None = None,
     ) -> dict[str, Any]:
+        self._ensure_autopilot_control_available()
         workspace = await self.get_chat_workspace(chat_id, limit=60, execute_reply_modes=False)
         chat_payload = workspace.get("chat") if isinstance(workspace.get("chat"), dict) else None
         async with self.runtime.session_factory() as session:
@@ -2926,10 +2972,37 @@ class DesktopBridge:
     async def _get_chat_roster_state(self) -> dict[str, Any] | None:
         async with self.runtime.session_factory() as session:
             event = await OperationalStateService(SettingRepository(session)).get_chat_roster_status()
+        route = self._runtime_manager.route_status("chatRoster").to_payload()
         if event is None:
+            if route.get("status") != "available":
+                return self._build_chat_roster_state(
+                    route=route,
+                    source=_resolve_runtime_surface_source(
+                        requested=str(route.get("requested") or "legacy"),
+                        effective=str(route.get("effective") or "legacy"),
+                    ),
+                    effective_backend=str(route.get("effective") or route.get("requested") or "legacy"),
+                    refreshed_at=None,
+                    runtime_meta={},
+                    last_error=route.get("reason") if isinstance(route.get("reason"), str) else None,
+                )
             return None
         payload = event.payload.get("payload")
-        return payload if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            return None
+        if route.get("status") != "available":
+            return self._build_chat_roster_state(
+                route=route,
+                source=_resolve_runtime_surface_source(
+                    requested=str(route.get("requested") or "legacy"),
+                    effective=str(route.get("effective") or "legacy"),
+                ),
+                effective_backend=str(route.get("effective") or route.get("requested") or "legacy"),
+                refreshed_at=payload.get("lastUpdatedAt"),
+                runtime_meta={},
+                last_error=route.get("reason") if isinstance(route.get("reason"), str) else None,
+            )
+        return payload
 
     async def _record_message_workspace_state(self, workspace_state: dict[str, Any]) -> None:
         async with self.runtime.session_factory() as session:
@@ -2941,10 +3014,20 @@ class DesktopBridge:
     async def _get_message_workspace_state(self) -> dict[str, Any] | None:
         async with self.runtime.session_factory() as session:
             event = await OperationalStateService(SettingRepository(session)).get_message_workspace_status()
+        route = self._runtime_manager.route_status("messageWorkspace").to_payload()
         if event is None:
+            if route.get("status") != "available":
+                return _build_unavailable_workspace_status(route=route)
             return None
         payload = event.payload.get("payload")
-        return payload if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            return None
+        if route.get("status") != "available":
+            return _build_unavailable_workspace_status(
+                route=route,
+                last_updated_at=payload.get("lastUpdatedAt") if isinstance(payload.get("lastUpdatedAt"), str) else None,
+            )
+        return payload
 
     async def _get_manual_send_state(self) -> dict[str, Any] | None:
         async with self.runtime.session_factory() as session:
@@ -3037,8 +3120,11 @@ class DesktopBridge:
             "source": source,
             "requestedBackend": route.get("requested"),
             "effectiveBackend": effective_backend,
-            "degraded": source == "fallback_to_legacy" or bool(degraded_reason),
+            "degraded": bool(degraded_reason),
             "degradedReason": degraded_reason,
+            "status": route.get("status") or ("degraded" if degraded_reason else "available"),
+            "reasonCode": route.get("reasonCode"),
+            "actionHint": route.get("actionHint"),
             "lastUpdatedAt": refreshed_at if isinstance(refreshed_at, str) or refreshed_at is None else serialize_datetime(refreshed_at),
             "lastSuccessAt": runtime_meta.get("lastSuccessAt"),
             "lastError": last_error or runtime_meta.get("lastError"),
@@ -3078,7 +3164,10 @@ class DesktopBridge:
 
         route_reason = route_payload.get("reason") if isinstance(route_payload.get("reason"), str) else None
         send_route = self._runtime_manager.route_status("sendPath").to_payload()
-        send_available = bool(availability.get("sendAvailable")) or send_route.get("effective") == "new"
+        send_route_available = send_route.get("status") == "available"
+        send_available = bool(availability.get("sendAvailable")) or (
+            send_route_available and send_route.get("effective") == "new"
+        )
         send_disabled_reason = _build_send_disabled_reason(
             send_available=send_available,
             send_route=send_route,
@@ -3101,11 +3190,13 @@ class DesktopBridge:
             "requestedBackend": route_payload.get("requested"),
             "effectiveBackend": effective_backend,
             "degraded": (
-                source == "fallback_to_legacy"
-                or bool(degraded_reason)
+                bool(degraded_reason)
                 or bool(current_status.get("degraded"))
             ),
             "degradedReason": degraded_reason,
+            "status": route_payload.get("status") or ("degraded" if degraded_reason else "available"),
+            "reasonCode": route_payload.get("reasonCode"),
+            "actionHint": route_payload.get("actionHint"),
             "syncTrigger": (
                 freshness.get("syncTrigger")
                 if isinstance(freshness.get("syncTrigger"), str)
@@ -3233,6 +3324,16 @@ class DesktopBridge:
             raise ValueError("Управление auth доступно только для встроенного managed new runtime.")
         return self._new_runtime_service
 
+    def _ensure_autopilot_control_available(self) -> None:
+        route = self._runtime_manager.route_status("autopilotControl")
+        if route.status == "available":
+            return
+        raise RuntimeUnavailableError(
+            route.reason or "Autopilot control недоступен через выбранный runtime.",
+            code=route.reason_code,
+            action_hint=route.action_hint,
+        )
+
 
 async def _load_last_message(message_repository: MessageRepository, chat_id: int) -> Message | None:
     recent = await message_repository.get_recent_messages(chat_id=chat_id, limit=1)
@@ -3253,11 +3354,77 @@ def _event_item(timestamp_value, title: str, detail: str | None) -> dict[str, An
 
 
 def _resolve_runtime_surface_source(*, requested: str, effective: str) -> str:
-    if requested == "new" and effective == "legacy":
-        return "fallback_to_legacy"
     if effective == "new":
         return "new"
     return "legacy"
+
+
+def _build_unavailable_surface_status(
+    *,
+    route: dict[str, Any],
+    reason: str | None = None,
+    code: str | None = None,
+) -> dict[str, Any]:
+    route_reason = route.get("reason") if isinstance(route.get("reason"), str) else None
+    return {
+        "available": False,
+        "status": "unavailable",
+        "reason": reason or route_reason or "Выбранный runtime surface сейчас недоступен.",
+        "reasonCode": code or route.get("reasonCode") or "unavailable",
+        "actionHint": route.get("actionHint"),
+        "requestedBackend": route.get("requested"),
+        "effectiveBackend": route.get("effective"),
+        "route": route,
+    }
+
+
+def _build_unavailable_workspace_status(
+    *,
+    route: dict[str, Any],
+    last_updated_at: str | None = None,
+) -> dict[str, Any]:
+    reason = route.get("reason") if isinstance(route.get("reason"), str) else "Workspace недоступен."
+    effective_backend = str(route.get("effective") or route.get("requested") or "new")
+    return {
+        "source": _resolve_runtime_surface_source(
+            requested=str(route.get("requested") or "legacy"),
+            effective=effective_backend,
+        ),
+        "requestedBackend": route.get("requested"),
+        "effectiveBackend": effective_backend,
+        "degraded": True,
+        "degradedReason": reason,
+        "syncTrigger": None,
+        "updatedNow": False,
+        "syncError": reason,
+        "lastUpdatedAt": last_updated_at,
+        "lastSuccessAt": None,
+        "lastError": reason,
+        "lastErrorAt": None,
+        "availability": {
+            "workspaceAvailable": False,
+            "historyReadable": False,
+            "runtimeReadable": False,
+            "legacyWorkspaceAvailable": False,
+            "replyContextAvailable": False,
+            "sendAvailable": False,
+            "autopilotAvailable": False,
+            "canLoadOlder": False,
+        },
+        "messageSource": {
+            "backend": "unavailable",
+            "chatKey": None,
+            "runtimeChatId": None,
+            "localChatId": None,
+            "oldestMessageKey": None,
+            "newestMessageKey": None,
+            "oldestRuntimeMessageId": None,
+            "newestRuntimeMessageId": None,
+        },
+        "route": route,
+        "sendPath": route,
+        "sendDisabledReason": "Отправка недоступна: workspace не читается новым runtime.",
+    }
 
 
 def _manual_send_target_payload(target: ManualSendTarget) -> dict[str, Any]:
@@ -3402,7 +3569,13 @@ def _build_send_disabled_reason(
     if current_disabled_reason:
         return current_disabled_reason
     if send_route.get("requested") == "new" and send_route.get("effective") != "new":
-        return "New runtime send-path недоступен; legacy fallback не готов для этого чата."
+        return "Отправка через новый Telegram runtime сейчас недоступна."
+    if send_route.get("requested") == "new" and send_route.get("status") != "available":
+        return (
+            str(send_route.get("reason"))
+            if isinstance(send_route.get("reason"), str)
+            else "Отправка через новый Telegram runtime сейчас недоступна."
+        )
     return "Отправка сейчас недоступна."
 
 

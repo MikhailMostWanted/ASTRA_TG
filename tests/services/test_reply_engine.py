@@ -23,6 +23,7 @@ from services.providers.models import (
     ReplyRefinementCandidate,
     ReplyVariantCandidate,
 )
+from services.reply_service_factory import build_reply_service
 
 
 @dataclass(slots=True)
@@ -733,6 +734,107 @@ def test_reply_context_demotes_short_reaction_trigger_in_favor_of_real_question(
             assert context.target_message.id == meaningful.id
             assert context.focus_label == "вопрос"
             assert "слабый сигнал" in context.focus_reason.lower()
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_reply_context_demotes_old_emotional_trigger_after_fresh_topic_clarification(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        database_path = tmp_path / "reply-focus-sanya-protocol" / "astra.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+
+        runtime = build_database_runtime(Settings())
+        await bootstrap_database(runtime)
+
+        reply_context_module = importlib.import_module("services.reply_context_builder")
+
+        async with runtime.session_factory() as session:
+            chats = ChatRepository(session)
+            messages = MessageRepository(session)
+            chat_memory_repo = ChatMemoryRepository(session)
+            person_memory_repo = PersonMemoryRepository(session)
+
+            chat = await chats.upsert_chat(
+                telegram_chat_id=-100557,
+                title="Протокол",
+                handle="protocol_chat",
+                chat_type="group",
+                is_enabled=True,
+            )
+            await session.commit()
+
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=1,
+                sender_id=7,
+                sender_name="Михаил",
+                direction="outbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 11, 0, tzinfo=timezone.utc),
+                raw_text="Не понял, кто это сделал.",
+                normalized_text="Не понял, кто это сделал.",
+            )
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=2,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 11, 1, tzinfo=timezone.utc),
+                raw_text="Какой надо быть тупой мразью чтобы так сделать",
+                normalized_text="Какой надо быть тупой мразью чтобы так сделать",
+            )
+            await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=3,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 11, 2, tzinfo=timezone.utc),
+                raw_text="Ну саня то от протокола",
+                normalized_text="Ну саня то от протокола",
+            )
+            latest = await messages.create_message(
+                chat_id=chat.id,
+                telegram_message_id=4,
+                sender_id=11,
+                sender_name="Анна",
+                direction="inbound",
+                source_adapter="telegram",
+                source_type="message",
+                sent_at=datetime(2026, 4, 20, 11, 3, tzinfo=timezone.utc),
+                raw_text="Он не относится к нам",
+                normalized_text="Он не относится к нам",
+            )
+            await session.commit()
+
+            context = await reply_context_module.ReplyContextBuilder(
+                message_repository=messages,
+                chat_memory_repository=chat_memory_repo,
+                person_memory_repository=person_memory_repo,
+            ).build(chat)
+            assert not isinstance(context, reply_context_module.ReplyContextIssue)
+            assert context.target_message.id == latest.id
+            assert context.focus_label == "продолжение темы"
+            assert "эмоциональный сигнал понижен" in context.focus_reason.lower()
+
+            service = build_reply_service(Settings(), session)
+            reply = await service.build_reply_for_chat(chat, reference="@protocol_chat")
+            assert reply.suggestion is not None
+            reply_text = reply.suggestion.reply_text.casefold()
+            assert "саню можно не считать" in reply_text or "его не трогаем" in reply_text
+            assert "что сейчас важнее" not in reply_text
+            assert "тут вопрос" not in reply_text
 
         await runtime.dispose()
 

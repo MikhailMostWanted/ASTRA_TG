@@ -151,10 +151,16 @@ describe("ReplyPanel", () => {
 
     expect(screen.getByText("Отладка / детали")).toBeInTheDocument();
     expect(screen.queryByText("Сырой LLM-кандидат")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Trigger backend:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Trigger key:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Live reason code:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Autopilot reason code:/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Базовый вариант")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /Отладка \/ детали/i }));
 
     expect(screen.getByText("Сырой LLM-кандидат")).toBeInTheDocument();
+    expect(screen.getByText(/Trigger backend:/)).toBeInTheDocument();
     expect(screen.getAllByText(/слишком_литературно/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/детерминированная база/i).length).toBeGreaterThan(0);
   });

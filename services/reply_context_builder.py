@@ -223,8 +223,9 @@ class ReplyContextBuilder:
         later_messages: tuple[Message, ...],
     ) -> _ReplyFocusCandidate:
         text = _pick_message_text(message)
-        question_signal = has_question_signal(text)
-        request_signal = has_request_signal(text)
+        rhetorical_insult = _looks_like_rhetorical_insult(text)
+        question_signal = has_question_signal(text) and not rhetorical_insult
+        request_signal = has_request_signal(text) and not rhetorical_insult
         open_loop_signal = has_open_loop_signal(text)
         emotional_signal = has_emotional_signal(text)
         low_signal = is_weak_reply_signal(text)
@@ -291,6 +292,12 @@ class ReplyContextBuilder:
             score -= 0.18
         if latest_meaningful_inbound is not None:
             score -= _topic_shift_penalty(text, _pick_message_text(latest_meaningful_inbound))
+        if emotional_signal and latest_meaningful_inbound is not None:
+            score -= 1.45
+            if _looks_like_topic_clarification(_pick_message_text(latest_meaningful_inbound)):
+                score -= 1.45
+        if _looks_like_rhetorical_insult(text) and latest_meaningful_inbound is not None:
+            score -= 2.15
         if low_signal:
             score -= 1.6
 
@@ -369,8 +376,30 @@ class ReplyContextBuilder:
                 "понижено как слабый сигнал."
             )
         if later_meaningful_count > 0:
+            if (
+                focus_candidate.focus_label == "продолжение темы"
+                and any(has_emotional_signal(_pick_message_text(message)) for message in recent_messages)
+            ):
+                return (
+                    f"{focus_lead} Более ранний эмоциональный сигнал понижен: после него появились "
+                    "содержательные уточнения, и фокус смещён на свежую смысловую связку."
+                )
             return (
                 f"{focus_lead} У более поздних реплик сигнал слабее, поэтому фокус оставлен здесь."
+            )
+        if (
+            focus_candidate.focus_label == "продолжение темы"
+            and focus_candidate.age_from_end <= 2
+            and any(
+                message.direction == "inbound"
+                and _message_order_key(message) < _message_order_key(focus_candidate.message)
+                and has_emotional_signal(_pick_message_text(message))
+                for message in recent_messages
+            )
+        ):
+            return (
+                f"{focus_lead} Более ранний эмоциональный сигнал понижен: после него появились "
+                "содержательные уточнения, и фокус смещён на свежую смысловую связку."
             )
         if focus_candidate.age_from_end <= 2:
             return f"{focus_lead} Этот фрагмент всё ещё в самом свежем слое диалога."
@@ -652,6 +681,31 @@ def _topic_shift_penalty(candidate_text: str, later_text: str) -> float:
     if overlap_ratio < 0.18:
         return 0.26
     return 0.0
+
+
+def _looks_like_topic_clarification(text: str) -> bool:
+    lowered = " ".join(text.split()).casefold()
+    if not lowered:
+        return False
+    markers = (
+        "не относится",
+        "не к нам",
+        "от протокола",
+        "тогда",
+        "значит",
+        "вообще мимо",
+        "его не",
+        "ее не",
+        "её не",
+        "их не",
+        "это не",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+def _looks_like_rhetorical_insult(text: str) -> bool:
+    lowered = " ".join(text.split()).casefold()
+    return "какой надо быть" in lowered or ("туп" in lowered and "мраз" in lowered)
 
 
 def _resolve_workspace_source(

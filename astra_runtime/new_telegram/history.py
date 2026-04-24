@@ -768,7 +768,7 @@ class NewTelegramMessageHistory:
                 "markSent": False,
                 "variants": {},
                 "disabledReason": (
-                    "Reply generation и send-path пока остаются на legacy. "
+                    "Reply generation или send-path нового runtime сейчас недоступны. "
                     "Этот workspace обслуживает только чтение и focus context."
                 ),
             },
@@ -967,9 +967,21 @@ def _pick_focus_message(message_payloads: list[dict[str, Any]]) -> dict[str, Any
     def score(message: dict[str, Any]) -> tuple[float, int]:
         text = message.get("text")
         value = 0.15
-        if has_question_signal(text):
+        runtime_message_id = int(message.get("runtimeMessageId") or 0)
+        later_inbound = [
+            item
+            for item in inbound_candidates
+            if int(item.get("runtimeMessageId") or 0) > runtime_message_id
+        ]
+        later_meaningful = [
+            item
+            for item in later_inbound
+            if not is_weak_reply_signal(item.get("text"))
+        ]
+        rhetorical_insult = _looks_like_rhetorical_insult(text)
+        if has_question_signal(text) and not rhetorical_insult:
             value += 2.2
-        if has_request_signal(text):
+        if has_request_signal(text) and not rhetorical_insult:
             value += 1.8
         if has_open_loop_signal(text):
             value += 1.1
@@ -979,8 +991,16 @@ def _pick_focus_message(message_payloads: list[dict[str, Any]]) -> dict[str, Any
             value += 0.3
         if message.get("replyToRuntimeMessageId") is not None:
             value += 0.1
-        runtime_message_id = int(message.get("runtimeMessageId") or 0)
         value += max(0.0, runtime_message_id / 1_000_000_000)
+        if has_emotional_signal(text) and later_meaningful:
+            value -= 1.55
+            latest_later_text = later_meaningful[-1].get("text")
+            if _looks_like_topic_clarification(latest_later_text):
+                value -= 1.45
+        if rhetorical_insult and later_meaningful:
+            value -= 2.15
+        elif later_meaningful:
+            value -= min(0.75, 0.28 * len(later_meaningful))
         return value, runtime_message_id
 
     return max(inbound_candidates, key=score)
@@ -1015,6 +1035,33 @@ def _build_focus_reason(
     else:
         prefix = "Выбран последний значимый входящий фрагмент из активного хвоста."
     return f"{prefix} {reply_opportunity_reason}"
+
+
+def _looks_like_topic_clarification(text: Any) -> bool:
+    if not isinstance(text, str):
+        return False
+    lowered = " ".join(text.split()).casefold()
+    markers = (
+        "не относится",
+        "не к нам",
+        "от протокола",
+        "тогда",
+        "значит",
+        "вообще мимо",
+        "его не",
+        "ее не",
+        "её не",
+        "их не",
+        "это не",
+    )
+    return any(marker in lowered for marker in markers)
+
+
+def _looks_like_rhetorical_insult(text: Any) -> bool:
+    if not isinstance(text, str):
+        return False
+    lowered = " ".join(text.split()).casefold()
+    return "какой надо быть" in lowered or ("туп" in lowered and "мраз" in lowered)
 
 
 def _build_draft_scope_key(draft_scope_basis: dict[str, Any] | None) -> str | None:

@@ -92,7 +92,7 @@ describe("ChatList", () => {
     expect(screen.getByText("Нужен ответ")).toBeInTheDocument();
   });
 
-  it("shows roster source and fallback state without breaking the compact layout", () => {
+  it("shows unavailable new runtime state without breaking the compact layout", () => {
     render(
       <ChatList
         chats={[baseChat]}
@@ -106,11 +106,11 @@ describe("ChatList", () => {
         refreshing={false}
         refreshedAt="2026-04-22T10:31:00.000Z"
         roster={{
-          source: "fallback_to_legacy",
+          source: "new",
           requestedBackend: "new",
-          effectiveBackend: "legacy",
+          effectiveBackend: "new",
           degraded: true,
-          degradedReason: "Новый runtime временно деградировал, поэтому roster обслуживается legacy.",
+          degradedReason: "Новый runtime временно деградировал.",
           lastUpdatedAt: "2026-04-22T10:31:00.000Z",
           lastSuccessAt: "2026-04-22T10:30:00.000Z",
           lastError: "Telethon timeout",
@@ -118,10 +118,11 @@ describe("ChatList", () => {
           route: {
             surface: "chatRoster",
             requested: "new",
-            effective: "legacy",
+            effective: "new",
             targetAvailable: true,
             targetReady: false,
-            reason: "legacy remains effective",
+            status: "unavailable",
+            reason: "not route-ready",
           },
         }}
         live={{
@@ -139,9 +140,9 @@ describe("ChatList", () => {
       />,
     );
 
-    expect(screen.getAllByText("работаю через резервный слой").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("runtime недоступен").length).toBeGreaterThan(0);
     expect(screen.getByText(/Что случилось:/)).toBeInTheDocument();
-    expect(screen.getByText("Новый runtime временно деградировал, поэтому roster обслуживается legacy.")).toBeInTheDocument();
+    expect(screen.getByText("Новый runtime временно деградировал.")).toBeInTheDocument();
     expect(screen.getByText("3 непрочит.")).toBeInTheDocument();
   });
 
@@ -172,9 +173,9 @@ describe("ChatList", () => {
         loading={false}
         refreshing={false}
         activeWorkspaceStatus={{
-          source: "fallback_to_legacy",
+          source: "new",
           requestedBackend: "new",
-          effectiveBackend: "legacy",
+          effectiveBackend: "new",
           degraded: true,
           degradedReason: "Telegram runtime отвечает нестабильно.",
           syncTrigger: "runtime_poll",
@@ -188,14 +189,14 @@ describe("ChatList", () => {
             workspaceAvailable: true,
             historyReadable: true,
             runtimeReadable: false,
-            legacyWorkspaceAvailable: true,
+            legacyWorkspaceAvailable: false,
             replyContextAvailable: true,
             sendAvailable: false,
             autopilotAvailable: true,
             canLoadOlder: false,
           },
           messageSource: {
-            backend: "legacy_local_store",
+            backend: "unavailable",
             chatKey: "telegram:-10042",
             runtimeChatId: -10042,
             localChatId: 42,
@@ -254,7 +255,6 @@ describe("ChatList", () => {
     expect(screen.getAllByText("Полуавтомат").length).toBeGreaterThan(0);
     expect(screen.getByText("Черновик")).toBeInTheDocument();
     expect(screen.getByText("Ждёт подтверждение")).toBeInTheDocument();
-    expect(screen.getByText("Резервный слой")).toBeInTheDocument();
     expect(screen.getByText("Нестабильно")).toBeInTheDocument();
   });
 });

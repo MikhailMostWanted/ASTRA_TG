@@ -266,7 +266,7 @@ export function MessageList({
           {!loading && safeMessages.length === 0 && workspaceReadable && !historyReadable ? (
             <EmptyState
               title="История временно нечитабельна"
-              description="Контекст собран, но ленту сообщений прочитать не удалось. Это обычно значит, что Telegram runtime или резервный слой отвечает нестабильно."
+              description="Контекст собран, но ленту сообщений прочитать не удалось. Обнови чат или проверь Telegram runtime."
             />
           ) : null}
 

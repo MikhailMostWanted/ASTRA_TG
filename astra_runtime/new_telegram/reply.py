@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
@@ -138,20 +137,6 @@ class NewTelegramReplyWorkspace:
                 freshness_payload=workspace_payload.get("freshness") if isinstance(workspace_payload.get("freshness"), dict) else None,
                 status_payload=workspace_payload.get("status") if isinstance(workspace_payload.get("status"), dict) else None,
             )
-            if result.suggestion is None and _pick_int(chat_payload, "localChatId") is not None:
-                fallback = await service.build_reply(
-                    reference,
-                    use_provider_refinement=use_provider_refinement,
-                )
-                if fallback.suggestion is not None:
-                    fallback_suggestion = replace(
-                        fallback.suggestion,
-                        fallback_code="legacy_reply_fallback",
-                        fallback_reason=(
-                            f"Workspace-based reply не дал нормальный вариант ({result.kind}), поэтому показан legacy fallback."
-                        ),
-                    )
-                    result = replace(fallback, suggestion=fallback_suggestion)
 
         from apps.desktop_api.serializers import serialize_reply_result
 

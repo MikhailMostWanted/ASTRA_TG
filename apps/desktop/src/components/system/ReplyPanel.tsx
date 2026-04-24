@@ -1447,7 +1447,7 @@ function formatSendChannel(backend: string | null): string {
     return "основной Telegram";
   }
   if (backend === "legacy" || backend.includes("legacy") || backend.includes("fallback")) {
-    return "резервный слой";
+    return "legacy режим";
   }
   return "канал отправки готов";
 }

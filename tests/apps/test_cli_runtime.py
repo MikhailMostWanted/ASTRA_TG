@@ -37,7 +37,8 @@ def test_runtime_formatters_include_health_readiness_and_auth_state() -> None:
             "routes": {
                 "chatRoster": {
                     "requested": "new",
-                    "effective": "legacy",
+                    "effective": "new",
+                    "status": "unavailable",
                     "reason": "not route-ready",
                 }
             },
@@ -80,7 +81,7 @@ def test_runtime_formatters_include_health_readiness_and_auth_state() -> None:
 
     assert "Astra CLI / Runtime" in status_text
     assert "managed_process: stopped pid=нет" in status_text
-    assert "chatRoster: requested=new effective=legacy reason=not route-ready" in status_text
+    assert "chatRoster: requested=new effective=new reason=not route-ready" in status_text
     assert "auth_state: unauthorized" in status_text
     assert "state: awaiting_code" in status_text
     assert "reason_code: awaiting_code" in status_text

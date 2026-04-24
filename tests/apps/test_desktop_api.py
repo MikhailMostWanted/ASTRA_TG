@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -169,7 +170,7 @@ def test_desktop_api_memory_digest_reminders_sources_and_fullaccess(
     asyncio.run(run_assertions())
 
 
-def test_desktop_api_chat_roster_reports_fallback_source_when_new_backend_is_requested(
+def test_desktop_api_chat_roster_does_not_fallback_when_new_backend_is_unavailable(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -180,17 +181,51 @@ def test_desktop_api_chat_roster_reports_fallback_source_when_new_backend_is_req
 
         with TestClient(app) as client:
             chats = client.get("/api/chats")
-            assert chats.status_code == 200
-            payload = chats.json()
-            assert payload["source"] == "fallback_to_legacy"
-            assert payload["roster"]["source"] == "fallback_to_legacy"
-            assert payload["roster"]["effectiveBackend"] == "legacy"
-            assert payload["roster"]["degraded"] is True
-            assert "RUNTIME_NEW_ENABLED" in payload["roster"]["degradedReason"]
+            assert chats.status_code == 503
+            assert "RUNTIME_NEW_ENABLED" in chats.json()["detail"]
 
             runtime_payload = client.get("/api/runtime").json()
-            assert runtime_payload["chatRoster"]["source"] == "fallback_to_legacy"
-            assert runtime_payload["chatRoster"]["effectiveBackend"] == "legacy"
+            assert runtime_payload["chatRoster"]["source"] == "new"
+            assert runtime_payload["chatRoster"]["effectiveBackend"] == "new"
+            assert runtime_payload["chatRoster"]["status"] == "unavailable"
+            assert runtime_payload["chatRoster"]["reasonCode"] == "not_ready"
+            assert "fallback_to_legacy" not in json.dumps(runtime_payload)
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
+def test_desktop_api_reply_and_send_new_backend_unavailable_do_not_use_legacy_fallback(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        monkeypatch.setenv("RUNTIME_REPLY_GENERATION_BACKEND", "new")
+        monkeypatch.setenv("RUNTIME_SEND_PATH_BACKEND", "new")
+        settings, runtime, seeded = await _seed_runtime(monkeypatch, tmp_path)
+        app = create_app(settings, runtime=runtime)
+
+        with TestClient(app) as client:
+            reply = client.post(f"/api/chats/{seeded['chat_id']}/reply-preview")
+            assert reply.status_code == 503
+            assert "RUNTIME_NEW_ENABLED" in reply.json()["detail"]
+
+            send = client.post(
+                f"/api/chats/{seeded['chat_id']}/send",
+                json={
+                    "text": "Да, понял.",
+                    "source_message_id": seeded["last_message_id"],
+                },
+            )
+            assert send.status_code == 200
+            payload = send.json()
+            assert payload["ok"] is False
+            assert payload["status"] == "unavailable"
+            assert payload["requestedBackend"] == "new"
+            assert payload["effectiveBackend"] == "new"
+            assert payload["fallback"]["used"] is False
+            assert "fallback_to_legacy" not in json.dumps(payload)
 
         await runtime.dispose()
 
@@ -315,6 +350,7 @@ def test_desktop_api_workspace_payload_uses_new_runtime_for_runtime_only_chat(
             runtime_payload = client.get("/api/runtime").json()
             assert runtime_payload["messageWorkspace"]["source"] == "new"
             assert runtime_payload["messageWorkspace"]["effectiveBackend"] == "new"
+            assert "fallback_to_legacy" not in json.dumps(runtime_payload)
 
         await runtime.dispose()
 
@@ -581,7 +617,7 @@ def test_desktop_api_live_active_workspace_runs_reply_execution_with_live_contex
     asyncio.run(run_assertions())
 
 
-def test_desktop_api_workspace_fallback_to_legacy_is_visible_in_payload(
+def test_desktop_api_workspace_new_backend_failure_returns_unavailable_without_legacy_payload(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -596,25 +632,16 @@ def test_desktop_api_workspace_fallback_to_legacy_is_visible_in_payload(
 
         with TestClient(app) as client:
             workspace = client.get(f"/api/chats/{seeded['chat_id']}/workspace")
-            assert workspace.status_code == 200
-            payload = workspace.json()
-            assert payload["status"]["source"] == "fallback_to_legacy"
-            assert payload["status"]["effectiveBackend"] == "legacy"
-            assert payload["status"]["degraded"] is True
-            assert payload["status"]["messageSource"]["backend"] == "legacy_local_store"
-            assert "Target workspace failure" in payload["status"]["degradedReason"]
-            assert payload["status"]["route"]["requested"] == "new"
-            assert payload["status"]["route"]["effective"] == "legacy"
+            assert workspace.status_code == 503
+            assert "Target workspace failure" in workspace.json()["detail"]
 
             messages = client.get(f"/api/chats/{seeded['chat_id']}/messages")
-            assert messages.status_code == 200
-            messages_payload = messages.json()
-            assert messages_payload["status"]["source"] == "fallback_to_legacy"
-            assert messages_payload["status"]["effectiveBackend"] == "legacy"
+            assert messages.status_code == 503
+            assert "Target workspace failure" in messages.json()["detail"]
 
             runtime_payload = client.get("/api/runtime").json()
-            assert runtime_payload["messageWorkspace"]["source"] == "fallback_to_legacy"
-            assert runtime_payload["messageWorkspace"]["effectiveBackend"] == "legacy"
+            assert runtime_payload["messageWorkspace"]["source"] == "new"
+            assert runtime_payload["messageWorkspace"]["effectiveBackend"] == "new"
 
         await runtime.dispose()
 

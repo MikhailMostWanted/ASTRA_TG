@@ -140,7 +140,7 @@ class NewTelegramRuntimeService:
             return self._message_sender.route_reason()
         return (
             "New Telegram runtime пока не реализует этот surface; "
-            "legacy remains effective."
+            "surface недоступен."
         )
 
     def chat_roster_status_payload(self) -> dict[str, Any]:
@@ -492,5 +492,5 @@ class _NewTelegramRuntimeSurface:
         }
         return (
             f"New Telegram runtime {labels.get(surface, surface)} surface is not enabled yet. "
-            "Legacy remains the effective backend."
+            "Выбранный product surface недоступен."
         )

@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from astra_runtime.router import RuntimeRouter
+from astra_runtime.status import RuntimeUnavailableError
 from astra_runtime.switches import RuntimeSwitches
 from config.settings import Settings
 
@@ -26,7 +27,7 @@ def test_runtime_switches_validate_backend_names() -> None:
         RuntimeSwitches.from_settings(settings)
 
 
-def test_runtime_router_falls_back_to_legacy_when_new_runtime_is_not_registered() -> None:
+def test_runtime_router_fails_fast_when_new_runtime_is_not_registered() -> None:
     async def run_assertions() -> None:
         router = RuntimeRouter(
             legacy=_FakeRuntime("legacy"),
@@ -34,14 +35,16 @@ def test_runtime_router_falls_back_to_legacy_when_new_runtime_is_not_registered(
             switches=RuntimeSwitches(chat_roster="new"),
         )
 
-        payload = await router.chat_roster.list_chats()
+        with pytest.raises(RuntimeUnavailableError):
+            await router.chat_roster.list_chats()
         status = router.describe()["routes"]["chatRoster"]
 
-        assert payload == {"runtime": "legacy"}
         assert status["requested"] == "new"
-        assert status["effective"] == "legacy"
+        assert status["effective"] == "new"
         assert status["targetAvailable"] is False
-        assert status["reason"] == "New runtime is not registered yet; legacy adapter remains effective."
+        assert status["status"] == "unavailable"
+        assert status["reasonCode"] == "not_registered"
+        assert status["reason"] == "New runtime is not registered yet."
 
     asyncio.run(run_assertions())
 

@@ -10,9 +10,41 @@ from astra_runtime.new_telegram import (
     NewTelegramRemoteMessage,
     NewTelegramRuntimeConfig,
 )
+from astra_runtime.new_telegram.history import _pick_focus_message
 from config.settings import Settings
 from storage.database import bootstrap_database, build_database_runtime
 from storage.repositories import ChatRepository, MessageRepository
+
+
+def test_new_telegram_focus_demotes_old_emotional_trigger_after_clarification() -> None:
+    focus = _pick_focus_message(
+        [
+            {
+                "direction": "inbound",
+                "runtimeMessageId": 41,
+                "messageKey": "telegram:-100777:41",
+                "text": "Какой надо быть тупой мразью чтобы так сделать",
+                "preview": "Какой надо быть тупой мразью чтобы так сделать",
+            },
+            {
+                "direction": "inbound",
+                "runtimeMessageId": 42,
+                "messageKey": "telegram:-100777:42",
+                "text": "Ну саня то от протокола",
+                "preview": "Ну саня то от протокола",
+            },
+            {
+                "direction": "inbound",
+                "runtimeMessageId": 43,
+                "messageKey": "telegram:-100777:43",
+                "text": "Он не относится к нам",
+                "preview": "Он не относится к нам",
+            },
+        ]
+    )
+
+    assert focus is not None
+    assert focus["messageKey"] == "telegram:-100777:43"
 
 
 def test_new_telegram_message_history_builds_snapshot_identity_and_pagination(

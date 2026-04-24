@@ -1,7 +1,9 @@
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { RefreshCcw, ShieldCheck } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { ChatList } from "@/components/system/ChatList";
 import { MessageList } from "@/components/system/MessageList";
 import { ReplyPanel } from "@/components/system/ReplyPanel";
@@ -246,7 +248,7 @@ export function ChatsScreen() {
       clearReplyDraft(variables.chatKey);
       setOlderMessages([]);
       setManualSendStatus(buildManualSendStatus(payload));
-      toast.success(payload.fallback.used ? "Сообщение отправлено через резервный слой." : "Сообщение отправлено.");
+      toast.success("Сообщение отправлено.");
       await Promise.all([
         queryClient.refetchQueries({ queryKey: rosterQueryKey, exact: true }),
         queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
@@ -467,12 +469,8 @@ export function ChatsScreen() {
             : freshness?.label || null
       : workspaceStatus?.source === "new"
         ? "Чат читается через Telegram runtime"
-        : workspaceStatus?.source === "fallback_to_legacy"
-          ? "Чат временно работает через резервный слой"
-          : rosterState?.source === "new"
+        : rosterState?.source === "new"
         ? "Список идёт из Telegram runtime"
-        : rosterState?.source === "fallback_to_legacy"
-          ? "Список работает через резервный слой"
           : null;
 
   const handleCopy = async (value: string) => {
@@ -489,10 +487,40 @@ export function ChatsScreen() {
   };
 
   if (chatsQuery.isError) {
+    const message = humanizeRuntimeError(
+      extractErrorMessage(chatsQuery.error, "Не удалось получить список чатов."),
+    );
     return (
       <WarningState
-        title="Чаты не загрузились"
-        description={extractErrorMessage(chatsQuery.error, "Не удалось получить список чатов.")}
+        title="Новый Telegram runtime недоступен"
+        description={message}
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              className="border-white/8 bg-black/18 text-slate-100"
+              onClick={() => void chatsQuery.refetch()}
+            >
+              <RefreshCcw data-icon="inline-start" />
+              Обновить
+            </Button>
+            <Button
+              variant="outline"
+              className="border-white/8 bg-black/18 text-slate-100"
+              onClick={async () => {
+                try {
+                  await api.runtime();
+                  toast.success("Runtime проверен.");
+                } catch (error) {
+                  toast.error(error instanceof Error ? error.message : "Runtime недоступен.");
+                }
+              }}
+            >
+              <ShieldCheck data-icon="inline-start" />
+              Проверить runtime
+            </Button>
+          </div>
+        }
       />
     );
   }
@@ -540,7 +568,7 @@ export function ChatsScreen() {
         highlightMessageKey={replyContext?.sourceMessageKey ?? null}
         errorMessage={
           workspaceQuery.isError
-            ? extractErrorMessage(workspaceQuery.error, "Не удалось загрузить рабочий контекст чата.")
+            ? humanizeRuntimeError(extractErrorMessage(workspaceQuery.error, "Не удалось загрузить рабочий контекст чата."))
             : null
         }
         onLoadOlder={() => {
@@ -600,7 +628,7 @@ export function ChatsScreen() {
         autopilotUpdating={autopilotGlobalMutation.isPending || autopilotChatMutation.isPending || autopilotConfirmMutation.isPending}
         errorMessage={
           workspaceQuery.isError
-            ? extractErrorMessage(workspaceQuery.error, "Не удалось собрать reply preview.")
+            ? humanizeRuntimeError(extractErrorMessage(workspaceQuery.error, "Не удалось собрать reply preview."))
             : null
         }
         onRefresh={() => {
@@ -745,7 +773,7 @@ function buildManualSendStatus(payload: ChatSendPayload) {
     status: payload.status,
     message: payload.ok
       ? payload.fallback.used
-        ? payload.reason || "Сообщение отправлено через резервный слой."
+        ? payload.reason || "Сообщение отправлено."
         : "Сообщение отправлено."
       : payload.reason || payload.error?.message || "Не удалось отправить сообщение.",
     backend: payload.effectiveBackend,
@@ -764,6 +792,23 @@ function buildManualSendStatus(payload: ChatSendPayload) {
     timestamp: string;
     tone: "success" | "error" | "pending" | "warning";
   };
+}
+
+function humanizeRuntimeError(message: string): string {
+  const lowered = message.toLocaleLowerCase("ru-RU");
+  if (lowered.includes("not authorized") || lowered.includes("authorized") || lowered.includes("авториз")) {
+    return "Нужно войти в Telegram runtime. Открой раздел полного доступа/runtime, запроси код и повтори обновление.";
+  }
+  if (lowered.includes("not registered") || lowered.includes("not running") || lowered.includes("lifecycle")) {
+    return "Новый Telegram runtime не запущен или ещё не готов. Проверь runtime и повтори обновление.";
+  }
+  if (lowered.includes("chat") || lowered.includes("чат")) {
+    return "Чат пока не прочитан новым runtime. Обнови чат или дождись свежего снимка.";
+  }
+  if (lowered.includes("degraded") || lowered.includes("temporarily") || lowered.includes("временно")) {
+    return "Новый Telegram runtime временно деградировал. Старый контекст не подставляется, повтори обновление позже.";
+  }
+  return `${message} Старый контекст не подставляется автоматически.`;
 }
 
 function buildClientSendId(chatKey: string): string {
