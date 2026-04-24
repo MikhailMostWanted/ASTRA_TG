@@ -2,6 +2,7 @@ import type {
   ChatMessagesPayload,
   ChatAutopilotPayload,
   ChatSendPayload,
+  ChatSendPreparePayload,
   ChatWorkspacePayload,
   ChatsPayload,
   AutopilotGlobalPayload,
@@ -151,9 +152,31 @@ export const api = {
     ),
   sendChatMessage: (
     chatId: number,
-    payload: { text: string; source_message_id?: number | null; reply_to_source_message_id?: number | null },
+    payload: {
+      text: string;
+      source_message_id?: number | null;
+      reply_to_source_message_id?: number | null;
+      source_message_key?: string | null;
+      reply_to_source_message_key?: string | null;
+      draft_scope_key?: string | null;
+      client_send_id?: string | null;
+    },
   ) =>
     request<ChatSendPayload>(`/api/chats/${chatId}/send`, {
+      method: "POST",
+      body: payload,
+    }),
+  prepareChatSend: (
+    chatId: number,
+    payload: {
+      text: string;
+      source_message_id?: number | null;
+      source_message_key?: string | null;
+      draft_scope_key?: string | null;
+      client_send_id?: string | null;
+    },
+  ) =>
+    request<ChatSendPreparePayload>(`/api/chats/${chatId}/send/prepare`, {
       method: "POST",
       body: payload,
     }),

@@ -434,6 +434,163 @@ describe("ReplyPanel", () => {
     expect(screen.queryByText("Черновик перед отправкой")).not.toBeInTheDocument();
   });
 
+  it("sends only the current editable draft with source key and draft scope", () => {
+    const onSend = vi.fn();
+    render(
+      <TooltipProvider>
+        <ReplyPanel
+          reply={{
+            kind: "suggestion",
+            chatId: -200001,
+            chatTitle: "Runtime chat",
+            chatReference: "@runtime_chat",
+            errorMessage: null,
+            sourceSenderName: "Анна",
+            sourceMessagePreview: "Сможешь посмотреть это сегодня?",
+            actions: {
+              copy: true,
+              refresh: true,
+              pasteToTelegram: false,
+              send: true,
+              markSent: false,
+              variants: {},
+              disabledReason: null,
+            },
+            suggestion: {
+              baseReplyText: "Да, посмотрю сейчас.",
+              replyMessages: ["Да, посмотрю сейчас."],
+              finalReplyMessages: ["Да, посмотрю сейчас."],
+              replyText: "Да, посмотрю сейчас.",
+              styleProfileKey: "friend_explain",
+              styleSource: "auto",
+              styleNotes: [],
+              personaApplied: false,
+              personaNotes: [],
+              guardrailFlags: [],
+              reasonShort: "Есть вопрос.",
+              riskLabel: "низкий",
+              confidence: 0.8,
+              strategy: "ответить коротко",
+              sourceMessageId: null,
+              chatId: -200001,
+              situation: "question",
+              sourceMessagePreview: "Сможешь посмотреть это сегодня?",
+              focusLabel: "вопрос",
+              focusReason: "Последний входящий вопрос.",
+              sourceMessageKey: "telegram:-100777:41",
+              sourceLocalMessageId: null,
+              sourceRuntimeMessageId: 41,
+              sourceBackend: "new_runtime",
+              replyOpportunityMode: "direct_reply",
+              replyOpportunityReason: "Последний входящий сигнал без ответа.",
+              replyRecommended: true,
+              fewShotFound: false,
+              fewShotMatchCount: 0,
+              fewShotNotes: [],
+              alternativeAction: null,
+              llmRefineRequested: false,
+              llmRefineApplied: false,
+              llmRefineProvider: null,
+              llmRefineNotes: [],
+              llmRefineGuardrailFlags: [],
+              llmStatus: null,
+              llmDebug: null,
+              variants: [
+                {
+                  id: "primary",
+                  label: "Основной",
+                  description: "Короткий ответ.",
+                  text: "Да, посмотрю сейчас.",
+                },
+              ],
+            },
+          }}
+          replyContext={{
+            available: true,
+            sourceBackend: "new",
+            focusLabel: "вопрос",
+            focusReason: "Последний входящий вопрос.",
+            replyOpportunityMode: "direct_reply",
+            replyOpportunityReason: "Последний входящий сигнал без ответа.",
+            sourceMessageKey: "telegram:-100777:41",
+            sourceRuntimeMessageId: 41,
+            sourceLocalMessageId: null,
+            sourceSenderName: "Анна",
+            sourceMessagePreview: "Сможешь посмотреть это сегодня?",
+            sourceSentAt: "2026-04-23T09:04:00+00:00",
+            draftScopeBasis: {
+              sourceMessageKey: "telegram:-100777:41",
+              sourceMessageId: null,
+              runtimeMessageId: 41,
+              focusLabel: "вопрос",
+              sourceMessagePreview: "Сможешь посмотреть это сегодня?",
+              replyOpportunityMode: "direct_reply",
+            },
+            draftScopeKey: "telegram:-100777:41::вопрос::direct_reply::Сможешь посмотреть это сегодня?",
+          }}
+          workspaceStatus={{
+            source: "new",
+            requestedBackend: "new",
+            effectiveBackend: "new",
+            degraded: false,
+            degradedReason: null,
+            syncTrigger: "runtime_poll",
+            updatedNow: true,
+            syncError: null,
+            lastUpdatedAt: "2026-04-23T09:05:02.000Z",
+            lastSuccessAt: "2026-04-23T09:05:02.000Z",
+            lastError: null,
+            lastErrorAt: null,
+            availability: {
+              workspaceAvailable: true,
+              historyReadable: true,
+              runtimeReadable: true,
+              legacyWorkspaceAvailable: false,
+              replyContextAvailable: true,
+              sendAvailable: true,
+              autopilotAvailable: false,
+              canLoadOlder: true,
+            },
+            messageSource: {
+              backend: "new_runtime",
+              chatKey: "telegram:-100777",
+              runtimeChatId: -100777,
+              localChatId: null,
+              oldestMessageKey: "telegram:-100777:40",
+              newestMessageKey: "telegram:-100777:41",
+              oldestRuntimeMessageId: 40,
+              newestRuntimeMessageId: 41,
+            },
+            route: {},
+            sendPath: { effective: "new" },
+            sendDisabledReason: null,
+          }}
+          workflowState={null}
+          onRefresh={vi.fn()}
+          onCopy={vi.fn()}
+          onUseDraft={vi.fn()}
+          onSend={onSend}
+          onMarkSent={vi.fn()}
+          onClearDraft={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Использовать как черновик" }));
+    fireEvent.change(screen.getByPlaceholderText("Вставь вариант, поправь формулировку и отправь явно."), {
+      target: { value: "Да, посмотрю сейчас и отпишусь." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Отправить" }));
+
+    expect(onSend).toHaveBeenCalledWith(
+      "Да, посмотрю сейчас и отпишусь.",
+      null,
+      "telegram:-100777:41",
+      "telegram:-100777:41::вопрос::direct_reply::Сможешь посмотреть это сегодня?",
+    );
+    expect(screen.queryByText("Отправить вариант")).not.toBeInTheDocument();
+  });
+
   it("renders workspace context without reply generation when new runtime is read-only", () => {
     render(
       <TooltipProvider>

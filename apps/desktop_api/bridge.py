@@ -9,7 +9,8 @@ from typing import Any, AsyncIterator, cast
 
 from aiogram import Bot
 
-from astra_runtime.chat_identity import parse_runtime_only_chat_id
+from astra_runtime.chat_identity import ChatIdentity, parse_runtime_only_chat_id
+from astra_runtime.message_identity import parse_message_key
 from astra_runtime.contracts import TelegramRuntime
 from astra_runtime.legacy import LegacyAstraRuntime
 from astra_runtime.manager import LegacyRuntimeBackend, RuntimeManager, StaticRuntimeBackend
@@ -18,6 +19,7 @@ from astra_runtime.new_telegram import (
     NewTelegramRuntimeConfig,
     NewTelegramRuntimeService,
 )
+from astra_runtime.status import RuntimeUnavailableError
 from astra_runtime.switches import RuntimeSwitches
 from apps.cli.processes import inspect_process, start_component, stop_component
 from apps.cli.runtime import (
@@ -28,6 +30,7 @@ from apps.cli.runtime import (
     tail_log,
 )
 from config.settings import Settings
+from core.logging import get_logger, log_event
 from fullaccess.auth import FullAccessAuthService
 from fullaccess.copy import LOCAL_LOGIN_COMMAND, local_login_instruction_lines
 from fullaccess.send import FullAccessSendService
@@ -57,7 +60,7 @@ from services.status_summary import BotStatusService
 from services.system_health import SystemHealthService
 from services.system_readiness import OperationalFacts, OperationalReport, SystemReadinessService
 from services.telegram_lookup import TelegramChatResolver
-from services.workflow_journal import WorkflowJournalService
+from services.workflow_journal import WorkflowJournalService, build_workflow_event
 from models import Message
 from storage.database import DatabaseRuntime
 from storage.repositories import (
@@ -94,6 +97,8 @@ from .serializers import (
 DEFAULT_DIGEST_WINDOW = "24h"
 DEFAULT_LOG_TAIL = 80
 AUTO_WORKSPACE_SYNC_MIN_SECONDS = 12
+MANUAL_SEND_DUPLICATE_WINDOW_SECONDS = 3
+LOGGER = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +116,22 @@ class ResolvedChatHandle:
     runtime_chat_id: int | None
 
 
+@dataclass(frozen=True, slots=True)
+class ManualSendTarget:
+    requested_chat_id: int
+    local_chat_id: int | None
+    runtime_chat_id: int | None
+
+    @property
+    def chat_key(self) -> str | None:
+        if self.runtime_chat_id is None:
+            return None
+        return ChatIdentity(
+            runtime_chat_id=self.runtime_chat_id,
+            local_chat_id=self.local_chat_id,
+        ).chat_key
+
+
 @dataclass(slots=True)
 class DesktopBridge:
     """Desktop control shell with explicit routing to legacy or target runtime.
@@ -125,6 +146,8 @@ class DesktopBridge:
     runtime_switches: RuntimeSwitches | None = None
     _runtime_manager: RuntimeManager = field(init=False, repr=False)
     _new_runtime_service: NewTelegramRuntimeService | None = field(init=False, default=None, repr=False)
+    _manual_send_inflight: set[str] = field(default_factory=set, init=False, repr=False)
+    _manual_send_recent_success_at: dict[str, datetime] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._runtime_manager = RuntimeManager(
@@ -166,6 +189,7 @@ class DesktopBridge:
         status["managedProcess"] = serialize_process_state(inspect_process("new-runtime"))
         status["chatRoster"] = await self._get_chat_roster_state()
         status["messageWorkspace"] = await self._get_message_workspace_state()
+        status["manualSend"] = await self._get_manual_send_state()
         return status
 
     async def get_new_runtime_health(self) -> dict[str, Any]:
@@ -635,13 +659,252 @@ class DesktopBridge:
         text: str,
         source_message_id: int | None = None,
         reply_to_source_message_id: int | None = None,
+        source_message_key: str | None = None,
+        reply_to_source_message_key: str | None = None,
+        draft_scope_key: str | None = None,
+        client_send_id: str | None = None,
     ) -> dict[str, Any]:
-        return await self._runtime_manager.surface("sendPath").send_chat_message(
+        cleaned_text = text.strip()
+        route = self._runtime_manager.route_status("sendPath")
+        route_payload = route.to_payload()
+        target = await self._resolve_manual_send_target(
             chat_id,
-            text=text,
-            source_message_id=source_message_id,
-            reply_to_source_message_id=reply_to_source_message_id,
+            source_message_key=source_message_key or reply_to_source_message_key,
         )
+        availability = await self._build_manual_send_availability(
+            target=target,
+            route_payload=route_payload,
+        )
+        backend = str(availability["effectiveBackend"])
+        source = _resolve_runtime_surface_source(
+            requested=str(route_payload.get("requested")),
+            effective=backend,
+        )
+        fallback_used = bool(availability.get("fallbackUsed"))
+        fallback_reason = availability.get("fallbackReason")
+        guard_key = _build_manual_send_guard_key(
+            target=target,
+            text=cleaned_text,
+            source_message_id=source_message_id,
+            source_message_key=source_message_key,
+            draft_scope_key=draft_scope_key,
+            client_send_id=client_send_id,
+        )
+
+        if not cleaned_text:
+            return await self._build_and_record_manual_send_response(
+                ok=False,
+                status="failed",
+                route=route_payload,
+                source=source,
+                effective_backend=backend,
+                target=target,
+                draft_scope_key=draft_scope_key,
+                client_send_id=client_send_id,
+                text=text,
+                reason="Нельзя отправить пустое сообщение.",
+                error={"code": "empty_text", "message": "Нельзя отправить пустое сообщение."},
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
+            )
+
+        if not availability["available"]:
+            reason = str(availability.get("reason") or "Отправка сейчас недоступна.")
+            return await self._build_and_record_manual_send_response(
+                ok=False,
+                status="unavailable",
+                route=route_payload,
+                source=source,
+                effective_backend=backend,
+                target=target,
+                draft_scope_key=draft_scope_key,
+                client_send_id=client_send_id,
+                text=text,
+                reason=reason,
+                error={"code": str(availability.get("code") or "send_unavailable"), "message": reason},
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
+            )
+
+        duplicate_reason = self._manual_send_duplicate_reason(guard_key)
+        if duplicate_reason is not None:
+            return await self._build_and_record_manual_send_response(
+                ok=False,
+                status="failed",
+                route=route_payload,
+                source=source,
+                effective_backend=backend,
+                target=target,
+                draft_scope_key=draft_scope_key,
+                client_send_id=client_send_id,
+                text=text,
+                reason=duplicate_reason,
+                error={"code": "duplicate_send", "message": duplicate_reason},
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
+            )
+
+        self._manual_send_inflight.add(guard_key)
+        try:
+            send_payload = await self._runtime_manager.surface("sendPath").send_chat_message(
+                chat_id,
+                text=cleaned_text,
+                source_message_id=source_message_id,
+                reply_to_source_message_id=reply_to_source_message_id,
+                source_message_key=source_message_key,
+                reply_to_source_message_key=reply_to_source_message_key,
+                draft_scope_key=draft_scope_key,
+                client_send_id=client_send_id,
+            )
+            workspace = await self.get_chat_workspace(chat_id, limit=80)
+            sent_message = send_payload.get("sentMessage") if isinstance(send_payload.get("sentMessage"), dict) else None
+            sent_identity = _build_sent_message_identity(sent_message, send_payload)
+            self._manual_send_recent_success_at[guard_key] = datetime.now(timezone.utc)
+            status = "degraded" if fallback_used else "success"
+            return await self._build_and_record_manual_send_response(
+                ok=True,
+                status=status,
+                route=route_payload,
+                source=source,
+                effective_backend=backend,
+                target=target,
+                draft_scope_key=draft_scope_key,
+                client_send_id=client_send_id,
+                text=cleaned_text,
+                reason=(
+                    str(fallback_reason)
+                    if fallback_used and fallback_reason is not None
+                    else "Сообщение отправлено."
+                ),
+                sent_message=sent_message,
+                sent_message_identity=sent_identity,
+                workspace=workspace,
+                trace=send_payload.get("trace") if isinstance(send_payload.get("trace"), dict) else None,
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
+            )
+        except RuntimeUnavailableError as error:
+            return await self._build_and_record_manual_send_response(
+                ok=False,
+                status="unavailable",
+                route=route_payload,
+                source=source,
+                effective_backend=backend,
+                target=target,
+                draft_scope_key=draft_scope_key,
+                client_send_id=client_send_id,
+                text=cleaned_text,
+                reason=str(error),
+                error={"code": "runtime_unavailable", "message": str(error)},
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
+            )
+        except LookupError as error:
+            return await self._build_and_record_manual_send_response(
+                ok=False,
+                status="unavailable",
+                route=route_payload,
+                source=source,
+                effective_backend=backend,
+                target=target,
+                draft_scope_key=draft_scope_key,
+                client_send_id=client_send_id,
+                text=cleaned_text,
+                reason=str(error),
+                error={"code": "chat_unavailable", "message": str(error)},
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
+            )
+        except ValueError as error:
+            return await self._build_and_record_manual_send_response(
+                ok=False,
+                status="failed",
+                route=route_payload,
+                source=source,
+                effective_backend=backend,
+                target=target,
+                draft_scope_key=draft_scope_key,
+                client_send_id=client_send_id,
+                text=cleaned_text,
+                reason=str(error),
+                error={"code": "send_failed", "message": str(error)},
+                fallback_used=fallback_used,
+                fallback_reason=fallback_reason,
+            )
+        finally:
+            self._manual_send_inflight.discard(guard_key)
+
+    async def prepare_chat_send(
+        self,
+        chat_id: int,
+        *,
+        text: str,
+        source_message_id: int | None = None,
+        source_message_key: str | None = None,
+        draft_scope_key: str | None = None,
+        client_send_id: str | None = None,
+    ) -> dict[str, Any]:
+        cleaned_text = text.strip()
+        route = self._runtime_manager.route_status("sendPath").to_payload()
+        target = await self._resolve_manual_send_target(
+            chat_id,
+            source_message_key=source_message_key,
+        )
+        availability = await self._build_manual_send_availability(
+            target=target,
+            route_payload=route,
+        )
+        backend = str(availability["effectiveBackend"])
+        source = _resolve_runtime_surface_source(
+            requested=str(route.get("requested")),
+            effective=backend,
+        )
+        guard_key = _build_manual_send_guard_key(
+            target=target,
+            text=cleaned_text,
+            source_message_id=source_message_id,
+            source_message_key=source_message_key,
+            draft_scope_key=draft_scope_key,
+            client_send_id=client_send_id,
+        )
+        duplicate_reason = self._manual_send_duplicate_reason(guard_key) if cleaned_text else None
+        ready = bool(cleaned_text and availability["available"] and duplicate_reason is None)
+        reason = (
+            None
+            if ready
+            else "Нельзя отправить пустое сообщение."
+            if not cleaned_text
+            else duplicate_reason
+            if duplicate_reason is not None
+            else str(availability.get("reason") or "Отправка сейчас недоступна.")
+        )
+        return {
+            "ok": ready,
+            "status": "success" if ready else "unavailable",
+            "ready": ready,
+            "reason": reason,
+            "error": None if ready else {"code": str(availability.get("code") or "send_unavailable"), "message": reason},
+            "source": source,
+            "requestedBackend": route.get("requested"),
+            "effectiveBackend": backend,
+            "backend": backend,
+            "route": route,
+            "target": _manual_send_target_payload(target),
+            "fallback": {
+                "used": bool(availability.get("fallbackUsed")),
+                "reason": availability.get("fallbackReason"),
+            },
+            "draft": {
+                "scopeKey": draft_scope_key,
+                "sourceMessageId": source_message_id,
+                "sourceMessageKey": source_message_key,
+                "textLength": len(cleaned_text),
+            },
+            "debug": {
+                "clientSendId": client_send_id,
+                "duplicateGuardKey": guard_key,
+            },
+        }
 
     async def _legacy_send_chat_message(
         self,
@@ -650,6 +913,10 @@ class DesktopBridge:
         text: str,
         source_message_id: int | None = None,
         reply_to_source_message_id: int | None = None,
+        source_message_key: str | None = None,
+        reply_to_source_message_key: str | None = None,
+        draft_scope_key: str | None = None,
+        client_send_id: str | None = None,
     ) -> dict[str, Any]:
         # LEGACY_RUNTIME: writes still go through fullaccess.send.
         # New send-path should implement MessageSender and keep this method untouched.
@@ -698,6 +965,250 @@ class DesktopBridge:
                 ),
                 "workspace": workspace,
             }
+
+    async def _resolve_manual_send_target(
+        self,
+        chat_id: int,
+        *,
+        source_message_key: str | None = None,
+    ) -> ManualSendTarget:
+        async with self.runtime.session_factory() as session:
+            chat_repository = ChatRepository(session)
+            if int(chat_id) > 0:
+                chat = await chat_repository.get_by_id(int(chat_id))
+                if chat is None:
+                    return ManualSendTarget(
+                        requested_chat_id=int(chat_id),
+                        local_chat_id=None,
+                        runtime_chat_id=None,
+                    )
+                return ManualSendTarget(
+                    requested_chat_id=int(chat_id),
+                    local_chat_id=chat.id,
+                    runtime_chat_id=chat.telegram_chat_id,
+                )
+
+            runtime_chat_id = _runtime_chat_id_from_message_key(source_message_key)
+            if runtime_chat_id is None:
+                runtime_chat_id = parse_runtime_only_chat_id(int(chat_id))
+            if runtime_chat_id is None:
+                return ManualSendTarget(
+                    requested_chat_id=int(chat_id),
+                    local_chat_id=None,
+                    runtime_chat_id=None,
+                )
+            local_chat = await chat_repository.get_by_telegram_chat_id(runtime_chat_id)
+            return ManualSendTarget(
+                requested_chat_id=int(chat_id),
+                local_chat_id=local_chat.id if local_chat is not None else None,
+                runtime_chat_id=runtime_chat_id,
+            )
+
+    async def _build_manual_send_availability(
+        self,
+        *,
+        target: ManualSendTarget,
+        route_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        requested = str(route_payload.get("requested") or "legacy")
+        effective = str(route_payload.get("effective") or "legacy")
+        fallback_used = requested == "new" and effective == "legacy"
+        fallback_reason = route_payload.get("reason") if fallback_used else None
+
+        if target.runtime_chat_id is None:
+            return {
+                "available": False,
+                "code": "unknown_chat",
+                "reason": "Чат не найден или недоступен для отправки.",
+                "effectiveBackend": effective,
+                "fallbackUsed": fallback_used,
+                "fallbackReason": fallback_reason,
+            }
+
+        if effective == "new":
+            return {
+                "available": True,
+                "code": None,
+                "reason": None,
+                "effectiveBackend": "new",
+                "fallbackUsed": False,
+                "fallbackReason": None,
+            }
+
+        if target.local_chat_id is None:
+            reason = (
+                "New runtime send-path сейчас недоступен, а legacy fallback не умеет отправлять "
+                "в runtime-only чат без локального source."
+                if fallback_used
+                else "Legacy send-path требует локальный чат; runtime-only чат доступен только через new runtime."
+            )
+            return {
+                "available": False,
+                "code": "runtime_only_legacy_unavailable",
+                "reason": reason,
+                "effectiveBackend": "legacy",
+                "fallbackUsed": fallback_used,
+                "fallbackReason": fallback_reason,
+            }
+
+        async with self.runtime.session_factory() as session:
+            status = await self._build_fullaccess_auth_service(session).build_status_report()
+        return {
+            "available": bool(status.ready_for_manual_send),
+            "code": None if status.ready_for_manual_send else "legacy_write_unavailable",
+            "reason": None if status.ready_for_manual_send else status.reason,
+            "effectiveBackend": "legacy",
+            "fallbackUsed": fallback_used,
+            "fallbackReason": fallback_reason,
+        }
+
+    def _manual_send_duplicate_reason(self, guard_key: str) -> str | None:
+        if guard_key in self._manual_send_inflight:
+            return "Похожая отправка уже выполняется. Повторный клик заблокирован."
+        recent_success_at = self._manual_send_recent_success_at.get(guard_key)
+        if recent_success_at is None:
+            return None
+        age_seconds = (datetime.now(timezone.utc) - recent_success_at).total_seconds()
+        if age_seconds <= MANUAL_SEND_DUPLICATE_WINDOW_SECONDS:
+            return "Похожее сообщение уже только что отправлено. Повторная отправка заблокирована."
+        return None
+
+    async def _build_and_record_manual_send_response(
+        self,
+        *,
+        ok: bool,
+        status: str,
+        route: dict[str, Any],
+        source: str,
+        effective_backend: str,
+        target: ManualSendTarget,
+        draft_scope_key: str | None,
+        client_send_id: str | None,
+        text: str,
+        reason: str | None,
+        error: dict[str, Any] | None = None,
+        sent_message: dict[str, Any] | None = None,
+        sent_message_identity: dict[str, Any] | None = None,
+        workspace: dict[str, Any] | None = None,
+        trace: dict[str, Any] | None = None,
+        fallback_used: bool = False,
+        fallback_reason: Any = None,
+    ) -> dict[str, Any]:
+        timestamp = serialize_datetime(datetime.now(timezone.utc))
+        journal_payload = {
+            "timestamp": timestamp,
+            "chatKey": target.chat_key,
+            "runtimeChatId": target.runtime_chat_id,
+            "localChatId": target.local_chat_id,
+            "requestedChatId": target.requested_chat_id,
+            "backend": effective_backend,
+            "requestedBackend": route.get("requested"),
+            "effectiveBackend": effective_backend,
+            "draftScopeKey": draft_scope_key,
+            "clientSendId": client_send_id,
+            "success": ok,
+            "status": status,
+            "reason": reason,
+            "errorReason": error.get("message") if isinstance(error, dict) else None,
+            "errorCode": error.get("code") if isinstance(error, dict) else None,
+            "sentMessageIdentity": sent_message_identity,
+            "route": route,
+            "fallback": {
+                "used": fallback_used,
+                "reason": fallback_reason,
+            },
+        }
+        await self._record_manual_send_journal(
+            target=target,
+            payload=journal_payload,
+            text=text,
+        )
+        if ok:
+            log_event(
+                LOGGER,
+                20,
+                "desktop.manual_send.completed",
+                "Ручная отправка из Desktop завершена.",
+                chat_key=target.chat_key,
+                runtime_chat_id=target.runtime_chat_id,
+                local_chat_id=target.local_chat_id,
+                backend=effective_backend,
+                draft_scope_key=draft_scope_key,
+                sent_message_identity=sent_message_identity,
+            )
+        else:
+            log_event(
+                LOGGER,
+                30,
+                "desktop.manual_send.failed",
+                "Ручная отправка из Desktop не выполнена.",
+                chat_key=target.chat_key,
+                runtime_chat_id=target.runtime_chat_id,
+                local_chat_id=target.local_chat_id,
+                backend=effective_backend,
+                draft_scope_key=draft_scope_key,
+                reason=reason,
+                error=error,
+            )
+        return {
+            "ok": ok,
+            "status": status,
+            "reason": reason,
+            "error": error,
+            "source": source,
+            "requestedBackend": route.get("requested"),
+            "effectiveBackend": effective_backend,
+            "backend": effective_backend,
+            "route": route,
+            "fallback": {
+                "used": fallback_used,
+                "reason": fallback_reason,
+            },
+            "target": _manual_send_target_payload(target),
+            "sentMessage": sent_message,
+            "sentMessageIdentity": sent_message_identity,
+            "workspace": workspace,
+            "debug": {
+                "journal": journal_payload,
+                "trace": trace,
+            },
+        }
+
+    async def _record_manual_send_journal(
+        self,
+        *,
+        target: ManualSendTarget,
+        payload: dict[str, Any],
+        text: str,
+    ) -> None:
+        async with self.runtime.session_factory() as session:
+            setting_repository = SettingRepository(session)
+            await OperationalStateService(setting_repository).record_manual_send(
+                payload=payload,
+            )
+            await WorkflowJournalService(setting_repository).append_chat_event(
+                target.local_chat_id or target.requested_chat_id,
+                build_workflow_event(
+                    action="manual_send",
+                    mode="desktop",
+                    status=str(payload.get("status") or "unknown"),
+                    actor="desktop",
+                    automatic=False,
+                    message="Ручная отправка из Desktop",
+                    reason=payload.get("reason") if isinstance(payload.get("reason"), str) else None,
+                    trigger="desktop_manual",
+                    chat_id=target.local_chat_id or target.requested_chat_id,
+                    sent_message_id=_pick_local_message_id(payload.get("sentMessageIdentity")),
+                    text_preview=_preview_text(text),
+                    chat_key=target.chat_key,
+                    runtime_chat_id=target.runtime_chat_id,
+                    backend=payload.get("backend") if isinstance(payload.get("backend"), str) else None,
+                    draft_scope_key=payload.get("draftScopeKey") if isinstance(payload.get("draftScopeKey"), str) else None,
+                    sent_message_key=_pick_message_key(payload.get("sentMessageIdentity")),
+                    error_code=payload.get("errorCode") if isinstance(payload.get("errorCode"), str) else None,
+                ),
+            )
+            await session.commit()
 
     async def update_autopilot_global(
         self,
@@ -1944,6 +2455,14 @@ class DesktopBridge:
         payload = event.payload.get("payload")
         return payload if isinstance(payload, dict) else None
 
+    async def _get_manual_send_state(self) -> dict[str, Any] | None:
+        async with self.runtime.session_factory() as session:
+            event = await OperationalStateService(SettingRepository(session)).get_manual_send_status()
+        if event is None:
+            return None
+        payload = event.payload.get("payload")
+        return payload if isinstance(payload, dict) else None
+
     def _build_chat_roster_state(
         self,
         *,
@@ -2008,6 +2527,17 @@ class DesktopBridge:
             route_payload["reason"] = last_error or route.get("reason")
 
         route_reason = route_payload.get("reason") if isinstance(route_payload.get("reason"), str) else None
+        send_route = self._runtime_manager.route_status("sendPath").to_payload()
+        send_available = bool(availability.get("sendAvailable")) or send_route.get("effective") == "new"
+        send_disabled_reason = _build_send_disabled_reason(
+            send_available=send_available,
+            send_route=send_route,
+            current_disabled_reason=(
+                current_status.get("sendDisabledReason")
+                if isinstance(current_status.get("sendDisabledReason"), str)
+                else None
+            ),
+        )
         degraded_reason = (
             last_error
             or (current_status.get("degradedReason") if isinstance(current_status.get("degradedReason"), str) else None)
@@ -2071,7 +2601,7 @@ class DesktopBridge:
                     else effective_backend == "legacy"
                 ),
                 "replyContextAvailable": bool(availability.get("replyContextAvailable")),
-                "sendAvailable": bool(availability.get("sendAvailable")),
+                "sendAvailable": send_available,
                 "autopilotAvailable": bool(availability.get("autopilotAvailable")),
                 "canLoadOlder": bool(availability.get("canLoadOlder")),
             },
@@ -2086,8 +2616,15 @@ class DesktopBridge:
                 "newestRuntimeMessageId": message_source.get("newestRuntimeMessageId"),
             },
             "route": route_payload,
+            "sendPath": send_route,
+            "sendDisabledReason": send_disabled_reason,
         }
         payload["status"] = status_payload
+        _decorate_reply_send_actions(
+            payload,
+            send_available=send_available,
+            disabled_reason=send_disabled_reason,
+        )
         return status_payload
 
     async def _resolve_chat_handle(
@@ -2171,6 +2708,123 @@ def _resolve_runtime_surface_source(*, requested: str, effective: str) -> str:
     if effective == "new":
         return "new"
     return "legacy"
+
+
+def _manual_send_target_payload(target: ManualSendTarget) -> dict[str, Any]:
+    return {
+        "requestedChatId": target.requested_chat_id,
+        "localChatId": target.local_chat_id,
+        "runtimeChatId": target.runtime_chat_id,
+        "chatKey": target.chat_key,
+    }
+
+
+def _runtime_chat_id_from_message_key(message_key: str | None) -> int | None:
+    parsed = parse_message_key(message_key)
+    if parsed is None:
+        return None
+    return parsed[0]
+
+
+def _build_manual_send_guard_key(
+    *,
+    target: ManualSendTarget,
+    text: str,
+    source_message_id: int | None,
+    source_message_key: str | None,
+    draft_scope_key: str | None,
+    client_send_id: str | None,
+) -> str:
+    normalized_text = " ".join(text.split()).casefold()
+    return "::".join(
+        [
+            str(target.chat_key or target.requested_chat_id),
+            str(draft_scope_key or "no-draft-scope"),
+            str(source_message_key or source_message_id or "no-source"),
+            normalized_text,
+        ]
+    )
+
+
+def _build_sent_message_identity(
+    sent_message: dict[str, Any] | None,
+    send_payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    payload_identity = send_payload.get("sentMessageIdentity")
+    if isinstance(payload_identity, dict):
+        return payload_identity
+    if sent_message is None:
+        return None
+    return {
+        "chatKey": sent_message.get("chatKey"),
+        "messageKey": sent_message.get("messageKey"),
+        "runtimeChatId": None,
+        "runtimeMessageId": sent_message.get("runtimeMessageId"),
+        "localChatId": None,
+        "localMessageId": sent_message.get("localMessageId"),
+    }
+
+
+def _pick_local_message_id(value: Any) -> int | None:
+    if not isinstance(value, dict):
+        return None
+    local_message_id = value.get("localMessageId")
+    if isinstance(local_message_id, int):
+        return local_message_id
+    return None
+
+
+def _pick_message_key(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    message_key = value.get("messageKey")
+    return message_key if isinstance(message_key, str) else None
+
+
+def _preview_text(text: str | None, *, limit: int = 140) -> str | None:
+    cleaned = " ".join((text or "").split()).strip()
+    if not cleaned:
+        return None
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[: limit - 3].rstrip()}..."
+
+
+def _build_send_disabled_reason(
+    *,
+    send_available: bool,
+    send_route: dict[str, Any],
+    current_disabled_reason: str | None,
+) -> str | None:
+    if send_available:
+        return None
+    route_reason = send_route.get("reason")
+    if isinstance(route_reason, str) and route_reason:
+        return route_reason
+    if current_disabled_reason:
+        return current_disabled_reason
+    if send_route.get("requested") == "new" and send_route.get("effective") != "new":
+        return "New runtime send-path недоступен; legacy fallback не готов для этого чата."
+    return "Отправка сейчас недоступна."
+
+
+def _decorate_reply_send_actions(
+    payload: dict[str, Any],
+    *,
+    send_available: bool,
+    disabled_reason: str | None,
+) -> None:
+    reply_payload = payload.get("reply")
+    if not isinstance(reply_payload, dict):
+        return
+    actions = reply_payload.get("actions")
+    if not isinstance(actions, dict):
+        actions = {}
+        reply_payload["actions"] = actions
+    actions["send"] = bool(send_available)
+    actions["pasteToTelegram"] = False
+    actions["markSent"] = bool(actions.get("markSent"))
+    actions["disabledReason"] = None if send_available else disabled_reason
 
 
 def _resolve_targets(component: str | None, *, reverse: bool = False) -> list[str]:

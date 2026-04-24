@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from astra_runtime.chat_identity import ChatIdentity, parse_runtime_only_chat_id
-from astra_runtime.message_identity import MessageIdentity, build_message_key
+from astra_runtime.message_identity import MessageIdentity, build_message_key, parse_message_key
 from astra_runtime.new_telegram.config import NewTelegramRuntimeConfig
 from astra_runtime.new_telegram.roster import (
     _build_avatar_url,
@@ -92,6 +92,7 @@ class NewTelegramMessageHistory:
     _last_error_at: datetime | None = field(default=None, init=False)
     _last_success_at: datetime | None = field(default=None, init=False)
     _degraded_until: datetime | None = field(default=None, init=False)
+    _manual_sent_runtime_message_id_by_chat: dict[int, int] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
         import asyncio
@@ -121,6 +122,29 @@ class NewTelegramMessageHistory:
             "routeReady": self.route_ready(),
             "routeReason": self.route_reason(),
         }
+
+    def note_sent_message(
+        self,
+        *,
+        chat: NewTelegramChatSummary,
+        message: NewTelegramRemoteMessage,
+    ) -> None:
+        snapshot = self._snapshot_by_chat.get(chat.telegram_chat_id)
+        if snapshot is None:
+            return
+        self._snapshot_by_chat[chat.telegram_chat_id] = CachedHistorySnapshot(
+            chat=chat,
+            messages=_trim_messages(_merge_messages(snapshot.messages, (message,))),
+            refreshed_at=datetime.now(UTC),
+        )
+
+    def note_manual_send(
+        self,
+        *,
+        runtime_chat_id: int,
+        runtime_message_id: int,
+    ) -> None:
+        self._manual_sent_runtime_message_id_by_chat[int(runtime_chat_id)] = int(runtime_message_id)
 
     async def get_chat_messages(
         self,
@@ -612,6 +636,33 @@ class NewTelegramMessageHistory:
         message_payloads: list[dict[str, Any]],
         source_backend: str,
     ) -> dict[str, Any]:
+        latest_message = message_payloads[-1] if message_payloads else None
+        latest_runtime_message_id = latest_message.get("runtimeMessageId") if latest_message is not None else None
+        latest_runtime_chat_id = _runtime_chat_id_from_message(latest_message)
+        if (
+            latest_message is not None
+            and latest_message.get("direction") == "outbound"
+            and latest_runtime_chat_id is not None
+            and latest_runtime_message_id is not None
+            and self._manual_sent_runtime_message_id_by_chat.get(int(latest_runtime_chat_id)) == int(latest_runtime_message_id)
+        ):
+            return {
+                "available": False,
+                "sourceBackend": source_backend,
+                "focusLabel": "ответ уже отправлен",
+                "focusReason": "Последнее сообщение в хвосте - ручной исходящий ответ из Desktop.",
+                "replyOpportunityMode": "sent",
+                "replyOpportunityReason": "Черновик уже отправлен, старый trigger больше не считается актуальным.",
+                "sourceMessageKey": latest_message.get("messageKey"),
+                "sourceRuntimeMessageId": latest_message.get("runtimeMessageId"),
+                "sourceLocalMessageId": latest_message.get("localMessageId"),
+                "sourceSenderName": latest_message.get("senderName"),
+                "sourceMessagePreview": latest_message.get("preview"),
+                "sourceSentAt": latest_message.get("sentAt"),
+                "draftScopeBasis": None,
+                "draftScopeKey": None,
+            }
+
         target_message = _pick_focus_message(message_payloads)
         if target_message is None:
             return {
@@ -631,8 +682,6 @@ class NewTelegramMessageHistory:
                 "draftScopeKey": None,
             }
 
-        latest_message = message_payloads[-1] if message_payloads else None
-        latest_runtime_message_id = latest_message.get("runtimeMessageId") if latest_message is not None else None
         target_runtime_message_id = target_message.get("runtimeMessageId")
         later_messages = [
             message
@@ -760,7 +809,7 @@ class NewTelegramMessageHistory:
             "label": "Контекст из new runtime",
             "detail": (
                 "Активный чат читается напрямую из нового Telegram runtime. "
-                "Reply generation и send-path пока не включены."
+                "Message list и reply panel используют один runtime snapshot."
             ),
             "isStale": False,
             "fullaccessReady": False,
@@ -935,6 +984,18 @@ def _pick_focus_message(message_payloads: list[dict[str, Any]]) -> dict[str, Any
         return value, runtime_message_id
 
     return max(inbound_candidates, key=score)
+
+
+def _runtime_chat_id_from_message(message: dict[str, Any] | None) -> int | None:
+    if message is None:
+        return None
+    message_key = message.get("messageKey")
+    if not isinstance(message_key, str):
+        return None
+    parsed = parse_message_key(message_key)
+    if parsed is None:
+        return None
+    return parsed[0]
 
 
 def _build_focus_reason(

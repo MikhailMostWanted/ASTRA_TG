@@ -17,13 +17,16 @@ from astra_runtime.new_telegram.config import NewTelegramRuntimeConfig
 from astra_runtime.new_telegram.history import NewTelegramMessageHistory
 from astra_runtime.new_telegram.reply import NewTelegramReplyWorkspace
 from astra_runtime.new_telegram.roster import NewTelegramChatRoster
+from astra_runtime.new_telegram.send import NewTelegramMessageSender
 from astra_runtime.new_telegram.transport import (
     NewTelegramAuthClientFactory,
     NewTelegramHistoryClientFactory,
     NewTelegramRosterClientFactory,
+    NewTelegramSendClientFactory,
     build_new_telegram_auth_client,
     build_new_telegram_history_client,
     build_new_telegram_roster_client,
+    build_new_telegram_send_client,
     close_managed_new_telegram_clients,
 )
 from astra_runtime.status import (
@@ -41,6 +44,7 @@ LOGGER = get_logger(__name__)
 CHAT_ROSTER_SURFACE = "chatRoster"
 MESSAGE_WORKSPACE_SURFACE = "messageWorkspace"
 REPLY_GENERATION_SURFACE = "replyGeneration"
+SEND_PATH_SURFACE = "sendPath"
 
 
 @dataclass(slots=True)
@@ -53,6 +57,7 @@ class NewTelegramRuntimeService:
     client_factory: NewTelegramAuthClientFactory = build_new_telegram_auth_client
     roster_client_factory: NewTelegramRosterClientFactory = build_new_telegram_roster_client
     history_client_factory: NewTelegramHistoryClientFactory = build_new_telegram_history_client
+    send_client_factory: NewTelegramSendClientFactory = build_new_telegram_send_client
     settings: Any | None = None
     _lifecycle: RuntimeLifecycle = "stopped"
     _started_at: datetime | None = None
@@ -64,6 +69,7 @@ class NewTelegramRuntimeService:
     _chat_roster: NewTelegramChatRoster = field(init=False, repr=False)
     _message_history: NewTelegramMessageHistory = field(init=False, repr=False)
     _reply_workspace: NewTelegramReplyWorkspace = field(init=False, repr=False)
+    _message_sender: NewTelegramMessageSender = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._auth_controller = NewTelegramAuthController(
@@ -85,6 +91,13 @@ class NewTelegramRuntimeService:
             settings=self.settings,
             session_factory=self.session_factory,
             history=self._message_history,
+        )
+        self._message_sender = NewTelegramMessageSender(
+            config=self.config,
+            session_factory=self.session_factory,
+            client_factory=self.send_client_factory,
+            history=self._message_history,
+            roster=self._chat_roster,
         )
         self._surface = _NewTelegramRuntimeSurface(self)
 
@@ -109,6 +122,8 @@ class NewTelegramRuntimeService:
             return self._message_history.route_ready()
         if surface == REPLY_GENERATION_SURFACE:
             return self._reply_workspace.route_ready()
+        if surface == SEND_PATH_SURFACE:
+            return self._message_sender.route_ready()
         return False
 
     def route_reason_for(self, surface: str) -> str | None:
@@ -121,6 +136,8 @@ class NewTelegramRuntimeService:
             return self._message_history.route_reason()
         if surface == REPLY_GENERATION_SURFACE:
             return self._reply_workspace.route_reason()
+        if surface == SEND_PATH_SURFACE:
+            return self._message_sender.route_reason()
         return (
             "New Telegram runtime пока не реализует этот surface; "
             "legacy remains effective."
@@ -339,6 +356,7 @@ class NewTelegramRuntimeService:
                 "chat-roster",
                 "message-history",
                 "reply-workspace",
+                "manual-send",
             ),
         )
 
@@ -432,7 +450,8 @@ class _NewTelegramRuntimeSurface:
         return await self.service._reply_workspace.get_reply_preview(*_args, **_kwargs)
 
     async def send_chat_message(self, *_args, **_kwargs) -> dict[str, Any]:
-        raise RuntimeUnavailableError(self._surface_unavailable_message("sendPath"))
+        self._ensure_surface_available(SEND_PATH_SURFACE)
+        return await self.service._message_sender.send_chat_message(*_args, **_kwargs)
 
     async def update_autopilot_global(self, **_kwargs) -> dict[str, Any]:
         raise RuntimeUnavailableError(self._surface_unavailable_message("autopilotControl"))

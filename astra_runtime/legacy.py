@@ -102,12 +102,20 @@ class LegacyAstraRuntime:
         text: str,
         source_message_id: int | None = None,
         reply_to_source_message_id: int | None = None,
+        source_message_key: str | None = None,
+        reply_to_source_message_key: str | None = None,
+        draft_scope_key: str | None = None,
+        client_send_id: str | None = None,
     ) -> dict[str, Any]:
         return await self.bridge._legacy_send_chat_message(
             chat_id,
             text=text,
             source_message_id=source_message_id,
             reply_to_source_message_id=reply_to_source_message_id,
+            source_message_key=source_message_key,
+            reply_to_source_message_key=reply_to_source_message_key,
+            draft_scope_key=draft_scope_key,
+            client_send_id=client_send_id,
         )
 
     async def update_autopilot_global(

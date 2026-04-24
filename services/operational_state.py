@@ -34,6 +34,7 @@ SNAPSHOT_KEY_MAP = {
     "new_runtime": "ops.runtime.new.status",
     "chat_roster": "ops.runtime.chat_roster.last",
     "message_workspace": "ops.runtime.message_workspace.last",
+    "manual_send": "ops.manual_send.last",
 }
 
 FULLACCESS_CHAT_SYNC_PREFIX = "ops.fullaccess.chat_sync."
@@ -224,6 +225,18 @@ class OperationalStateService:
 
     async def get_message_workspace_status(self) -> OperationalEvent | None:
         return await self.get_named_snapshot("message_workspace")
+
+    async def record_manual_send(self, *, payload: dict[str, Any]) -> None:
+        await self._store_json(
+            SNAPSHOT_KEY_MAP["manual_send"],
+            {
+                "timestamp": _serialize_timestamp(None),
+                "payload": payload,
+            },
+        )
+
+    async def get_manual_send_status(self) -> OperationalEvent | None:
+        return await self.get_named_snapshot("manual_send")
 
     async def get_fullaccess_chat_sync(self, local_chat_id: int) -> OperationalEvent | None:
         return await self.get_snapshot(f"{FULLACCESS_CHAT_SYNC_PREFIX}{local_chat_id}")

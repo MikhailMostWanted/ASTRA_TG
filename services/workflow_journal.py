@@ -27,6 +27,12 @@ class WorkflowJournalEvent:
     source_message_id: int | None = None
     sent_message_id: int | None = None
     text_preview: str | None = None
+    chat_key: str | None = None
+    runtime_chat_id: int | None = None
+    backend: str | None = None
+    draft_scope_key: str | None = None
+    sent_message_key: str | None = None
+    error_code: str | None = None
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -44,6 +50,12 @@ class WorkflowJournalEvent:
             "source_message_id": self.source_message_id,
             "sent_message_id": self.sent_message_id,
             "text_preview": self.text_preview,
+            "chat_key": self.chat_key,
+            "runtime_chat_id": self.runtime_chat_id,
+            "backend": self.backend,
+            "draft_scope_key": self.draft_scope_key,
+            "sent_message_key": self.sent_message_key,
+            "error_code": self.error_code,
         }
         return payload
 
@@ -117,6 +129,12 @@ def build_workflow_event(
     source_message_id: int | None = None,
     sent_message_id: int | None = None,
     text_preview: str | None = None,
+    chat_key: str | None = None,
+    runtime_chat_id: int | None = None,
+    backend: str | None = None,
+    draft_scope_key: str | None = None,
+    sent_message_key: str | None = None,
+    error_code: str | None = None,
 ) -> WorkflowJournalEvent:
     return WorkflowJournalEvent(
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -133,4 +151,10 @@ def build_workflow_event(
         source_message_id=source_message_id,
         sent_message_id=sent_message_id,
         text_preview=text_preview,
+        chat_key=chat_key,
+        runtime_chat_id=runtime_chat_id,
+        backend=backend,
+        draft_scope_key=draft_scope_key,
+        sent_message_key=sent_message_key,
+        error_code=error_code,
     )

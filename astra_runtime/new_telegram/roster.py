@@ -78,6 +78,9 @@ class NewTelegramChatRoster:
             "routeReason": self.route_reason(),
         }
 
+    def invalidate(self) -> None:
+        self._snapshot = None
+
     async def list_chats(
         self,
         *,

@@ -342,6 +342,12 @@ export function normalizeAutopilotPayload(value: unknown): AutopilotPayload | nu
       source_message_id: safeNumberOrNull(item.source_message_id),
       sent_message_id: safeNumberOrNull(item.sent_message_id),
       text_preview: safeStringOrNull(item.text_preview),
+      chat_key: safeStringOrNull(item.chat_key),
+      runtime_chat_id: safeNumberOrNull(item.runtime_chat_id),
+      backend: safeStringOrNull(item.backend),
+      draft_scope_key: safeStringOrNull(item.draft_scope_key),
+      sent_message_key: safeStringOrNull(item.sent_message_key),
+      error_code: safeStringOrNull(item.error_code),
     })),
   };
 }
@@ -459,5 +465,7 @@ export function normalizeWorkspaceStatusPayload(value: unknown): WorkspaceStatus
       newestRuntimeMessageId: safeNumberOrNull(messageSource.newestRuntimeMessageId),
     },
     route: isPlainObject(value.route) ? value.route : {},
+    sendPath: isPlainObject(value.sendPath) ? value.sendPath : {},
+    sendDisabledReason: safeStringOrNull(value.sendDisabledReason),
   };
 }

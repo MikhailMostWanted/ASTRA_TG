@@ -49,12 +49,25 @@ interface ReplyPanelProps {
   loading?: boolean;
   refreshing?: boolean;
   sending?: boolean;
+  sendStatus?: {
+    status: string;
+    message: string;
+    backend: string | null;
+    sentMessageKey: string | null;
+    timestamp: string;
+    tone: "success" | "error" | "pending" | "warning";
+  } | null;
   autopilotUpdating?: boolean;
   errorMessage?: string | null;
   onRefresh: () => void;
   onCopy: (text: string) => void;
   onUseDraft: (text: string, sourceMessageId: number | null, sourceMessageKey: string | null) => void;
-  onSend?: (text: string, sourceMessageId: number | null, sourceMessageKey: string | null) => void;
+  onSend?: (
+    text: string,
+    sourceMessageId: number | null,
+    sourceMessageKey: string | null,
+    draftScopeKey: string | null,
+  ) => void;
   onMarkSent: (sourceMessageId: number | null, sourceMessageKey: string | null) => void;
   onClearDraft: () => void;
   onUpdateAutopilotGlobal?: (enabled: boolean) => void;
@@ -71,6 +84,7 @@ export function ReplyPanel({
   loading = false,
   refreshing = false,
   sending = false,
+  sendStatus = null,
   autopilotUpdating = false,
   errorMessage = null,
   onRefresh,
@@ -218,8 +232,14 @@ export function ReplyPanel({
 
   const sendDisabledReason =
     safeReply?.actions.disabledReason
+    || workspaceStatus?.sendDisabledReason
     || (workspaceStatus?.availability.sendAvailable ? null : "Write-path на этом этапе выключен.")
     || "Отправка сейчас недоступна.";
+  const sendAllowed = Boolean(
+    safeReply?.actions.send
+      && (workspaceStatus?.availability.sendAvailable ?? true)
+      && !isNoReply,
+  );
   const hasContextOnlyWorkspace = Boolean(replyContext?.available && !suggestion);
 
   if (loading && !reply) {
@@ -703,22 +723,6 @@ export function ReplyPanel({
               <WandSparkles data-icon="inline-start" />
               Вставить в черновик
             </Button>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="w-full">
-                  <Button
-                    variant="outline"
-                    className="w-full border-emerald-300/14 bg-emerald-300/10 text-emerald-50"
-                    disabled={!safeReply.actions.send || !selectedReply || sending}
-                    onClick={() => onSend(selectedReply, contextSourceMessageId, contextSourceMessageKey)}
-                  >
-                    {sending ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
-                    Отправить вариант
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              {!safeReply.actions.send ? <TooltipContent>{sendDisabledReason}</TooltipContent> : null}
-            </Tooltip>
             <Button
               variant="outline"
               className="border-white/8 bg-black/16 text-slate-100"
@@ -753,15 +757,45 @@ export function ReplyPanel({
               >
                 Сохранить черновик
               </Button>
-              <Button
-                className="bg-emerald-300 text-[#05111c] hover:bg-emerald-200"
-                onClick={() => onSend(draftText, contextSourceMessageId, contextSourceMessageKey)}
-                disabled={!safeReply.actions.send || !draftText.trim() || sending}
-              >
-                {sending ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
-                Отправить черновик
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="w-full">
+                    <Button
+                      className="w-full bg-emerald-300 text-[#05111c] hover:bg-emerald-200"
+                      onClick={() => onSend(draftText, contextSourceMessageId, contextSourceMessageKey, currentDraftScopeKey)}
+                      disabled={!sendAllowed || !draftText.trim() || sending}
+                    >
+                      {sending ? <LoaderCircle className="animate-spin" data-icon="inline-start" /> : <Send data-icon="inline-start" />}
+                      Отправить
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {!sendAllowed ? <TooltipContent>{sendDisabledReason}</TooltipContent> : null}
+              </Tooltip>
             </div>
+
+            {sendStatus ? (
+              <div
+                className={cn(
+                  "mt-3 rounded-[18px] border px-4 py-3 text-sm leading-6",
+                  sendStatus.tone === "success"
+                    ? "border-emerald-300/12 bg-emerald-300/8 text-emerald-50"
+                    : sendStatus.tone === "pending"
+                      ? "border-cyan-300/12 bg-cyan-300/8 text-cyan-50"
+                    : sendStatus.tone === "warning"
+                      ? "border-amber-300/12 bg-amber-300/8 text-amber-50"
+                      : "border-rose-300/12 bg-rose-400/8 text-rose-50",
+                )}
+              >
+                <div className="font-medium">{sendStatus.message}</div>
+                <div className="mt-1 text-xs opacity-80">
+                  {sendStatus.backend ? `backend ${sendStatus.backend}` : "backend не выбран"}
+                  {sendStatus.sentMessageKey ? ` • ${sendStatus.sentMessageKey}` : ""}
+                  {" • "}
+                  {formatDateTime(sendStatus.timestamp)}
+                </div>
+              </div>
+            ) : null}
 
             {hasActiveDraft ? (
               <div className="rounded-[18px] border border-amber-300/12 bg-amber-300/8 px-4 py-4">
@@ -1055,11 +1089,12 @@ export function ReplyPanel({
                       </Button>
                       <Button
                         className="bg-emerald-300 text-[#05111c] hover:bg-emerald-200"
-                        disabled={!safeReply.actions.send || sending}
+                        disabled={!sendAllowed || sending}
                         onClick={() => onSend(
                           safeAutopilot.pendingDraft?.text || "",
                           safeAutopilot.decision.sourceMessageId,
                           contextSourceMessageKey,
+                          currentDraftScopeKey,
                         )}
                       >
                         Отправить

@@ -82,6 +82,12 @@ class NewTelegramRemoteMessage:
     source_type: str
 
 
+@dataclass(frozen=True, slots=True)
+class NewTelegramSendResult:
+    chat: NewTelegramChatSummary
+    message: NewTelegramRemoteMessage
+
+
 class NewTelegramAuthClientError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -132,6 +138,16 @@ class NewTelegramHistoryClientProtocol(Protocol):
     ) -> tuple[NewTelegramChatSummary, tuple[NewTelegramRemoteMessage, ...]]: ...
 
 
+class NewTelegramSendClientProtocol(Protocol):
+    async def send_message(
+        self,
+        reference: int | str,
+        *,
+        text: str,
+        reply_to_message_id: int | None = None,
+    ) -> NewTelegramSendResult: ...
+
+
 NewTelegramAuthClientFactory = Callable[
     [NewTelegramRuntimeConfig],
     NewTelegramAuthClientProtocol,
@@ -143,6 +159,10 @@ NewTelegramRosterClientFactory = Callable[
 NewTelegramHistoryClientFactory = Callable[
     [NewTelegramRuntimeConfig],
     NewTelegramHistoryClientProtocol,
+]
+NewTelegramSendClientFactory = Callable[
+    [NewTelegramRuntimeConfig],
+    NewTelegramSendClientProtocol,
 ]
 
 
@@ -324,6 +344,43 @@ class RuntimeBackedNewTelegramHistoryClient:
         return await self.runtime.run(_fetch)
 
 
+@dataclass(slots=True)
+class RuntimeBackedNewTelegramSendClient:
+    config: NewTelegramRuntimeConfig
+    runtime: ManagedNewTelegramRuntime
+
+    async def send_message(
+        self,
+        reference: int | str,
+        *,
+        text: str,
+        reply_to_message_id: int | None = None,
+    ) -> NewTelegramSendResult:
+        async def _send(client: _TelethonClientProtocol) -> NewTelegramSendResult:
+            entity = await _resolve_entity(client, reference)
+            chat = _build_chat_summary(entity, config=self.config)
+            await _cache_profile_photo(
+                client,
+                entity=entity,
+                config=self.config,
+                telegram_chat_id=chat.telegram_chat_id,
+            )
+            try:
+                message = await client.send_message(
+                    entity,
+                    text,
+                    reply_to=reply_to_message_id,
+                )
+            except Exception as error:  # pragma: no cover - depends on Telethon runtime
+                raise ValueError(f"Не удалось отправить сообщение через new runtime: {error}") from error
+            return NewTelegramSendResult(
+                chat=chat,
+                message=_build_remote_message(message),
+            )
+
+        return await self.runtime.run(_send)
+
+
 def build_new_telegram_auth_client(
     config: NewTelegramRuntimeConfig,
 ) -> NewTelegramAuthClientProtocol:
@@ -343,6 +400,15 @@ def build_new_telegram_history_client(
     config: NewTelegramRuntimeConfig,
 ) -> NewTelegramHistoryClientProtocol:
     return RuntimeBackedNewTelegramHistoryClient(
+        config=config,
+        runtime=_get_managed_runtime(config),
+    )
+
+
+def build_new_telegram_send_client(
+    config: NewTelegramRuntimeConfig,
+) -> NewTelegramSendClientProtocol:
+    return RuntimeBackedNewTelegramSendClient(
         config=config,
         runtime=_get_managed_runtime(config),
     )
@@ -411,6 +477,13 @@ class _TelethonClientProtocol(Protocol):
         max_id: int | None = None,
     ) -> AsyncIterator[object]: ...
     async def get_entity(self, target: int | str) -> object: ...
+    async def send_message(
+        self,
+        entity: object,
+        message: str,
+        *,
+        reply_to: int | None = None,
+    ) -> object: ...
     async def download_profile_photo(self, entity: object, file: str | None = None) -> object: ...
     async def download_media(self, message: object, file: str | None = None) -> object: ...
 

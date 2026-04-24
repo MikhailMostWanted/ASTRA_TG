@@ -284,6 +284,88 @@ def test_desktop_api_workspace_payload_uses_new_runtime_for_runtime_only_chat(
     asyncio.run(run_assertions())
 
 
+def test_desktop_api_new_runtime_manual_send_updates_runtime_only_workspace(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    async def run_assertions() -> None:
+        settings, runtime, _ = await _seed_runtime(monkeypatch, tmp_path)
+        target = _FakeTargetRuntime()
+        app = create_app(
+            settings,
+            runtime=runtime,
+            target_runtime=target,
+            runtime_switches=RuntimeSwitches(
+                chat_roster="new",
+                message_workspace="new",
+                send_path="new",
+            ),
+        )
+
+        with TestClient(app) as client:
+            prepare = client.post(
+                "/api/chats/-200001/send/prepare",
+                json={
+                    "text": "Да, посмотрю сейчас.",
+                    "source_message_key": "telegram:-100777:41",
+                    "draft_scope_key": "telegram:-100777:41::вопрос::direct_reply::Сможешь посмотреть это сегодня?",
+                },
+            )
+            assert prepare.status_code == 200
+            prepare_payload = prepare.json()
+            assert prepare_payload["ready"] is True
+            assert prepare_payload["effectiveBackend"] == "new"
+            assert prepare_payload["target"]["chatKey"] == "telegram:-100777"
+
+            response = client.post(
+                "/api/chats/-200001/send",
+                json={
+                    "text": "Да, посмотрю сейчас.",
+                    "source_message_key": "telegram:-100777:41",
+                    "reply_to_source_message_key": "telegram:-100777:41",
+                    "draft_scope_key": "telegram:-100777:41::вопрос::direct_reply::Сможешь посмотреть это сегодня?",
+                    "client_send_id": "desktop-test-send-1",
+                },
+            )
+
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["ok"] is True
+            assert payload["status"] == "success"
+            assert payload["effectiveBackend"] == "new"
+            assert payload["source"] == "new"
+            assert payload["sentMessageIdentity"]["messageKey"] == "telegram:-100777:53"
+            assert payload["workspace"]["messages"][-1]["text"] == "Да, посмотрю сейчас."
+            assert payload["workspace"]["messages"][-1]["direction"] == "outbound"
+            assert payload["workspace"]["status"]["availability"]["sendAvailable"] is True
+            assert payload["debug"]["journal"]["chatKey"] == "telegram:-100777"
+            assert payload["debug"]["journal"]["success"] is True
+            assert target.send_calls[0]["source_message_key"] == "telegram:-100777:41"
+
+            duplicate = client.post(
+                "/api/chats/-200001/send",
+                json={
+                    "text": "Да, посмотрю сейчас.",
+                    "source_message_key": "telegram:-100777:41",
+                    "draft_scope_key": "telegram:-100777:41::вопрос::direct_reply::Сможешь посмотреть это сегодня?",
+                    "client_send_id": "desktop-test-send-2",
+                },
+            )
+            assert duplicate.status_code == 200
+            duplicate_payload = duplicate.json()
+            assert duplicate_payload["ok"] is False
+            assert duplicate_payload["error"]["code"] == "duplicate_send"
+            assert len(target.send_calls) == 1
+
+            runtime_payload = client.get("/api/runtime").json()
+            assert runtime_payload["manualSend"]["chatKey"] == "telegram:-100777"
+            assert runtime_payload["manualSend"]["success"] is False
+
+        await runtime.dispose()
+
+    asyncio.run(run_assertions())
+
+
 def test_desktop_api_workspace_fallback_to_legacy_is_visible_in_payload(
     monkeypatch,
     tmp_path: Path,
@@ -500,8 +582,10 @@ def test_desktop_api_send_path_writes_message_and_refreshes_workspace(
             assert payload["sentMessage"]["text"] == "Да, вижу. Сейчас гляну и вернусь."
             assert payload["workspace"]["messages"][-1]["direction"] == "outbound"
             assert payload["workspace"]["messages"][-1]["text"] == "Да, вижу. Сейчас гляну и вернусь."
-            assert payload["workspace"]["reply"]["actions"]["send"] is False
-            assert "Send-path" in payload["workspace"]["reply"]["actions"]["disabledReason"]
+            assert payload["workspace"]["reply"]["actions"]["send"] is True
+            assert payload["workspace"]["reply"]["actions"]["disabledReason"] is None
+            assert payload["effectiveBackend"] == "legacy"
+            assert payload["debug"]["journal"]["success"] is True
 
         async with runtime.session_factory() as session:
             journal = await SettingRepository(session).get_value(f"workflow.journal.chat.{seeded['chat_id']}")
@@ -710,6 +794,8 @@ def test_desktop_api_new_runtime_auth_flow_endpoints(
 class _FakeTargetRuntime:
     def __init__(self, *, fail_workspace: bool = False) -> None:
         self.fail_workspace = fail_workspace
+        self.sent_messages: list[dict[str, object]] = []
+        self.send_calls: list[dict[str, object]] = []
 
     @property
     def chat_roster(self):
@@ -825,6 +911,77 @@ class _FakeTargetRuntime:
             "refreshedAt": payload["refreshedAt"],
         }
 
+    async def send_chat_message(
+        self,
+        chat_id: int,
+        *,
+        text: str,
+        source_message_id: int | None = None,
+        reply_to_source_message_id: int | None = None,
+        source_message_key: str | None = None,
+        reply_to_source_message_key: str | None = None,
+        draft_scope_key: str | None = None,
+        client_send_id: str | None = None,
+    ):
+        self.send_calls.append(
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "source_message_id": source_message_id,
+                "reply_to_source_message_id": reply_to_source_message_id,
+                "source_message_key": source_message_key,
+                "reply_to_source_message_key": reply_to_source_message_key,
+                "draft_scope_key": draft_scope_key,
+                "client_send_id": client_send_id,
+            }
+        )
+        sent_message = {
+            "id": 53,
+            "chatKey": "telegram:-100777",
+            "messageKey": "telegram:-100777:53",
+            "runtimeMessageId": 53,
+            "localMessageId": None,
+            "telegramMessageId": 53,
+            "chatId": chat_id,
+            "direction": "outbound",
+            "sourceAdapter": "new_runtime",
+            "sourceType": "message",
+            "senderId": 7,
+            "senderName": "Михаил",
+            "sentAt": "2026-04-23T09:06:00+00:00",
+            "text": text,
+            "normalizedText": text,
+            "replyToMessageId": None,
+            "replyToLocalMessageId": None,
+            "replyToRuntimeMessageId": 41,
+            "replyToMessageKey": "telegram:-100777:41",
+            "hasMedia": False,
+            "mediaType": None,
+            "mediaPreviewUrl": None,
+            "forwardInfo": None,
+            "entities": None,
+            "preview": text,
+        }
+        self.sent_messages.append(sent_message)
+        return {
+            "ok": True,
+            "status": "success",
+            "backend": "new",
+            "sentMessage": sent_message,
+            "sentMessageIdentity": {
+                "chatKey": "telegram:-100777",
+                "messageKey": "telegram:-100777:53",
+                "runtimeChatId": -100777,
+                "runtimeMessageId": 53,
+                "localChatId": None,
+                "localMessageId": None,
+            },
+            "trace": {
+                "backend": "new",
+                "status": "success",
+            },
+        }
+
     def _build_workspace_payload(
         self,
         chat_id: int,
@@ -887,7 +1044,7 @@ class _FakeTargetRuntime:
                 "entities": None,
                 "preview": "Да, смотрю это сейчас.",
             },
-        ]
+        ] + self.sent_messages
         if before_runtime_message_id is not None:
             filtered_messages = [
                 message

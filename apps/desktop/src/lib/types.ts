@@ -175,6 +175,7 @@ export interface RuntimeStatusPayload {
   newRuntime: RuntimeBackendPayload | null;
   chatRoster?: ChatRosterStatePayload | null;
   messageWorkspace?: WorkspaceStatusPayload | null;
+  manualSend?: ManualSendJournalPayload | null;
   managedProcess?: ProcessState;
 }
 
@@ -356,6 +357,8 @@ export interface WorkspaceStatusPayload {
   availability: WorkspaceAvailabilityPayload;
   messageSource: MessageSourceIdentityPayload;
   route?: RuntimeRoutePayload | Record<string, unknown>;
+  sendPath?: RuntimeRoutePayload | Record<string, unknown>;
+  sendDisabledReason?: string | null;
 }
 
 export interface ChatMessagesPayload {
@@ -619,6 +622,12 @@ export interface AutopilotPayload {
     source_message_id?: number | null;
     sent_message_id?: number | null;
     text_preview?: string | null;
+    chat_key?: string | null;
+    runtime_chat_id?: number | null;
+    backend?: string | null;
+    draft_scope_key?: string | null;
+    sent_message_key?: string | null;
+    error_code?: string | null;
   }>;
 }
 
@@ -636,8 +645,85 @@ export interface ChatWorkspacePayload {
 
 export interface ChatSendPayload {
   ok: boolean;
+  status: "success" | "failed" | "unavailable" | "degraded" | "fallback" | string;
+  reason: string | null;
+  error: { code: string; message: string | null } | null;
+  source: "legacy" | "new" | "fallback_to_legacy" | string;
+  requestedBackend: "legacy" | "new" | string | null;
+  effectiveBackend: "legacy" | "new" | string | null;
+  backend: "legacy" | "new" | string | null;
+  route: RuntimeRoutePayload | Record<string, unknown>;
+  fallback: {
+    used: boolean;
+    reason: string | null;
+  };
+  target: {
+    requestedChatId: number;
+    localChatId: number | null;
+    runtimeChatId: number | null;
+    chatKey: string | null;
+  };
   sentMessage: MessageItem | null;
-  workspace: ChatWorkspacePayload;
+  sentMessageIdentity: Record<string, unknown> | null;
+  workspace: ChatWorkspacePayload | null;
+  debug: {
+    journal: ManualSendJournalPayload;
+    trace: Record<string, unknown> | null;
+  };
+}
+
+export interface ChatSendPreparePayload {
+  ok: boolean;
+  status: string;
+  ready: boolean;
+  reason: string | null;
+  error: { code: string; message: string | null } | null;
+  source: string;
+  requestedBackend: string | null;
+  effectiveBackend: string | null;
+  backend: string | null;
+  route: RuntimeRoutePayload | Record<string, unknown>;
+  target: {
+    requestedChatId: number;
+    localChatId: number | null;
+    runtimeChatId: number | null;
+    chatKey: string | null;
+  };
+  fallback: {
+    used: boolean;
+    reason: string | null;
+  };
+  draft: {
+    scopeKey: string | null;
+    sourceMessageId: number | null;
+    sourceMessageKey: string | null;
+    textLength: number;
+  };
+  debug: Record<string, unknown>;
+}
+
+export interface ManualSendJournalPayload {
+  timestamp: string | null;
+  chatKey: string | null;
+  runtimeChatId: number | null;
+  localChatId: number | null;
+  requestedChatId?: number | null;
+  backend: string | null;
+  requestedBackend: string | null;
+  effectiveBackend: string | null;
+  draftScopeKey: string | null;
+  clientSendId?: string | null;
+  success: boolean;
+  status: string;
+  reason: string | null;
+  errorReason: string | null;
+  errorCode: string | null;
+  sentMessageIdentity: Record<string, unknown> | null;
+  route: RuntimeRoutePayload | Record<string, unknown>;
+  fallback: {
+    used: boolean;
+    reason: string | null;
+  };
 }
 
 export interface AutopilotGlobalPayload {

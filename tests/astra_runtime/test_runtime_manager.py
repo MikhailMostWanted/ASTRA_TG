@@ -103,6 +103,27 @@ def test_runtime_manager_routes_message_workspace_to_new_when_surface_is_ready()
     asyncio.run(run_assertions())
 
 
+def test_runtime_manager_routes_send_path_to_new_when_surface_is_ready() -> None:
+    async def run_assertions() -> None:
+        manager = RuntimeManager(RuntimeSwitches(send_path="new"))
+        manager.register_backend(LegacyRuntimeBackend(_FakeRuntime("legacy")))
+        manager.register_backend(_SendAwareBackend())
+
+        payload = await manager.surface("sendPath").send_chat_message(
+            -200001,
+            text="Привет",
+        )
+        route = manager.describe_routes()["routes"]["sendPath"]
+
+        assert payload == {"runtime": "new", "surface": "sendPath", "text": "Привет"}
+        assert manager.active_backend_for_surface("sendPath") == "new"
+        assert route["requested"] == "new"
+        assert route["effective"] == "new"
+        assert route["targetReady"] is True
+
+    asyncio.run(run_assertions())
+
+
 class _MemoryAuthStore:
     def __init__(self, state: RuntimeAuthSessionState) -> None:
         self.state = state
@@ -150,6 +171,9 @@ class _FakeRuntime:
 
     async def get_chat_workspace(self, *_args, **_kwargs):
         return {"runtime": self.name, "surface": "messageWorkspace"}
+
+    async def send_chat_message(self, *_args, **kwargs):
+        return {"runtime": self.name, "surface": "sendPath", "text": kwargs.get("text")}
 
 
 class _SurfaceAwareBackend:
@@ -224,5 +248,43 @@ class _WorkspaceAwareBackend:
 
     def route_reason_for(self, surface: str) -> str | None:
         if surface == "messageWorkspace":
+            return None
+        return "New runtime пока не реализует этот surface; legacy remains effective."
+
+
+class _SendAwareBackend:
+    backend = "new"
+    runtime = _FakeRuntime("new")
+    route_available = True
+
+    async def start(self):
+        return await self.status()
+
+    async def stop(self):
+        return await self.status()
+
+    async def health(self):
+        return await self.status()
+
+    async def status(self):
+        from astra_runtime.status import RuntimeBackendStatus
+
+        return RuntimeBackendStatus(
+            backend="new",
+            name="send-aware-runtime",
+            registered=True,
+            lifecycle="running",
+            active=True,
+            healthy=True,
+            ready=True,
+            route_available=True,
+            capabilities=("manual-send",),
+        )
+
+    def route_available_for(self, surface: str) -> bool:
+        return surface == "sendPath"
+
+    def route_reason_for(self, surface: str) -> str | None:
+        if surface == "sendPath":
             return None
         return "New runtime пока не реализует этот surface; legacy remains effective."

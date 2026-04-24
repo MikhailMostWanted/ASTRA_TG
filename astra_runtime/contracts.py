@@ -65,6 +65,10 @@ class MessageSender(Protocol):
         text: str,
         source_message_id: int | None = None,
         reply_to_source_message_id: int | None = None,
+        source_message_key: str | None = None,
+        reply_to_source_message_key: str | None = None,
+        draft_scope_key: str | None = None,
+        client_send_id: str | None = None,
     ) -> dict[str, Any]: ...
 
 

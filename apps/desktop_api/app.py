@@ -69,9 +69,13 @@ class ReminderScanRequest(BaseModel):
 
 
 class ChatSendRequest(BaseModel):
-    text: str = Field(min_length=1)
+    text: str = ""
     source_message_id: int | None = None
     reply_to_source_message_id: int | None = None
+    source_message_key: str | None = None
+    reply_to_source_message_key: str | None = None
+    draft_scope_key: str | None = None
+    client_send_id: str | None = None
 
 
 class AutopilotGlobalRequest(BaseModel):
@@ -273,6 +277,24 @@ def create_app(
                 text=payload.text,
                 source_message_id=payload.source_message_id,
                 reply_to_source_message_id=payload.reply_to_source_message_id,
+                source_message_key=payload.source_message_key,
+                reply_to_source_message_key=payload.reply_to_source_message_key,
+                draft_scope_key=payload.draft_scope_key,
+                client_send_id=payload.client_send_id,
+            ),
+        )
+
+    @app.post("/api/chats/{chat_id}/send/prepare")
+    async def chat_send_prepare(chat_id: int, payload: ChatSendRequest) -> dict[str, Any]:
+        return await _call_with_lookup(
+            app,
+            lambda: _bridge(app).prepare_chat_send(
+                chat_id,
+                text=payload.text,
+                source_message_id=payload.source_message_id,
+                source_message_key=payload.source_message_key,
+                draft_scope_key=payload.draft_scope_key,
+                client_send_id=payload.client_send_id,
             ),
         )
 

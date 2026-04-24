@@ -13,7 +13,7 @@ import {
   normalizeWorkspaceStatusPayload,
   safeArray,
 } from "@/lib/runtime-guards";
-import type { MessageItem } from "@/lib/types";
+import type { ChatSendPayload, MessageItem } from "@/lib/types";
 import { useAppStore } from "@/stores/app-store";
 
 const CHAT_POLL_MS = 6_000;
@@ -47,8 +47,17 @@ export function ChatsScreen() {
   const [sort, setSort] = useState("activity");
   const deferredSearch = useDeferredValue(search);
   const lastWorkspaceSyncAtRef = useRef<string | null>(null);
+  const sendInFlightRef = useRef(false);
   const [olderMessages, setOlderMessages] = useState<MessageItem[]>([]);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [manualSendStatus, setManualSendStatus] = useState<{
+    status: string;
+    message: string;
+    backend: string | null;
+    sentMessageKey: string | null;
+    timestamp: string;
+    tone: "success" | "error" | "pending" | "warning";
+  } | null>(null);
 
   const chatsQuery = useQuery({
     queryKey: ["chats", deferredSearch, filter, sort],
@@ -85,6 +94,8 @@ export function ChatsScreen() {
 
   useEffect(() => {
     lastWorkspaceSyncAtRef.current = null;
+    sendInFlightRef.current = false;
+    setManualSendStatus(null);
     setOlderMessages([]);
   }, [selectedChatKey]);
 
@@ -92,7 +103,6 @@ export function ChatsScreen() {
   const selectedLocalChatId = selectedChat?.localChatId ?? null;
   const selectedChatWorkspace = selectedChat?.chatKey ? chatWorkspace[selectedChat.chatKey] || null : null;
   const fullaccessReady = Boolean(fullaccessQuery.data?.status.readyForManualSync);
-  const fullaccessWriteReady = Boolean(fullaccessQuery.data?.status.readyForManualSend);
 
   const workspaceQuery = useQuery({
     queryKey: ["chat-workspace", selectedChat?.chatKey],
@@ -142,29 +152,48 @@ export function ChatsScreen() {
   });
   const sendMessageMutation = useMutation({
     mutationFn: ({
-      localChatId,
+      chatId,
       chatKey: _chatKey,
       text,
       sourceMessageId,
+      sourceMessageKey,
+      draftScopeKey,
+      clientSendId,
     }: {
-      localChatId: number;
+      chatId: number;
       chatKey: string;
       text: string;
       sourceMessageId: number | null;
+      sourceMessageKey: string | null;
+      draftScopeKey: string | null;
+      clientSendId: string;
     }) =>
-      api.sendChatMessage(localChatId, {
+      api.sendChatMessage(chatId, {
         text,
         source_message_id: sourceMessageId,
         reply_to_source_message_id: sourceMessageId,
+        source_message_key: sourceMessageKey,
+        reply_to_source_message_key: sourceMessageKey,
+        draft_scope_key: draftScopeKey,
+        client_send_id: clientSendId,
       }),
     onSuccess: async (payload, variables) => {
-      queryClient.setQueryData(["chat-workspace", variables.chatKey], payload.workspace);
+      if (!payload.ok) {
+        setManualSendStatus(buildManualSendStatus(payload));
+        toast.error(payload.reason || payload.error?.message || "Не удалось отправить сообщение.");
+        return;
+      }
+      if (payload.workspace) {
+        queryClient.setQueryData(["chat-workspace", variables.chatKey], payload.workspace);
+      }
       markReplySent(variables.chatKey, {
         sourceMessageId: variables.sourceMessageId,
-        sourceMessageKey: payload.sentMessage?.messageKey ?? null,
+        sourceMessageKey: variables.sourceMessageKey,
       });
       clearReplyDraft(variables.chatKey);
-      toast.success("Сообщение отправлено через Desktop.");
+      setOlderMessages([]);
+      setManualSendStatus(buildManualSendStatus(payload));
+      toast.success(payload.fallback.used ? "Сообщение отправлено через fallback." : "Сообщение отправлено через Desktop.");
       await Promise.all([
         queryClient.refetchQueries({ queryKey: ["chats"], type: "active" }),
         queryClient.refetchQueries({ queryKey: ["chat-workspace", variables.chatKey], exact: true }),
@@ -172,7 +201,18 @@ export function ChatsScreen() {
       ]);
     },
     onError: (error) => {
+      setManualSendStatus({
+        status: "failed",
+        message: error instanceof Error ? error.message : "Не удалось отправить сообщение.",
+        backend: null,
+        sentMessageKey: null,
+        timestamp: new Date().toISOString(),
+        tone: "error",
+      });
       toast.error(error instanceof Error ? error.message : "Не удалось отправить сообщение.");
+    },
+    onSettled: () => {
+      sendInFlightRef.current = false;
     },
   });
   const autopilotGlobalMutation = useMutation({
@@ -430,6 +470,7 @@ export function ChatsScreen() {
         loading={workspaceQuery.isLoading}
         refreshing={workspaceQuery.isFetching || syncChatMutation.isPending}
         sending={sendMessageMutation.isPending}
+        sendStatus={manualSendStatus}
         autopilotUpdating={autopilotGlobalMutation.isPending || autopilotChatMutation.isPending}
         errorMessage={
           workspaceQuery.isError
@@ -461,23 +502,53 @@ export function ChatsScreen() {
           });
           toast.success("Черновик сохранён локально.");
         }}
-        onSend={(text, sourceMessageId, _sourceMessageKey) => {
+        onSend={(text, sourceMessageId, sourceMessageKey, draftScopeKey) => {
           if (!selectedChat?.chatKey) {
             return;
           }
-          if (selectedLocalChatId === null) {
-            toast.error("Для этого чата пока доступен только new runtime roster. Сначала подтяни legacy workspace через sync.");
+          const cleanedText = text.trim();
+          if (!cleanedText) {
+            setManualSendStatus({
+              status: "failed",
+              message: "Нельзя отправить пустое сообщение.",
+              backend: null,
+              sentMessageKey: null,
+              timestamp: new Date().toISOString(),
+              tone: "error",
+            });
+            toast.error("Нельзя отправить пустое сообщение.");
             return;
           }
-          if (!fullaccessWriteReady) {
-            toast.error("Режим записи выключен. Включи FULLACCESS_READONLY=false и авторизуй full-access.");
+          if (sendInFlightRef.current || sendMessageMutation.isPending) {
+            setManualSendStatus({
+              status: "failed",
+              message: "Отправка уже выполняется. Повторный клик заблокирован.",
+              backend: null,
+              sentMessageKey: null,
+              timestamp: new Date().toISOString(),
+              tone: "warning",
+            });
             return;
           }
+          sendInFlightRef.current = true;
+          setManualSendStatus({
+            status: "pending",
+            message: "Отправка черновика...",
+            backend: workspaceStatus?.sendPath && "effective" in workspaceStatus.sendPath
+              ? String(workspaceStatus.sendPath.effective)
+              : workspaceStatus?.effectiveBackend ?? null,
+            sentMessageKey: null,
+            timestamp: new Date().toISOString(),
+            tone: "pending",
+          });
           sendMessageMutation.mutate({
-            localChatId: selectedLocalChatId,
+            chatId: selectedChat.id,
             chatKey: selectedChat.chatKey,
-            text,
+            text: cleanedText,
             sourceMessageId,
+            sourceMessageKey,
+            draftScopeKey,
+            clientSendId: buildClientSendId(selectedChat.chatKey),
           });
         }}
         onMarkSent={(sourceMessageId, sourceMessageKey) => {
@@ -527,4 +598,38 @@ function mergeMessageLists(...pages: Array<MessageItem[] | undefined>): MessageI
     }
   }
   return Array.from(byKey.values()).sort((left, right) => left.runtimeMessageId - right.runtimeMessageId);
+}
+
+function buildManualSendStatus(payload: ChatSendPayload) {
+  const sentMessageKey =
+    typeof payload.sentMessageIdentity?.messageKey === "string"
+      ? payload.sentMessageIdentity.messageKey
+      : payload.sentMessage?.messageKey ?? null;
+  return {
+    status: payload.status,
+    message: payload.ok
+      ? payload.fallback.used
+        ? payload.reason || "Сообщение отправлено через fallback."
+        : "Сообщение отправлено."
+      : payload.reason || payload.error?.message || "Не удалось отправить сообщение.",
+    backend: payload.effectiveBackend,
+    sentMessageKey,
+    timestamp: new Date().toISOString(),
+    tone: payload.ok
+      ? payload.status === "degraded" || payload.fallback.used
+        ? "warning"
+        : "success"
+      : "error",
+  } satisfies {
+    status: string;
+    message: string;
+    backend: string | null;
+    sentMessageKey: string | null;
+    timestamp: string;
+    tone: "success" | "error" | "pending" | "warning";
+  };
+}
+
+function buildClientSendId(chatKey: string): string {
+  return `${chatKey}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
 }
