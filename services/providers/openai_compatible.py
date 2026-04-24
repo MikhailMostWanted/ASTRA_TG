@@ -17,6 +17,7 @@ from services.providers.models import (
     ReplyVariantCandidate,
     RewriteReplyRequest,
 )
+from services.reply_postprocessor import normalize_variant_id, postprocess_variant_messages
 
 
 @dataclass(slots=True)
@@ -45,9 +46,13 @@ class OpenAICompatibleProvider(BaseProvider):
             prompt=request.prompt,
             model_name=self.model_fast,
         )
-        variants = _extract_reply_variants(raw_text)
+        parsed = _extract_reply_payload(raw_text)
+        variants = parsed.variants
         if variants:
-            primary_text = next((variant.text for variant in variants if variant.id == "primary"), None)
+            primary_text = next(
+                (variant.text for variant in variants if variant.id == "primary"),
+                None,
+            )
             messages = _extract_reply_messages(primary_text or "")
         else:
             messages = _extract_reply_messages(raw_text)
@@ -58,6 +63,10 @@ class OpenAICompatibleProvider(BaseProvider):
             raw_text=raw_text,
             model_name=self.model_fast,
             variants=variants,
+            should_reply=parsed.should_reply,
+            reason=parsed.reason,
+            confidence=parsed.confidence,
+            parse_recovered=parsed.recovered,
         )
 
     async def improve_digest(
@@ -196,31 +205,75 @@ def _max_tokens_for_task(task: ProviderTask) -> int:
     return 256
 
 
+@dataclass(frozen=True, slots=True)
+class _ReplyPayload:
+    variants: tuple[ReplyVariantCandidate, ...]
+    should_reply: bool
+    reason: str | None
+    confidence: float | None
+    recovered: bool
+
+
 def _extract_reply_messages(raw_text: str) -> tuple[str, ...]:
-    messages: list[str] = []
-    for line in raw_text.splitlines():
-        cleaned = _normalize_text(line.lstrip("-•1234567890. ").strip())
-        if cleaned:
-            messages.append(cleaned)
+    messages = postprocess_variant_messages(
+        raw_text.splitlines() or (raw_text,),
+        variant_id="primary",
+    )
     if messages:
-        return tuple(messages[:4])
+        return messages[:4]
     normalized = _normalize_text(raw_text)
     return (normalized,) if normalized else ()
 
 
-def _extract_reply_variants(raw_text: str) -> tuple[ReplyVariantCandidate, ...]:
+def _extract_reply_payload(raw_text: str) -> _ReplyPayload:
     try:
         payload = _extract_json_payload(raw_text)
     except ProviderResponseError:
-        return ()
+        recovered_messages = postprocess_variant_messages(
+            raw_text.splitlines() or (raw_text,),
+            variant_id="primary",
+        )
+        variants = (
+            (
+                ReplyVariantCandidate(
+                    id="primary",
+                    text="\n".join(recovered_messages),
+                ),
+            )
+            if recovered_messages
+            else ()
+        )
+        return _ReplyPayload(
+            variants=variants,
+            should_reply=True,
+            reason="provider вернул не-JSON, текст восстановлен постобработкой.",
+            confidence=None,
+            recovered=bool(variants),
+        )
 
     variants: list[ReplyVariantCandidate] = []
-    for variant_id in ("primary", "short", "soft", "style"):
+    for variant_id in ("primary", "short", "soft", "owner_style", "style"):
         text = _extract_variant_text(payload.get(variant_id))
         if not text:
             continue
-        variants.append(ReplyVariantCandidate(id=variant_id, text=text))
-    return tuple(variants)
+        normalized_id = normalize_variant_id(variant_id)
+        if any(item.id == normalized_id for item in variants):
+            continue
+        cleaned = "\n".join(
+            postprocess_variant_messages(
+                text.splitlines() or (text,),
+                variant_id=normalized_id,
+            )
+        )
+        if cleaned:
+            variants.append(ReplyVariantCandidate(id=normalized_id, text=cleaned))
+    return _ReplyPayload(
+        variants=tuple(variants),
+        should_reply=_extract_should_reply(payload),
+        reason=_normalize_optional_text(payload.get("reason")),
+        confidence=_extract_confidence(payload.get("confidence")),
+        recovered=False,
+    )
 
 
 def _extract_json_payload(raw_text: str) -> dict[str, object]:
@@ -228,12 +281,17 @@ def _extract_json_payload(raw_text: str) -> dict[str, object]:
     if cleaned.startswith("```"):
         cleaned = cleaned.removeprefix("```json").removeprefix("```JSON")
         cleaned = cleaned.removeprefix("```").removesuffix("```").strip()
+    if not cleaned.startswith("{"):
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start >= 0 and end > start:
+            cleaned = cleaned[start : end + 1]
     try:
         payload = json.loads(cleaned)
     except json.JSONDecodeError as error:
-        raise ProviderResponseError("Provider не вернул валидный JSON для digest improve.") from error
+        raise ProviderResponseError("Provider не вернул валидный JSON.") from error
     if not isinstance(payload, dict):
-        raise ProviderResponseError("Digest improve JSON должен быть объектом.")
+        raise ProviderResponseError("Provider JSON должен быть объектом.")
     return payload
 
 
@@ -250,6 +308,39 @@ def _extract_variant_text(value: object) -> str | None:
         cleaned = _normalize_text(value)
         return cleaned or None
     return None
+
+
+def _extract_should_reply(payload: dict[str, object]) -> bool:
+    value = payload.get("should_reply")
+    if isinstance(value, bool):
+        return value
+    value = payload.get("shouldReply")
+    if isinstance(value, bool):
+        return value
+    mode = _normalize_optional_text(payload.get("mode"))
+    if mode and mode.casefold() in {"hold", "no_reply", "no reply"}:
+        return False
+    return True
+
+
+def _extract_confidence(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return max(0.0, min(1.0, float(value)))
+    if isinstance(value, str):
+        try:
+            return max(0.0, min(1.0, float(value.strip().replace(",", "."))))
+        except ValueError:
+            return None
+    return None
+
+
+def _normalize_optional_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = _normalize_text(value)
+    return cleaned or None
 
 
 def _normalize_lines(value: object) -> tuple[str, ...]:

@@ -199,7 +199,7 @@ class PersonaAdapter:
         finalized = _normalize_message(message)
         finalized = finalized.strip(" \n\t,.!?;:-")
         if profile.casing_mode == "mostly_lower":
-            finalized = finalized.lower()
+            finalized = _mostly_lower_preserving_names(finalized)
         finalized = re.sub(r"\s+", " ", finalized).strip()
         finalized = finalized.replace("  ", " ")
         return finalized
@@ -232,6 +232,26 @@ class PersonaAdapter:
 
 def _normalize_message(value: str) -> str:
     return " ".join(str(value).split()).strip()
+
+
+def _mostly_lower_preserving_names(value: str) -> str:
+    words = value.split()
+    lowered: list[str] = []
+    opener_tokens = {"ну", "да", "не", "а", "слушай", "смотри", "короче", "типо", "ща", "щас"}
+    for index, word in enumerate(words):
+        stripped = word.strip(".,!?;:-")
+        previous = words[index - 1].strip(".,!?;:-").casefold() if index > 0 else ""
+        if (
+            index > 0
+            and previous not in opener_tokens
+            and len(stripped) > 2
+            and stripped[:1].isupper()
+            and stripped[1:].islower()
+        ):
+            lowered.append(word)
+            continue
+        lowered.append(word.lower())
+    return " ".join(lowered)
 
 
 def _merge_tiny_chunks(messages: list[str]) -> list[str]:

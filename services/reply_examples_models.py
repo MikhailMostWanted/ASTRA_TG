@@ -39,6 +39,11 @@ class ReplyExamplesRetrievalResult:
     opener_hint: str | None
     dominant_topic_hint: str | None
     notes: tuple[str, ...]
+    message_count_hint: int | None = None
+    softness_hint: str | None = None
+    profanity_hint: str | None = None
+    style_markers: tuple[str, ...] = ()
+    recipient_hint: str | None = None
 
     @property
     def top_score(self) -> float | None:

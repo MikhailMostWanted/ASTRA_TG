@@ -25,6 +25,7 @@ def decorate_reply_payload(
             "primary": True,
             "short": True,
             "soft": True,
+            "owner_style": True,
             "style": True,
         },
         "disabledReason": disabled_reason or (None if send_enabled else STAGED_SEND_DISABLED_REASON),

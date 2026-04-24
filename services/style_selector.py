@@ -87,9 +87,12 @@ class StyleSelectorService:
             linked_people=linked_people,
         )
         profile = await self.style_profile_repository.get_by_key(profile_key)
+        if profile is None and profile_key != "owner_style":
+            profile = await self.style_profile_repository.get_by_key("owner_style")
+            reason = "Нужный fallback-профиль не найден, использую профиль владельца."
         if profile is None and profile_key != "base":
             profile = await self.style_profile_repository.get_by_key("base")
-            reason = "Нужный fallback-профиль не найден, использую базовый."
+            reason = "Профиль владельца не найден, использую базовый fallback."
         if profile is None:
             raise RuntimeError("Встроенные style-профили не загружены в базу данных.")
 
@@ -136,7 +139,7 @@ class StyleSelectorService:
             return "friend_explain", "В памяти есть явный объясняющий паттерн."
         if _contains_any(text_blob, HARD_FRIEND_KEYWORDS):
             return "friend_hard", "В памяти есть явный жёсткий дружеский паттерн."
-        return "base", "Явных сигналов под другой профиль нет, использую базовый fallback."
+        return "owner_style", "Явных сигналов под другой профиль нет, использую профиль владельца."
 
     def _collect_text_fragments(
         self,

@@ -151,7 +151,7 @@ class ReplyEngineService:
         else:
             few_shot_support = await self.reply_examples_retriever.retrieve_for_context(
                 context_or_issue,
-                limit=3,
+                limit=5,
             )
         draft = self.strategy_resolver.resolve(
             context=context_or_issue,
@@ -248,6 +248,7 @@ class ReplyEngineService:
                 baseline_messages=llm_baseline_messages,
                 provider_variants=llm_variants,
                 few_shot_support=few_shot_support,
+                profile=style_selection.profile,
             )
             if classification.should_reply and draft.strategy != "не отвечать"
             else ()
@@ -304,6 +305,8 @@ class ReplyEngineService:
                 few_shot_length_hint=draft.few_shot_length_hint,
                 few_shot_rhythm_hint=draft.few_shot_rhythm_hint,
                 few_shot_dominant_topic_hint=draft.few_shot_dominant_topic_hint,
+                few_shot_message_count_hint=draft.few_shot_message_count_hint,
+                few_shot_style_markers=draft.few_shot_style_markers,
                 style_source_reason=style_selection.source_reason,
                 alternative_action=draft.alternative_action,
                 llm_refine_requested=llm_requested,

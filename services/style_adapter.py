@@ -46,6 +46,9 @@ class StyleAdapter:
             profile,
             prefer_series=bool(getattr(few_shot_support, "rhythm_hint", None) == "series"),
         )
+        target_count = getattr(few_shot_support, "message_count_hint", None)
+        if isinstance(target_count, int) and target_count >= 2 and len(segments) == 1:
+            segments = self._split_long_part(segments[0], profile, aggressive=True)
         opener_added = False
         if segments:
             updated_first = self._ensure_opener(
@@ -157,8 +160,8 @@ class StyleAdapter:
         opener_bank = tuple(
             dict.fromkeys(
                 [
-                    *(profile.preferred_openers or ()),
                     *((opener_hint,) if opener_hint else ()),
+                    *(profile.preferred_openers or ()),
                 ]
             )
         )
@@ -167,14 +170,14 @@ class StyleAdapter:
         if any(lowered.startswith(f"{opener} ") or lowered == opener for opener in opener_bank):
             return message
 
-        if len(message) < 10:
+        if len(message) < 10 and opener_hint is None:
             return message
         return f"{opener_bank[0]} {message}"
 
     def _finalize_segment(self, segment: str, profile: StyleProfileSnapshot) -> str:
         finalized = _strip_edge_punctuation(_normalize_spaces(segment))
         if profile.casing_mode == "mostly_lower":
-            finalized = finalized.lower()
+            finalized = _mostly_lower_preserving_names(finalized)
         finalized = finalized.replace("  ", " ")
         return finalized.strip()
 
@@ -198,3 +201,23 @@ def _normalize_spaces(value: str) -> str:
 
 def _strip_edge_punctuation(value: str) -> str:
     return value.strip(" \n\t,.!?;:-")
+
+
+def _mostly_lower_preserving_names(value: str) -> str:
+    words = value.split()
+    lowered: list[str] = []
+    opener_tokens = {"ну", "да", "не", "а", "слушай", "смотри", "короче", "типо", "ща", "щас"}
+    for index, word in enumerate(words):
+        stripped = word.strip(".,!?;:-")
+        previous = words[index - 1].strip(".,!?;:-").casefold() if index > 0 else ""
+        if (
+            index > 0
+            and previous not in opener_tokens
+            and len(stripped) > 2
+            and stripped[:1].isupper()
+            and stripped[1:].islower()
+        ):
+            lowered.append(word)
+            continue
+        lowered.append(word.lower())
+    return " ".join(lowered)

@@ -276,6 +276,8 @@ def serialize_reply_result(result: ReplyResult) -> dict[str, Any]:
         "fewShotLengthHint": suggestion.few_shot_length_hint,
         "fewShotRhythmHint": suggestion.few_shot_rhythm_hint,
         "fewShotDominantTopicHint": suggestion.few_shot_dominant_topic_hint,
+        "fewShotMessageCountHint": suggestion.few_shot_message_count_hint,
+        "fewShotStyleMarkers": list(suggestion.few_shot_style_markers),
         "alternativeAction": suggestion.alternative_action,
         "trigger": _serialize_reply_trigger(suggestion, result),
         "focus": _serialize_reply_focus(suggestion),
@@ -672,6 +674,8 @@ def _serialize_reply_retrieval(suggestion) -> dict[str, Any]:
         "lengthHint": suggestion.few_shot_length_hint,
         "rhythmHint": suggestion.few_shot_rhythm_hint,
         "dominantTopicHint": suggestion.few_shot_dominant_topic_hint,
+        "messageCountHint": suggestion.few_shot_message_count_hint,
+        "styleMarkers": list(suggestion.few_shot_style_markers),
         "notes": list(suggestion.few_shot_notes),
         "hits": [
             {

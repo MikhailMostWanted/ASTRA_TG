@@ -93,6 +93,8 @@ class ReplyDraft:
     few_shot_length_hint: str | None = None
     few_shot_rhythm_hint: str | None = None
     few_shot_dominant_topic_hint: str | None = None
+    few_shot_message_count_hint: int | None = None
+    few_shot_style_markers: tuple[str, ...] = ()
     alternative_action: str | None = None
 
 
@@ -142,6 +144,8 @@ class ReplySuggestion:
     few_shot_length_hint: str | None = None
     few_shot_rhythm_hint: str | None = None
     few_shot_dominant_topic_hint: str | None = None
+    few_shot_message_count_hint: int | None = None
+    few_shot_style_markers: tuple[str, ...] = ()
     style_source_reason: str | None = None
     alternative_action: str | None = None
     fallback_code: str | None = None

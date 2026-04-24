@@ -106,7 +106,7 @@ class FakeVariantProviderManager(FakeRejectingProviderManager):
         return ProviderExecutionResult.success(
             ReplyRefinementCandidate(
                 messages=("да, вижу", "сейчас гляну и вернусь коротко"),
-                raw_text='{"primary": ["да, вижу", "сейчас гляну и вернусь коротко"], "short": ["гляну и вернусь"], "soft": ["да, понял", "спокойно проверю и вернусь"], "style": ["да вижу", "гляну", "и отпишусь"]}',
+                raw_text='{"should_reply": true, "reason": "есть вопрос", "confidence": 0.86, "primary": ["да, вижу", "сейчас гляну и вернусь коротко"], "short": ["гляну и вернусь"], "soft": ["да, понял", "спокойно проверю и вернусь"], "owner_style": ["да вижу", "гляну", "и отпишусь"]}',
                 model_name="test-fast",
                 variants=(
                     ReplyVariantCandidate(
@@ -118,7 +118,7 @@ class FakeVariantProviderManager(FakeRejectingProviderManager):
                         id="soft",
                         text="да, понял\nспокойно проверю и вернусь",
                     ),
-                    ReplyVariantCandidate(id="style", text="да вижу\nгляну\nи отпишусь"),
+                    ReplyVariantCandidate(id="owner_style", text="да вижу\nгляну\nи отпишусь"),
                 ),
             ),
             provider_name="openai_compatible",
@@ -1133,7 +1133,7 @@ def test_reply_engine_returns_real_llm_variants_with_retrieval_support(
                 "primary",
                 "short",
                 "soft",
-                "style",
+                "owner_style",
             ]
             assert result.suggestion.variants[3].label == "В моём стиле"
             assert "гляну" in result.suggestion.reply_text

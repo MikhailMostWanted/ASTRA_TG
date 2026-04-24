@@ -57,6 +57,10 @@ class ReplyRefinementCandidate:
     raw_text: str
     model_name: str | None = None
     variants: tuple[ReplyVariantCandidate, ...] = ()
+    should_reply: bool = True
+    reason: str | None = None
+    confidence: float | None = None
+    parse_recovered: bool = False
 
 
 @dataclass(frozen=True, slots=True)

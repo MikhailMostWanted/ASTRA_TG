@@ -11,6 +11,10 @@ from services.providers.models import (
     LLMDecisionReason,
     ReplyRefinementCandidate,
 )
+from services.reply_postprocessor import (
+    contains_assistant_tone,
+    postprocess_variant_messages,
+)
 
 
 LITERARY_PATTERNS = (
@@ -24,6 +28,12 @@ BOT_PATTERNS = (
     "буду рад помочь",
     "обращайся если будут вопросы",
     "я всегда готов помочь",
+    "я бы ответил",
+    "можно написать",
+    "предлагаю ответить",
+    "с учётом контекста",
+    "с учетом контекста",
+    "вариант ответа",
 )
 GENERIC_REPLY_WORDS = {
     "давай",
@@ -34,6 +44,31 @@ GENERIC_REPLY_WORDS = {
     "тогда",
     "отдельно",
 }
+FACTUAL_COMMITMENT_PATTERNS = (
+    "завтра",
+    "сегодня",
+    "к вечеру",
+    "вечером",
+    "утром",
+    "через час",
+    "через пару часов",
+    "в понедельник",
+    "во вторник",
+    "в среду",
+    "в четверг",
+    "в пятницу",
+)
+TOXIC_PATTERNS = (
+    "иди нахуй",
+    "пошел нахуй",
+    "пошёл нахуй",
+    "заткнись",
+    "дебил",
+    "тупой",
+    "тупая",
+    "убью",
+    "угрожаю",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +102,12 @@ class ReplyRefinementGuardrails:
         profile,
         persona_state: PersonaState,
     ) -> ReplyRefinementDecision:
-        normalized = tuple(_normalize_lines(candidate.messages))
+        raw_messages = tuple(_normalize_lines(candidate.messages))
+        normalized = postprocess_variant_messages(
+            raw_messages,
+            variant_id="primary",
+            max_lines=4,
+        )
         baseline = tuple(_normalize_lines(baseline_messages))
         if not normalized:
             flags = ("пустой_ответ",)
@@ -87,10 +127,16 @@ class ReplyRefinementGuardrails:
             )
 
         flags: list[str] = []
+        if contains_assistant_tone(candidate.raw_text) or contains_assistant_tone(raw_messages):
+            flags.append("assistant_tone")
         if _has_forbidden_factual_novelty(normalized, allowed_context, baseline):
             flags.append("новые_факты")
         if _has_obvious_topic_drift(normalized, allowed_context, baseline):
             flags.append("явный_оффтопик")
+        if _has_wall_of_text(raw_messages):
+            flags.append("слишком_длинная_простыня")
+        if _has_toxicity(raw_messages):
+            flags.append("токсичность")
 
         guardrails = persona_state.guardrails
         if guardrails is not None:
@@ -114,6 +160,9 @@ class ReplyRefinementGuardrails:
             "слишком_грубо",
             "анти_паттерн",
             "явный_оффтопик",
+            "assistant_tone",
+            "слишком_длинная_простыня",
+            "токсичность",
         }
         if persona_decision.used_fallback or any(flag in hard_flags for flag in combined_flags):
             return ReplyRefinementDecision(
@@ -292,6 +341,9 @@ def _has_forbidden_factual_novelty(
     for token in ("http://", "https://", "@"):
         if token in candidate_blob and token not in allowed_blob:
             return True
+    for pattern in FACTUAL_COMMITMENT_PATTERNS:
+        if pattern in candidate_blob and pattern not in allowed_blob:
+            return True
     return False
 
 
@@ -314,6 +366,22 @@ def _has_new_numeric_facts(candidate_blob: str, allowed_blob: str) -> bool:
     candidate_numbers = {token for token in candidate_blob.split() if any(symbol.isdigit() for symbol in token)}
     allowed_numbers = {token for token in allowed_blob.split() if any(symbol.isdigit() for symbol in token)}
     return not candidate_numbers.issubset(allowed_numbers)
+
+
+def _has_wall_of_text(candidate_messages: tuple[str, ...]) -> bool:
+    if not candidate_messages:
+        return False
+    joined = " ".join(candidate_messages)
+    if len(joined) > 620:
+        return True
+    if len(candidate_messages) == 1 and (len(joined) > 260 or len(joined.split()) > 44):
+        return True
+    return any(len(message) > 360 or len(message.split()) > 58 for message in candidate_messages)
+
+
+def _has_toxicity(candidate_messages: tuple[str, ...]) -> bool:
+    text = "\n".join(candidate_messages).casefold()
+    return any(pattern in text for pattern in TOXIC_PATTERNS)
 
 
 def _salient_tokens(lines: Iterable[str]) -> set[str]:

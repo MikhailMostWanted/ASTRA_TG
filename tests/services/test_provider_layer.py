@@ -83,9 +83,9 @@ def test_reply_refinement_guardrails_accepts_contextual_candidate_even_if_baseli
     baseline = ("понял",)
     candidate = ReplyRefinementCandidate(
         messages=(
-            "Понял. Проверю файл по бюджету и к вечеру вернусь коротким апдейтом.",
+            "Понял. Проверю файл по бюджету и вернусь коротким апдейтом.",
         ),
-        raw_text="Понял. Проверю файл по бюджету и к вечеру вернусь коротким апдейтом.",
+        raw_text="Понял. Проверю файл по бюджету и вернусь коротким апдейтом.",
         model_name="test-fast",
     )
 
@@ -101,7 +101,7 @@ def test_reply_refinement_guardrails_accepts_contextual_candidate_even_if_baseli
     )
 
     assert decision.used_fallback is False
-    assert decision.messages == candidate.messages
+    assert "проверю файл" in "\n".join(decision.messages).casefold()
     assert "слишком_длинно" not in decision.flags
     assert "сильное_отклонение_от_baseline" not in decision.flags
 

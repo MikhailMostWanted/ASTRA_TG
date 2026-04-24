@@ -80,6 +80,12 @@ class ReplyStrategyResolver:
             few_shot_dominant_topic_hint=(
                 few_shot_support.dominant_topic_hint if few_shot_support else None
             ),
+            few_shot_message_count_hint=(
+                few_shot_support.message_count_hint if few_shot_support else None
+            ),
+            few_shot_style_markers=(
+                few_shot_support.style_markers if few_shot_support else ()
+            ),
             alternative_action=alternative_action,
         )
 

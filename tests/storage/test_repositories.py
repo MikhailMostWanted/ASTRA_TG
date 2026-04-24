@@ -88,6 +88,7 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
 
             built_in_profiles = await style_profiles.list_profiles()
             assert [profile.key for profile in built_in_profiles] == [
+                "owner_style",
                 "base",
                 "friend_hard",
                 "friend_explain",
@@ -221,7 +222,7 @@ def test_storage_repositories_cover_basic_crud(monkeypatch, tmp_path: Path) -> N
             await session.commit()
 
             assert await repo_settings.get_value("digest.target.label") == "@astra_digest"
-            assert await system.get_schema_revision() == "20260421_01"
+            assert await system.get_schema_revision() == "20260424_01"
 
         await runtime.dispose()
 

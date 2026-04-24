@@ -8,6 +8,9 @@ import {
   Copy,
   FileText,
   LoaderCircle,
+  Heart,
+  MessageSquare,
+  Minimize2,
   Pause,
   Power,
   RefreshCcw,
@@ -223,10 +226,14 @@ export function ReplyPanel({
   const selectedVariant = replyOptions[selectedIndex] || null;
   const primaryVariant = replyOptions.find((item) => item.id === "primary") || replyOptions[0] || null;
   const secondaryVariants = buildSecondaryVariants(replyOptions, primaryVariant?.id ?? null);
+  const shortVariant = replyOptions.find((item) => item.id === "short") || null;
+  const softVariant = replyOptions.find((item) => item.id === "soft") || null;
+  const ownerStyleVariant = replyOptions.find((item) => isOwnerStyleVariant(item.id)) || null;
   const triggerPreview = buildTriggerPreview(contextSourceSenderName, contextSourceMessagePreview);
   const llmDebug = suggestion?.llmDebug ?? null;
   const llmDecisionReason = llmDebug?.decisionReason ?? null;
   const llmStatusLabel = suggestion?.llmStatus?.label || "без ИИ";
+  const llmDisplayLabel = friendlyLlmStatusLabel(suggestion?.llmStatus?.mode, llmStatusLabel);
   const triggerBackendLabel = compactWhitespace(triggerDetails?.backend || suggestion?.sourceBackend || null);
   const retrievalSummary = buildRetrievalSummary(retrievalDetails);
   const styleSummary = buildStyleSummary(styleDetails, suggestion);
@@ -466,7 +473,7 @@ export function ReplyPanel({
             уверенность {formatConfidence(suggestion.confidence)}
           </Badge>
           <Badge variant="outline" className={cn("border-0 ring-1", toneBadgeClasses(llmTone))}>
-            ИИ: {llmStatusLabel}
+            ИИ: {llmDisplayLabel}
           </Badge>
         </>
       }
@@ -513,14 +520,14 @@ export function ReplyPanel({
             onClick={() => setSelectedIndex(replyOptions.findIndex((item) => item.id === primaryVariant.id))}
           >
             <div className="mb-2 text-xs text-slate-400">{primaryVariant.description || "Готовый текст ответа."}</div>
-            <div className="whitespace-pre-wrap text-sm leading-6 text-slate-50">{primaryVariant.text}</div>
+            <VariantTextPreview text={primaryVariant.text} ownerStyle={isOwnerStyleVariant(primaryVariant.id)} />
           </button>
         ) : null}
       </section>
 
       {!isNoReply && secondaryVariants.length > 0 ? (
         <section className="rounded-[20px] border border-white/8 bg-black/16 p-4">
-          <div className="mb-3 text-sm font-medium text-white">Быстрые формулировки</div>
+          <div className="mb-3 text-sm font-medium text-white">Варианты ответа</div>
           <div className="grid gap-2">
             {secondaryVariants.map((item) => {
               const index = replyOptions.findIndex((variant) => variant.id === item.id);
@@ -540,7 +547,7 @@ export function ReplyPanel({
                     <span className="font-medium">{friendlyVariantLabel(item.label, item.id)}</span>
                     {selectedIndex === index ? <span className="text-xs text-cyan-100">выбран</span> : null}
                   </div>
-                  <div className="line-clamp-2">{item.text}</div>
+                  <VariantTextPreview text={item.text} ownerStyle={isOwnerStyleVariant(item.id)} compact />
                 </button>
               );
             })}
@@ -562,6 +569,33 @@ export function ReplyPanel({
             <Button
               variant="outline"
               className="border-white/8 bg-black/16 text-slate-100"
+              onClick={() => selectVariantById(replyOptions, "short", setSelectedIndex)}
+              disabled={!shortVariant}
+            >
+              <Minimize2 data-icon="inline-start" />
+              Сделать короче
+            </Button>
+            <Button
+              variant="outline"
+              className="border-white/8 bg-black/16 text-slate-100"
+              onClick={() => selectVariantById(replyOptions, "soft", setSelectedIndex)}
+              disabled={!softVariant}
+            >
+              <Heart data-icon="inline-start" />
+              Мягче
+            </Button>
+            <Button
+              variant="outline"
+              className="border-white/8 bg-black/16 text-slate-100"
+              onClick={() => selectVariantById(replyOptions, "owner_style", setSelectedIndex)}
+              disabled={!ownerStyleVariant}
+            >
+              <MessageSquare data-icon="inline-start" />
+              В моём стиле
+            </Button>
+            <Button
+              variant="outline"
+              className="border-white/8 bg-black/16 text-slate-100"
               onClick={() => onCopy(selectedReply)}
               disabled={!selectedReply}
             >
@@ -578,7 +612,7 @@ export function ReplyPanel({
               aria-label="Использовать как черновик"
             >
               <WandSparkles data-icon="inline-start" />
-              В черновик
+              Вставить в черновик
             </Button>
             <Button
               variant="outline"
@@ -691,7 +725,7 @@ export function ReplyPanel({
         open={showDebug}
         onToggle={() => setShowDebug((current) => !current)}
         title="Отладка / детали"
-        summary={llmStatusLabel}
+        summary={llmDisplayLabel}
       >
         <div>Режим ИИ: {suggestion.llmStatus?.mode || "deterministic"}</div>
         <div className="mt-2">Trigger backend: {triggerBackendLabel || "не указан"}</div>
@@ -1287,11 +1321,46 @@ function buildSecondaryVariants(
   variants: Array<{ id: string; label: string; description: string; text: string }>,
   primaryId: string | null,
 ) {
-  const preferred = ["short", "soft", "style"]
+  const preferred = ["short", "soft", "owner_style", "style"]
     .map((id) => variants.find((item) => item.id === id))
     .filter((item): item is { id: string; label: string; description: string; text: string } => Boolean(item));
   const fallback = variants.filter((item) => item.id !== primaryId && !preferred.some((preferredItem) => preferredItem.id === item.id));
   return [...preferred, ...fallback].slice(0, 3);
+}
+
+function VariantTextPreview({
+  text,
+  ownerStyle,
+  compact = false,
+}: {
+  text: string;
+  ownerStyle: boolean;
+  compact?: boolean;
+}) {
+  const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  if (ownerStyle && lines.length > 1) {
+    return (
+      <div className={cn("flex flex-col items-start", compact ? "gap-1.5" : "gap-2")}>
+        {lines.slice(0, compact ? 4 : 6).map((line, index) => (
+          <span
+            key={`${line}-${index}`}
+            className={cn(
+              "max-w-full rounded-[12px] border border-cyan-200/10 bg-cyan-200/8 px-2.5 py-1 text-slate-50",
+              compact ? "line-clamp-1 text-xs leading-5" : "text-sm leading-6",
+            )}
+          >
+            {line}
+          </span>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className={cn("whitespace-pre-wrap text-slate-50", compact ? "line-clamp-2 text-sm leading-5" : "text-sm leading-6")}>
+      {text}
+    </div>
+  );
 }
 
 function friendlyVariantLabel(label: string, id: string): string {
@@ -1301,10 +1370,32 @@ function friendlyVariantLabel(label: string, id: string): string {
   if (id === "soft") {
     return "Мягкий";
   }
-  if (id === "style") {
+  if (isOwnerStyleVariant(id)) {
     return "В моём стиле";
   }
   return label || "Вариант";
+}
+
+function isOwnerStyleVariant(id: string | null | undefined): boolean {
+  return id === "owner_style" || id === "style";
+}
+
+function selectVariantById(
+  variants: Array<{ id: string; label: string; description: string; text: string }>,
+  id: "short" | "soft" | "owner_style",
+  setSelectedIndex: (value: number) => void,
+) {
+  const index = variants.findIndex((item) => (id === "owner_style" ? isOwnerStyleVariant(item.id) : item.id === id));
+  if (index >= 0) {
+    setSelectedIndex(index);
+  }
+}
+
+function friendlyLlmStatusLabel(mode: string | null | undefined, label: string): string {
+  if (mode === "fallback" || mode === "rejected_by_guardrails") {
+    return "резервный вариант";
+  }
+  return label;
 }
 
 function buildTriggerPreview(senderName: string | null, preview: string | null): string | null {
@@ -1372,6 +1463,8 @@ function buildRetrievalSummary(
     retrieval.strategyBias ? `bias ${retrieval.strategyBias}` : null,
     retrieval.lengthHint ? `длина ${retrieval.lengthHint}` : null,
     retrieval.rhythmHint ? `ритм ${retrieval.rhythmHint}` : null,
+    retrieval.messageCountHint ? `${retrieval.messageCountHint} репл.` : null,
+    retrieval.styleMarkers?.length ? `маркеры ${retrieval.styleMarkers.slice(0, 3).join(", ")}` : null,
     retrieval.dominantTopicHint ? `тема ${retrieval.dominantTopicHint}` : null,
     retrieval.notes[0] || null,
   ].filter((item): item is string => Boolean(item));

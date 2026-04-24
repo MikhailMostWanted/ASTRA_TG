@@ -648,6 +648,56 @@ describe("ReplyPanel", () => {
     expect(screen.getByText(/основной Telegram/)).toBeInTheDocument();
   });
 
+  it("shows owner style variant as a cascade instead of one paragraph", () => {
+    const reply = buildAutopilotReply();
+    reply.suggestion!.variants = [
+      {
+        id: "primary",
+        label: "Основной",
+        description: "Главный вариант.",
+        text: "да понял\nщас посмотрю",
+      },
+      {
+        id: "short",
+        label: "Короче",
+        description: "Коротко.",
+        text: "ща гляну",
+      },
+      {
+        id: "soft",
+        label: "Мягче",
+        description: "Мягче.",
+        text: "да я понял тебя\nспокойно посмотрю",
+      },
+      {
+        id: "owner_style",
+        label: "В моём стиле",
+        description: "Каскад.",
+        text: "не не\nя не про это\nщас пытаюсь понять\nчто ты имеешь в виду",
+      },
+    ];
+
+    render(
+      <TooltipProvider>
+        <ReplyPanel
+          reply={reply}
+          workflowState={null}
+          onRefresh={vi.fn()}
+          onCopy={vi.fn()}
+          onUseDraft={vi.fn()}
+          onMarkSent={vi.fn()}
+          onClearDraft={vi.fn()}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getAllByText("В моём стиле").length).toBeGreaterThan(0);
+    expect(screen.getByText("не не")).toBeInTheDocument();
+    expect(screen.getByText("я не про это")).toBeInTheDocument();
+    expect(screen.getByText("щас пытаюсь понять")).toBeInTheDocument();
+    expect(screen.queryByText("не не\nя не про это\nщас пытаюсь понять\nчто ты имеешь в виду")).not.toBeInTheDocument();
+  });
+
   it("renders workspace context without reply generation when new runtime is read-only", () => {
     render(
       <TooltipProvider>

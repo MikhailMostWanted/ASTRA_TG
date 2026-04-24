@@ -479,6 +479,8 @@ export interface ReplyRetrievalPayload {
   lengthHint: string | null;
   rhythmHint: string | null;
   dominantTopicHint: string | null;
+  messageCountHint?: number | null;
+  styleMarkers?: string[];
   notes: string[];
   hits: ReplyRetrievalHitPayload[];
 }
@@ -534,6 +536,8 @@ export interface ReplySuggestion {
   fewShotLengthHint?: string | null;
   fewShotRhythmHint?: string | null;
   fewShotDominantTopicHint?: string | null;
+  fewShotMessageCountHint?: number | null;
+  fewShotStyleMarkers?: string[];
   styleSourceReason?: string | null;
   alternativeAction: string | null;
   trigger?: ReplyTriggerPayload | null;

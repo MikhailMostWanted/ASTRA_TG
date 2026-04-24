@@ -7,6 +7,7 @@ from services.providers.manager import ProviderManager
 from services.providers.models import LLMDecisionReason, ReplyRefinementCandidate
 from services.providers.prompts import build_reply_refine_request
 from services.reply_models import ReplyVariant
+from services.reply_postprocessor import normalize_variant_id, postprocess_variant_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,17 +110,18 @@ def _convert_variants(candidate: ReplyRefinementCandidate) -> tuple[ReplyVariant
         "primary": ("Основной", "Главный живой вариант для отправки."),
         "short": ("Короче", "Более короткая версия без воды."),
         "soft": ("Мягче", "Более мягкая и аккуратная подача."),
-        "style": ("В моём стиле", "Более разговорный и каскадный ритм."),
+        "owner_style": ("В моём стиле", "Более разговорный и каскадный ритм."),
     }
     variants: list[ReplyVariant] = []
     for item in candidate.variants:
-        cleaned = "\n".join(line.strip() for line in item.text.splitlines() if line.strip()).strip()
+        variant_id = normalize_variant_id(item.id)
+        cleaned = postprocess_variant_text(item.text, variant_id=variant_id)
         if not cleaned:
             continue
-        label, description = labels.get(item.id, ("Вариант", "Рабочая версия ответа."))
+        label, description = labels.get(variant_id, ("Вариант", "Рабочая версия ответа."))
         variants.append(
             ReplyVariant(
-                id=item.id,
+                id=variant_id,
                 label=label,
                 description=description,
                 text=cleaned,

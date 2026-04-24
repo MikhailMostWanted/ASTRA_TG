@@ -126,6 +126,8 @@ export function normalizeReplySuggestion(value: unknown): ReplySuggestion | null
     fewShotLengthHint: safeStringOrNull(value.fewShotLengthHint),
     fewShotRhythmHint: safeStringOrNull(value.fewShotRhythmHint),
     fewShotDominantTopicHint: safeStringOrNull(value.fewShotDominantTopicHint),
+    fewShotMessageCountHint: safeNumberOrNull(value.fewShotMessageCountHint),
+    fewShotStyleMarkers: safeStringArray(value.fewShotStyleMarkers),
     styleSourceReason: safeStringOrNull(value.styleSourceReason),
     alternativeAction: safeStringOrNull(value.alternativeAction),
     trigger: trigger
@@ -162,6 +164,8 @@ export function normalizeReplySuggestion(value: unknown): ReplySuggestion | null
           lengthHint: safeStringOrNull(retrieval.lengthHint),
           rhythmHint: safeStringOrNull(retrieval.rhythmHint),
           dominantTopicHint: safeStringOrNull(retrieval.dominantTopicHint),
+          messageCountHint: safeNumberOrNull(retrieval.messageCountHint),
+          styleMarkers: safeStringArray(retrieval.styleMarkers),
           notes: safeStringArray(retrieval.notes),
           hits: retrievalHits
             .map((item) => {

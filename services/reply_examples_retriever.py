@@ -34,6 +34,25 @@ SOFTEN_MARKERS = (
     "без резкости",
     "давай",
 )
+STYLE_MARKERS = (
+    "ну",
+    "да",
+    "не",
+    "не не",
+    "а",
+    "че",
+    "щас",
+    "ща",
+    "типо",
+    "бля",
+    "блять",
+    "пиздец",
+    "хуйня",
+    "заебись",
+    "окей",
+    "давай",
+)
+PROFANITY_MARKERS = ("бля", "блять", "пиздец", "хуйня", "заебись", "нахуй", "хуй")
 
 
 @dataclass(slots=True)
@@ -127,6 +146,10 @@ class ReplyExamplesRetriever:
         length_hint = _derive_length_hint(top_matches)
         rhythm_hint = _derive_rhythm_hint(top_matches)
         opener_hint = _derive_opener_hint(top_matches)
+        message_count_hint = _derive_message_count_hint(top_matches)
+        softness_hint = _derive_softness_hint(top_matches)
+        profanity_hint = _derive_profanity_hint(top_matches)
+        style_markers = _derive_style_markers(top_matches)
         dominant_topic_hint = _derive_topic_hint(target_text, top_matches)
         confidence_delta = min(
             0.12,
@@ -150,6 +173,10 @@ class ReplyExamplesRetriever:
             opener_hint=opener_hint,
             dominant_topic_hint=dominant_topic_hint,
             notes=notes,
+            message_count_hint=message_count_hint,
+            softness_hint=softness_hint,
+            profanity_hint=profanity_hint,
+            style_markers=style_markers,
         )
 
 
@@ -248,28 +275,60 @@ def _derive_length_hint(matches: tuple[ReplyExampleMatch, ...]) -> str | None:
 
 
 def _derive_rhythm_hint(matches: tuple[ReplyExampleMatch, ...]) -> str | None:
-    sentence_like_count = 0
-    for match in matches:
-        sentence_like_count += max(
-            1,
-            match.outbound_text.count(".") + match.outbound_text.count("!") + match.outbound_text.count("?"),
-        )
-    average = sentence_like_count / len(matches)
+    average = sum(_reply_message_count(match.outbound_text) for match in matches) / len(matches)
     return "single" if average <= 1.3 else "series"
 
 
 def _derive_opener_hint(matches: tuple[ReplyExampleMatch, ...]) -> str | None:
     opener_counter: Counter[str] = Counter()
     for match in matches:
-        tokens = tokenize_text(match.outbound_text)
-        if not tokens:
-            continue
-        opener = tokens[0]
-        if opener in {"да", "ага", "ок", "понял", "поняла", "вижу", "гляну", "смотрю"}:
+        opener = _first_opener(match.outbound_text)
+        if opener is not None:
             opener_counter[opener] += 1
     if not opener_counter:
         return None
     return opener_counter.most_common(1)[0][0]
+
+
+def _derive_message_count_hint(matches: tuple[ReplyExampleMatch, ...]) -> int | None:
+    if not matches:
+        return None
+    average = sum(_reply_message_count(match.outbound_text) for match in matches) / len(matches)
+    return max(1, min(4, round(average)))
+
+
+def _derive_softness_hint(matches: tuple[ReplyExampleMatch, ...]) -> str | None:
+    soft = 0
+    direct = 0
+    for match in matches:
+        lowered = match.outbound_text.casefold()
+        if match.example_type in {"soft_reply", "tension"} or any(marker in lowered for marker in SOFTEN_MARKERS):
+            soft += 1
+        if any(marker in lowered for marker in ("бля", "хуйня", "не не", "давай")):
+            direct += 1
+    if soft > direct:
+        return "soft"
+    if direct > soft:
+        return "direct"
+    return None
+
+
+def _derive_profanity_hint(matches: tuple[ReplyExampleMatch, ...]) -> str | None:
+    count = sum(_count_profanity(match.outbound_text) for match in matches)
+    if count <= 0:
+        return "none"
+    average = count / len(matches)
+    return "strong" if average >= 1 else "light"
+
+
+def _derive_style_markers(matches: tuple[ReplyExampleMatch, ...]) -> tuple[str, ...]:
+    counter: Counter[str] = Counter()
+    for match in matches:
+        lowered = f" {match.outbound_text.casefold()} "
+        for marker in STYLE_MARKERS:
+            if f" {marker} " in lowered or lowered.strip().startswith(f"{marker} "):
+                counter[marker] += 1
+    return tuple(marker for marker, _count in counter.most_common(6))
 
 
 def _derive_topic_hint(
@@ -379,7 +438,7 @@ def _score_outbound_rhythm(text: str) -> float:
     if not normalized:
         return 0.0
     punctuation = normalized.count("!") + normalized.count("?")
-    line_like = max(1, normalized.count(".") + punctuation)
+    line_like = max(1, len([line for line in text.splitlines() if line.strip()]) + normalized.count(".") + punctuation)
     if len(tokenize_text(normalized)) <= 12:
         return 0.05
     if line_like >= 2:
@@ -400,6 +459,59 @@ def _empty_result() -> ReplyExamplesRetrievalResult:
         dominant_topic_hint=None,
         notes=("Похожих реальных ответов не нашёл.",),
     )
+
+
+def _reply_message_count(text: str) -> int:
+    if not text.strip():
+        return 0
+    newline_count = len([line for line in text.splitlines() if line.strip()])
+    if newline_count > 1:
+        return min(4, newline_count)
+    sentence_count = text.count(".") + text.count("!") + text.count("?")
+    if sentence_count > 1:
+        return min(4, sentence_count)
+    if len(tokenize_text(text)) > 12:
+        return 2
+    return 1
+
+
+def _first_opener(text: str) -> str | None:
+    normalized = " ".join(text.casefold().split()).strip(" ,.!?;:-")
+    if not normalized:
+        return None
+    if normalized.startswith("не не "):
+        return "не не"
+    tokens = tokenize_text(normalized)
+    if not tokens:
+        return None
+    opener = tokens[0]
+    allowed = {
+        "ну",
+        "да",
+        "ага",
+        "ок",
+        "окей",
+        "понял",
+        "поняла",
+        "вижу",
+        "гляну",
+        "смотрю",
+        "не",
+        "а",
+        "слушай",
+        "смотри",
+        "короче",
+        "типо",
+        "ща",
+        "щас",
+        "давай",
+    }
+    return opener if opener in allowed else None
+
+
+def _count_profanity(text: str) -> int:
+    lowered = text.casefold()
+    return sum(lowered.count(marker) for marker in PROFANITY_MARKERS)
 
 
 def _as_utc(value: datetime | None) -> datetime | None:

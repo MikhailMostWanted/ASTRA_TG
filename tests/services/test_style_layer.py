@@ -109,6 +109,7 @@ def test_style_selector_and_adapter_support_builtin_profiles_and_overrides(
 
             profiles = await style_profile_repo.list_profiles()
             assert [profile.key for profile in profiles] == [
+                "owner_style",
                 "base",
                 "friend_hard",
                 "friend_explain",
